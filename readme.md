@@ -65,17 +65,35 @@ AWS Client VPN 管理工具套件是一個專為 macOS 設計的自動化解決�
                 "ec2:*ClientVpn*",
                 "acm:*",
                 "logs:*",
-                "iam:*",
-                "sts:GetCallerIdentity"
+                "iam:*", 
+                "sts:GetCallerIdentity",
+                "s3:ListAllMyBuckets", // employee_offboarding.sh 可能需要
+                "cloudtrail:LookupEvents", // employee_offboarding.sh 可能需要
+                "cloudtrail:DescribeTrails" // employee_offboarding.sh 可能需要
             ],
             "Resource": "*"
+        },
+        {
+            "Sid": "SpecificHighPrivilegeScripts",
+            "Effect": "Allow",
+            "Action": [ // revoke_member_access.sh 和 employee_offboarding.sh 的特定高權限操作
+                "iam:DeleteUser",
+                "iam:DeleteAccessKey",
+                "iam:RemoveUserFromGroup",
+                "iam:DetachUserPolicy",
+                "iam:DeleteLoginProfile",
+                "acm:DeleteCertificate" // revoke_member_access.sh, employee_offboarding.sh
+                // employee_offboarding.sh 可能還需要其他服務的 List/Describe/Delete 權限，視其檢查的殘留資源而定
+            ],
+            "Resource": "*" // 某些 IAM 操作可能需要更精確的資源，但通常管理員角色會授予較廣泛的權限
         }
     ]
 }
 ```
+**注意：** `employee_offboarding.sh` 腳本執行的操作範圍很廣，可能需要非常高的 AWS 權限。執行此腳本的 IAM 使用者/角色應被嚴格控制，並僅授予執行其任務所必需的最小權限。上述權限列表是一個起點，具體需要的權限取決於該腳本中資源檢查的詳細程度。
 
 #### 團隊成員權限
-團隊成員需要以下最小權限：
+團隊成員 (`team_member_setup.sh` 的執行者) 需要以下最小權限：
 ```json
 {
     "Version": "2012-10-17",
@@ -184,6 +202,7 @@ AWS Client VPN 管理工具套件是一個專為 macOS 設計的自動化解決�
 - 建立個人配置檔案
 
 **適用對象：** 新加入的團隊成員
+**作業系統相容性：** 此腳本中的 AWS VPN Client 軟體下載和安裝步驟目前主要針對 macOS (.pkg)。其他作業系統的使用者可能需要手動下載並安裝適用其系統的 AWS VPN Client，或自行調整腳本中的相關安裝指令。
 
 ### revoke_member_access.sh - 權限撤銷工具
 
@@ -460,6 +479,7 @@ An error occurred (AccessDenied) when calling the DescribeClientVpnEndpoints ope
    - 加密儲存私鑰文件
    - 限制 CA 私鑰訪問
    - 使用安全的備份策略
+   - **用戶端私鑰安全：** `team_member_setup.sh` 會產生用戶端憑證，其中包括一個私鑰檔案 (`.key`)。此私鑰會嵌入到 `.ovpn` 設定檔中以便分發。使用者應被告知這些 `.ovpn` 檔案和獨立的 `.key` 檔案（如果產生）的敏感性。建議使用者在成功設定 VPN 連線後，妥善保管這些檔案，並考慮從本地電腦上刪除原始的 `.key` 檔案副本（如果組織策略允許且已有安全備份），以降低洩漏風險。
 
 ### 訪問控制
 

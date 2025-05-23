@@ -5,26 +5,20 @@
 # 作者：VPN 管理員
 # 版本：1.0
 
-# 顏色設定
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-RED='\033[0;31m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-NC='\033[0m' # No Color
-
 # 全域變數
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG_FILE="$SCRIPT_DIR/.vpn_config"
-LOG_FILE="$SCRIPT_DIR/vpn_admin.log"
+CONFIG_FILE="$SCRIPT_DIR/.vpn_config" # 修正 CONFIG_FILE 的定義
+LOG_FILE="$SCRIPT_DIR/vpn_admin.log" # LOG_FILE 保留在主腳本中，因為 core_functions.sh 中的 LOG_FILE_CORE 路徑不同
+
+# 載入核心函式庫
+source "$SCRIPT_DIR/lib/core_functions.sh"
+source "$SCRIPT_DIR/lib/aws_setup.sh"
+source "$SCRIPT_DIR/lib/cert_management.sh"
+source "$SCRIPT_DIR/lib/endpoint_creation.sh"
+source "$SCRIPT_DIR/lib/endpoint_management.sh"
 
 # 阻止腳本在出錯時繼續執行
 set -e
-
-# 記錄函數
-log_message() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S'): $1" >> $LOG_FILE
-}
 
 # 顯示主選單
 show_menu() {
@@ -42,328 +36,146 @@ show_menu() {
     echo -e "  ${GREEN}6.${NC} 匯出團隊成員設定檔"
     echo -e "  ${GREEN}7.${NC} 查看管理員指南"
     echo -e "  ${GREEN}8.${NC} 系統健康檢查"
-    echo -e "  ${RED}9.${NC} 退出"
+    echo -e "  ${GREEN}9.${NC} 多 VPC 管理"
+    echo -e "  ${RED}10.${NC} 退出"
     echo -e ""
     echo -e "${CYAN}========================================================${NC}"
-}
-
-# 檢查必要工具
-check_prerequisites() {
-    echo -e "\n${YELLOW}檢查必要工具...${NC}"
-    
-    local tools=("brew" "aws" "jq" "easyrsa")
-    local missing_tools=()
-    
-    for tool in "${tools[@]}"; do
-        if ! command -v $tool &> /dev/null; then
-            missing_tools+=($tool)
-        else
-            echo -e "${GREEN}✓ $tool 已安裝${NC}"
-        fi
-    done
-    
-    if [ ${#missing_tools[@]} -gt 0 ]; then
-        echo -e "${RED}缺少必要工具: ${missing_tools[*]}${NC}"
-        echo -e "${YELLOW}正在安裝缺少的工具...${NC}"
-        
-        # 安裝缺少的工具
-        if [[ " ${missing_tools[*]} " =~ " brew " ]]; then
-            echo -e "${BLUE}安裝 Homebrew...${NC}"
-            /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install.sh)"
-        fi
-        
-        for tool in "${missing_tools[@]}"; do
-            if [[ "$tool" != "brew" ]]; then
-                echo -e "${BLUE}安裝 $tool...${NC}"
-                case $tool in
-                    "aws")
-                        brew install awscli
-                        ;;
-                    "jq")
-                        brew install jq
-                        ;;
-                    "easyrsa")
-                        brew install easy-rsa
-                        ;;
-                esac
-            fi
-        done
-    fi
-    
-    echo -e "${GREEN}所有必要工具已準備就緒！${NC}"
-}
-
-# 設定 AWS 配置
-setup_aws_config() {
-    echo -e "\n${YELLOW}設定 AWS 配置...${NC}"
-    
-    if [ ! -f ~/.aws/credentials ] || [ ! -f ~/.aws/config ]; then
-        echo -e "${YELLOW}請提供您的 AWS 管理員帳戶資訊：${NC}"
-        
-        read -p "請輸入 AWS Access Key ID: " aws_access_key
-        read -s -p "請輸入 AWS Secret Access Key: " aws_secret_key
-        echo
-        read -p "請輸入 AWS 區域 (例如 ap-northeast-1): " aws_region
-        
-        # 創建配置目錄和文件
-        mkdir -p ~/.aws
-        
-        # 寫入認證
-        cat > ~/.aws/credentials << EOF
-[default]
-aws_access_key_id = $aws_access_key
-aws_secret_access_key = $aws_secret_key
-EOF
-        
-        # 寫入配置
-        cat > ~/.aws/config << EOF
-[default]
-region = $aws_region
-output = json
-EOF
-        
-        echo -e "${GREEN}AWS 配置已完成！${NC}"
-    else
-        echo -e "${GREEN}✓ AWS 已配置${NC}"
-        aws_region=$(aws configure get region)
-    fi
-    
-    # 保存配置到本地文件
-    echo "AWS_REGION=$aws_region" > $CONFIG_FILE
-    log_message "AWS 配置已更新，區域: $aws_region"
-}
-
-# 生成證書
-generate_certificates() {
-    echo -e "\n${YELLOW}生成 VPN 證書...${NC}"
-    
-    # 創建工作目錄
-    cert_dir="$SCRIPT_DIR/certificates"
-    mkdir -p $cert_dir
-    cd $cert_dir
-    
-    # 初始化 PKI
-    if [ ! -d "pki" ]; then
-        echo -e "${BLUE}初始化 PKI...${NC}"
-        easyrsa init-pki
-        
-        # 設置變數
-        echo "set_var EASYRSA_REQ_CN \"VPN CA\"" > vars
-        echo "set_var EASYRSA_KEY_SIZE 2048" >> vars
-        echo "set_var EASYRSA_ALGO rsa" >> vars
-        echo "set_var EASYRSA_CA_EXPIRE 3650" >> vars
-        echo "set_var EASYRSA_CERT_EXPIRE 365" >> vars
-    fi
-    
-    # 生成 CA 證書
-    if [ ! -f "pki/ca.crt" ]; then
-        echo -e "${BLUE}生成 CA 證書...${NC}"
-        yes "" | easyrsa build-ca nopass
-    fi
-    
-    # 生成伺服器證書
-    if [ ! -f "pki/issued/server.crt" ]; then
-        echo -e "${BLUE}生成伺服器證書...${NC}"
-        yes "" | easyrsa build-server-full server nopass
-    fi
-    
-    echo -e "${GREEN}證書生成完成！${NC}"
-    log_message "VPN 證書已生成"
 }
 
 # 建立 VPN 端點
 create_vpn_endpoint() {
     echo -e "\n${CYAN}=== 建立新的 VPN 端點 ===${NC}"
     
-    # 載入配置
-    if [ -f $CONFIG_FILE ]; then
-        source $CONFIG_FILE
+    # 載入配置或執行初始設定
+    if [ -f "$CONFIG_FILE" ]; then
+        if ! load_config_core "$CONFIG_FILE"; then
+            echo -e "${RED}載入配置文件失敗${NC}"
+            return 1
+        fi
     else
-        setup_aws_config
-        source $CONFIG_FILE
+        setup_aws_config "$CONFIG_FILE" # 傳遞 CONFIG_FILE 給函式
+        if ! load_config_core "$CONFIG_FILE"; then
+            echo -e "${RED}設定後載入配置文件失敗${NC}"
+            return 1
+        fi
+    fi
+
+    if [ -z "$AWS_REGION" ]; then
+        echo -e "${RED}AWS 地區未設定。請檢查 .vpn_config 或重新執行設定。${NC}"
+        return 1
     fi
     
-    # 檢查證書
+    # 1. 生成證書 (如果不存在)
     if [ ! -f "$SCRIPT_DIR/certificates/pki/ca.crt" ]; then
-        generate_certificates
+        generate_certificates_lib "$SCRIPT_DIR"
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}證書生成失敗。中止操作。${NC}"
+            return 1
+        fi
     fi
     
-    # 導入證書到 ACM
-    echo -e "${BLUE}導入證書到 AWS Certificate Manager...${NC}"
+    # 2. 導入證書到 ACM
+    local acm_arns_result
+    acm_arns_result=$(import_certificates_to_acm_lib "$SCRIPT_DIR" "$AWS_REGION")
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}導入證書到 ACM 失敗。中止操作。${NC}"
+        return 1
+    fi
     
-    cert_dir="$SCRIPT_DIR/certificates"
+    local main_server_cert_arn # 更清楚的命名以避免與 CONFIG_FILE 中的變數衝突
+    local main_client_cert_arn
+    main_server_cert_arn=$(echo "$acm_arns_result" | cut -d';' -f1)
+    main_client_cert_arn=$(echo "$acm_arns_result" | cut -d';' -f2)
+
+    if [ -z "$main_server_cert_arn" ] || [ "$main_server_cert_arn" == "null" ] || \
+       [ -z "$main_client_cert_arn" ] || [ "$main_client_cert_arn" == "null" ]; then
+        echo -e "${RED}無法從 ACM 獲取有效的證書 ARNs。中止操作。${NC}"
+        log_message "錯誤：無法從 ACM 獲取有效的證書 ARNs。Server ARN: '$main_server_cert_arn', Client ARN: '$main_client_cert_arn'"
+        return 1
+    fi
+    log_message "ACM Server Cert ARN: $main_server_cert_arn"
+    log_message "ACM Client Cert ARN: $main_client_cert_arn"
+
+    # 3. 調用庫函式創建端點
+    # 將 ARNs 作為參數傳遞
+    # create_vpn_endpoint_lib 會處理網絡資訊提示、端點創建、關聯、授權、路由和保存配置
+    local creation_output
+    creation_output=$(create_vpn_endpoint_lib "$SCRIPT_DIR" "$CONFIG_FILE" "$main_server_cert_arn" "$main_client_cert_arn")
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}VPN 端點創建過程中發生錯誤。${NC}"
+        # 此處可以考慮清理部分創建的資源，例如 ACM 證書，如果它們是此次操作中新導入的
+        # 但這會增加複雜性，暫時不處理
+        return 1
+    fi
+
+    # create_vpn_endpoint_lib 會將 ENDPOINT_ID_RESULT=... echo 出來
+    # 我們可以 eval 它，或者更好的是，重新 source CONFIG_FILE
+    # 因為 create_vpn_endpoint_lib 已經更新了 CONFIG_FILE
+    if ! load_config_core "$CONFIG_FILE"; then
+        echo -e "${RED}錯誤：無法重新載入更新的配置文件${NC}"
+        return 1
+    fi
+
+    if [ -z "$ENDPOINT_ID" ]; then
+        echo -e "${RED}錯誤：未能從配置文件中讀取新創建的 ENDPOINT_ID。${NC}"
+        return 1
+    fi
     
-    # 導入伺服器證書
-    server_cert=$(aws acm import-certificate \
-      --certificate fileb://$cert_dir/pki/issued/server.crt \
-      --private-key fileb://$cert_dir/pki/private/server.key \
-      --certificate-chain fileb://$cert_dir/pki/ca.crt \
-      --region $AWS_REGION \
-      --tags Key=Name,Value="VPN-Server-Cert" Key=Purpose,Value="ClientVPN")
+    # 4. 調用庫函式來處理額外的 VPC 關聯
+    # AWS_REGION 和 ENDPOINT_ID 應該在 source "$CONFIG_FILE" 後可用
+    if [ -n "$ENDPOINT_ID" ] && [ -n "$AWS_REGION" ]; then
+        associate_additional_vpc_lib "$CONFIG_FILE" "$AWS_REGION" "$ENDPOINT_ID"
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}關聯額外 VPC 過程中發生錯誤。${NC}"
+            # 根據需要決定是否中止或繼續
+        fi
+        # associate_additional_vpc_lib 會更新 CONFIG_FILE，所以重新 source
+        if ! load_config_core "$CONFIG_FILE"; then
+            echo -e "${RED}錯誤：無法重新載入配置文件${NC}"
+            return 1
+        fi
+    else
+        echo -e "${RED}錯誤：ENDPOINT_ID 或 AWS_REGION 未設定，無法進行額外 VPC 關聯。${NC}"
+        # 這是嚴重錯誤，可能表示主端點創建失敗
+        return 1
+    fi
     
-    server_cert_arn=$(echo $server_cert | jq -r '.CertificateArn')
+    # 主端點創建和額外 VPC 關聯完成後，日誌和管理員配置生成仍然需要
+    log_message "VPN 端點 $ENDPOINT_ID 相關操作完成 (主體創建和額外 VPC 關聯由 lib 完成)"
     
-    # 導入 CA 證書作為客戶端證書
-    client_cert=$(aws acm import-certificate \
-      --certificate fileb://$cert_dir/pki/ca.crt \
-      --private-key fileb://$cert_dir/pki/private/ca.key \
-      --region $AWS_REGION \
-      --tags Key=Name,Value="VPN-Client-CA" Key=Purpose,Value="ClientVPN")
+    # 生成管理員配置檔案 (使用庫函式)
+    generate_admin_config_lib "$SCRIPT_DIR" "$CONFIG_FILE"
+    local admin_config_result=$?
+    log_operation_result "生成管理員配置檔案" "$admin_config_result" "aws_vpn_admin.sh"
     
-    client_cert_arn=$(echo $client_cert | jq -r '.CertificateArn')
-    
-    # 獲取網絡資訊
-    echo -e "\n${BLUE}選擇網絡設定...${NC}"
-    
-    # 列出 VPCs
-    echo -e "${YELLOW}可用的 VPCs:${NC}"
-    aws ec2 describe-vpcs --region $AWS_REGION | jq -r '.Vpcs[] | "VPC ID: \(.VpcId), CIDR: \(.CidrBlock), 名稱: \(if .Tags then (.Tags[] | select(.Key=="Name") | .Value) else "無名稱" end)"'
-    
-    read -p "請輸入要連接的 VPC ID: " vpc_id
-    
-    # 獲取 VPC CIDR
-    vpc_cidr=$(aws ec2 describe-vpcs --vpc-ids $vpc_id --region $AWS_REGION | jq -r '.Vpcs[0].CidrBlock')
-    
-    # 列出子網路
-    echo -e "\n${YELLOW}VPC $vpc_id 中的子網路:${NC}"
-    aws ec2 describe-subnets --filters "Name=vpc-id,Values=$vpc_id" --region $AWS_REGION | \
-      jq -r '.Subnets[] | "子網路 ID: \(.SubnetId), 可用區: \(.AvailabilityZone), CIDR: \(.CidrBlock)"'
-    
-    read -p "請輸入要關聯的子網路 ID: " subnet_id
-    
-    # VPN CIDR 設定
-    default_vpn_cidr="172.16.0.0/22"
-    read -p "請輸入 VPN CIDR (預設: $default_vpn_cidr): " vpn_cidr
-    vpn_cidr=${vpn_cidr:-$default_vpn_cidr}
-    
-    # VPN 端點名稱
-    read -p "請輸入 VPN 端點名稱 (預設: Production-VPN): " vpn_name
-    vpn_name=${vpn_name:-"Production-VPN"}
-    
-    # 創建 CloudWatch 日誌群組
-    log_group_name="/aws/clientvpn/$vpn_name"
-    echo -e "${BLUE}創建 CloudWatch 日誌群組...${NC}"
-    aws logs create-log-group --log-group-name $log_group_name --region $AWS_REGION 2>/dev/null || true
-    
-    # 創建 Client VPN 端點
-    echo -e "${BLUE}創建 Client VPN 端點...${NC}"
-    endpoint_result=$(aws ec2 create-client-vpn-endpoint \
-      --client-cidr-block $vpn_cidr \
-      --server-certificate-arn $server_cert_arn \
-      --authentication-options Type=certificate-authentication,MutualAuthentication={ClientRootCertificateChainArn=$client_cert_arn} \
-      --connection-log-options Enabled=true,CloudwatchLogGroup=$log_group_name \
-      --split-tunnel \
-      --dns-servers 8.8.8.8 8.8.4.4 \
-      --region $AWS_REGION \
-      --tag-specifications "ResourceType=client-vpn-endpoint,Tags=[{Key=Name,Value=$vpn_name},{Key=Purpose,Value=ProductionDebug}]")
-    
-    endpoint_id=$(echo $endpoint_result | jq -r '.ClientVpnEndpointId')
-    
-    echo -e "${BLUE}端點 ID: $endpoint_id${NC}"
-    
-    # 等待端點可用
-    echo -e "${BLUE}等待 VPN 端點可用...${NC}"
-    aws ec2 wait client-vpn-endpoint-available --client-vpn-endpoint-id $endpoint_id --region $AWS_REGION
-    
-    # 關聯子網路
-    echo -e "${BLUE}關聯子網路...${NC}"
-    aws ec2 associate-client-vpn-target-network \
-      --client-vpn-endpoint-id $endpoint_id \
-      --subnet-id $subnet_id \
-      --region $AWS_REGION
-    
-    # 添加授權規則
-    echo -e "${BLUE}添加授權規則...${NC}"
-    aws ec2 authorize-client-vpn-ingress \
-      --client-vpn-endpoint-id $endpoint_id \
-      --target-network-cidr $vpc_cidr \
-      --authorize-all-groups \
-      --region $AWS_REGION
-    
-    # 創建路由
-    echo -e "${BLUE}創建路由...${NC}"
-    aws ec2 create-client-vpn-route \
-      --client-vpn-endpoint-id $endpoint_id \
-      --destination-cidr-block "0.0.0.0/0" \
-      --target-vpc-subnet-id $subnet_id \
-      --region $AWS_REGION
-    
-    # 保存端點資訊
-    echo "ENDPOINT_ID=$endpoint_id" >> $CONFIG_FILE
-    echo "VPC_ID=$vpc_id" >> $CONFIG_FILE
-    echo "VPC_CIDR=$vpc_cidr" >> $CONFIG_FILE
-    echo "SUBNET_ID=$subnet_id" >> $CONFIG_FILE
-    echo "VPN_CIDR=$vpn_cidr" >> $CONFIG_FILE
-    echo "VPN_NAME=$vpn_name" >> $CONFIG_FILE
-    echo "SERVER_CERT_ARN=$server_cert_arn" >> $CONFIG_FILE
-    echo "CLIENT_CERT_ARN=$client_cert_arn" >> $CONFIG_FILE
-    
-    echo -e "${GREEN}VPN 端點建立完成！${NC}"
-    echo -e "端點 ID: ${BLUE}$endpoint_id${NC}"
-    
-    log_message "VPN 端點已建立: $endpoint_id"
-    
-    # 生成管理員配置檔案
-    generate_admin_config
+    if [ $admin_config_result -ne 0 ]; then
+        echo -e "${RED}生成管理員配置檔案過程中發生錯誤。${NC}"
+    fi
     
     echo -e "\n${YELLOW}按任意鍵繼續...${NC}"
     read -n 1
-}
 
-# 生成管理員配置檔案
-generate_admin_config() {
-    echo -e "\n${BLUE}生成管理員配置檔案...${NC}"
-    
-    source $CONFIG_FILE
-    
-    # 下載配置
-    mkdir -p "$SCRIPT_DIR/configs"
-    aws ec2 export-client-vpn-client-configuration \
-      --client-vpn-endpoint-id $ENDPOINT_ID \
-      --region $AWS_REGION \
-      --output text > "$SCRIPT_DIR/configs/admin-config-base.ovpn"
-    
-    # 修改配置文件
-    cp "$SCRIPT_DIR/configs/admin-config-base.ovpn" "$SCRIPT_DIR/configs/admin-config.ovpn"
-    echo "reneg-sec 0" >> "$SCRIPT_DIR/configs/admin-config.ovpn"
-    
-    # 生成管理員證書
-    cert_dir="$SCRIPT_DIR/certificates"
-    cd $cert_dir
-    
-    if [ ! -f "pki/issued/admin.crt" ]; then
-        echo -e "${BLUE}生成管理員證書...${NC}"
-        yes "" | easyrsa build-client-full admin nopass
-    fi
-    
-    # 添加證書到配置文件
-    echo "<cert>" >> "$SCRIPT_DIR/configs/admin-config.ovpn"
-    cat $cert_dir/pki/issued/admin.crt >> "$SCRIPT_DIR/configs/admin-config.ovpn"
-    echo "</cert>" >> "$SCRIPT_DIR/configs/admin-config.ovpn"
-    
-    echo "<key>" >> "$SCRIPT_DIR/configs/admin-config.ovpn"
-    cat $cert_dir/pki/private/admin.key >> "$SCRIPT_DIR/configs/admin-config.ovpn"
-    echo "</key>" >> "$SCRIPT_DIR/configs/admin-config.ovpn"
-    
-    echo -e "${GREEN}管理員配置檔案已生成: $SCRIPT_DIR/configs/admin-config.ovpn${NC}"
-}
 
 # 查看現有 VPN 端點
 list_vpn_endpoints() {
     echo -e "\n${CYAN}=== 現有 VPN 端點 ===${NC}"
     
-    source $CONFIG_FILE 2>/dev/null || { echo -e "${RED}未找到配置文件${NC}"; return; }
+    # 驗證配置
+    if ! validate_main_config "$CONFIG_FILE"; then
+        echo -e "\n${YELLOW}按任意鍵繼續...${NC}"
+        read -n 1
+        return 1
+    fi
     
-    endpoints=$(aws ec2 describe-client-vpn-endpoints --region $AWS_REGION)
+    # 調用庫函式
+    list_vpn_endpoints_lib "$AWS_REGION" "$CONFIG_FILE"
+    local result=$?
     
-    echo $endpoints | jq -r '.ClientVpnEndpoints[] | 
-    "端點 ID: \(.ClientVpnEndpointId)
-    狀態: \(.Status.Code)
-    名稱: \(.Tags[]? | select(.Key=="Name") | .Value // "無名稱")
-    CIDR: \(.ClientCidrBlock)
-    DNS: \(.DnsName)
-    創建時間: \(.CreationTime)
-    ----------------------------------------"'
+    log_operation_result "查看現有 VPN 端點" "$result" "aws_vpn_admin.sh"
+    
+    if [ $result -ne 0 ]; then
+        echo -e "${RED}查看端點列表過程中發生錯誤。${NC}"
+    fi
     
     echo -e "\n${YELLOW}按任意鍵繼續...${NC}"
     read -n 1
@@ -371,13 +183,13 @@ list_vpn_endpoints() {
 
 # 管理 VPN 端點設定
 manage_vpn_settings() {
-    echo -e "\n${CYAN}=== 管理 VPN 端點設定 ===${NC}"
+    echo -e "\\n${CYAN}=== 管理 VPN 端點設定 ===${NC}"
     
-    source $CONFIG_FILE 2>/dev/null || { echo -e "${RED}未找到配置文件${NC}"; return; }
-    
-    if [ -z "$ENDPOINT_ID" ]; then
-        echo -e "${RED}未找到已配置的端點 ID${NC}"
-        return
+    # 使用統一的端點操作驗證
+    if ! validate_endpoint_operation "$CONFIG_FILE"; then
+        echo -e "\\n${YELLOW}按任意鍵繼續...${NC}"
+        read -n 1
+        return 1
     fi
     
     echo -e "${BLUE}當前端點 ID: $ENDPOINT_ID${NC}"
@@ -395,57 +207,57 @@ manage_vpn_settings() {
     
     case $choice in
         1)
-            read -p "請輸入要授權的 CIDR 範圍: " auth_cidr
-            aws ec2 authorize-client-vpn-ingress \
-              --client-vpn-endpoint-id $ENDPOINT_ID \
-              --target-network-cidr $auth_cidr \
-              --authorize-all-groups \
-              --region $AWS_REGION
-            echo -e "${GREEN}授權規則已添加${NC}"
+            # Option 1: Add Authorization Rule (uses library function)
+            echo -e "\n${BLUE}=== 添加授權規則 (透過 lib) ===${NC}"
+            add_authorization_rule_lib "$AWS_REGION" "$ENDPOINT_ID"
+            local result_add_auth=$?
+            log_operation_result "添加授權規則" "$result_add_auth" "aws_vpn_admin.sh"
             ;;
         2)
-            # 列出現有授權規則
-            aws ec2 describe-client-vpn-authorization-rules \
-              --client-vpn-endpoint-id $ENDPOINT_ID \
-              --region $AWS_REGION | jq -r '.AuthorizationRules[] | "CIDR: \(.DestinationCidr), 狀態: \(.Status.Code)"'
-            
-            read -p "請輸入要移除的 CIDR 範圍: " revoke_cidr
-            aws ec2 revoke-client-vpn-ingress \
-              --client-vpn-endpoint-id $ENDPOINT_ID \
-              --target-network-cidr $revoke_cidr \
-              --revoke-all-groups \
-              --region $AWS_REGION
-            echo -e "${GREEN}授權規則已移除${NC}"
+            # Option 2: Remove Authorization Rule (uses library function)
+            echo -e "\n${BLUE}=== 移除授權規則 (透過 lib) ===${NC}"
+            remove_authorization_rule_lib "$AWS_REGION" "$ENDPOINT_ID"
+            local result_remove_auth=$?
+            log_operation_result "移除授權規則" "$result_remove_auth" "aws_vpn_admin.sh"
             ;;
         3)
-            echo -e "${BLUE}路由表:${NC}"
-            aws ec2 describe-client-vpn-routes \
-              --client-vpn-endpoint-id $ENDPOINT_ID \
-              --region $AWS_REGION | jq -r '.Routes[] | "目標: \(.DestinationCidr), 狀態: \(.Status.Code), 來源: \(.Origin)"'
+            # Option 3: View Route Table (uses library function)
+            echo -e "\n${BLUE}=== 查看路由表 (透過 lib) ===${NC}"
+            view_route_table_lib "$AWS_REGION" "$ENDPOINT_ID"
+            # Library function handles its own logging and success/failure messages.
             ;;
         4)
-            read -p "請輸入目標 CIDR: " dest_cidr
-            read -p "請輸入目標子網路 ID: " target_subnet
-            aws ec2 create-client-vpn-route \
-              --client-vpn-endpoint-id $ENDPOINT_ID \
-              --destination-cidr-block $dest_cidr \
-              --target-vpc-subnet-id $target_subnet \
-              --region $AWS_REGION
-            echo -e "${GREEN}路由已添加${NC}"
+            # Option 4: Add Route (uses library function)
+            echo -e "\n${BLUE}=== 添加路由 (透過 lib) ===${NC}"
+            add_route_lib "$AWS_REGION" "$ENDPOINT_ID"
+            local result_add_route=$?
+            log_operation_result "添加路由" "$result_add_route" "aws_vpn_admin.sh"
             ;;
         5)
-            echo -e "${BLUE}關聯的網絡:${NC}"
-            aws ec2 describe-client-vpn-target-networks \
-              --client-vpn-endpoint-id $ENDPOINT_ID \
-              --region $AWS_REGION | jq -r '.ClientVpnTargetNetworks[] | "子網路 ID: \(.TargetNetworkId), 狀態: \(.Status.Code)"'
+            # Option 5: View Associated Networks (uses library function)
+            echo -e "\n${BLUE}=== 查看關聯的網絡 (透過 lib) ===${NC}"
+            view_associated_networks_lib "$AWS_REGION" "$ENDPOINT_ID"
+            # Library function handles its own logging and success/failure messages.
             ;;
         6)
-            read -p "請輸入要關聯的子網路 ID: " new_subnet
-            aws ec2 associate-client-vpn-target-network \
-              --client-vpn-endpoint-id $ENDPOINT_ID \
-              --subnet-id $new_subnet \
-              --region $AWS_REGION
-            echo -e "${GREEN}子網路已關聯${NC}"
+            # Option 6: Associate new subnet to endpoint (uses library function)
+            echo -e "\n${BLUE}=== 關聯新子網路到端點 (透過 lib) ===${NC}"
+            echo -e "${YELLOW}提示: 此選項用於將端點直接關聯到一個子網路。${NC}"
+            echo -e "${YELLOW}這通常用於擴展到同一 VPC 中的不同可用區，或在初始關聯失敗時重試。${NC}"
+            echo -e "${YELLOW}此操作不會自動更新多 VPC 配置或為新子網路的 VPC 添加授權/路由。${NC}"
+            echo -e "${YELLOW}對於關聯到 *不同* VPC 並進行完整配置，請使用 '多 VPC 管理' -> '添加 VPC 到現有端點' 選項。${NC}"
+            
+            view_associated_networks_lib "$AWS_REGION" "$ENDPOINT_ID" # Show current associations
+            
+            associate_subnet_to_endpoint_lib "$AWS_REGION" "$ENDPOINT_ID"
+            local result_assoc_subnet=$?
+            log_operation_result "子網路關聯" "$result_assoc_subnet" "aws_vpn_admin.sh"
+            
+            if [ $result_assoc_subnet -eq 0 ]; then
+                echo -e "${GREEN}子網路關聯操作成功完成。${NC}"
+            else
+                echo -e "${RED}子網路關聯過程中發生錯誤。請檢查上面的日誌。${NC}"
+            fi
             ;;
         7)
             return
@@ -462,93 +274,62 @@ manage_vpn_settings() {
 # 刪除 VPN 端點
 delete_vpn_endpoint() {
     echo -e "\n${CYAN}=== 刪除 VPN 端點 ===${NC}"
-    
-    source $CONFIG_FILE 2>/dev/null || { echo -e "${RED}未找到配置文件${NC}"; return; }
-    
-    if [ -z "$ENDPOINT_ID" ]; then
-        echo -e "${RED}未找到已配置的端點 ID${NC}"
-        return
+    log_message "開始刪除 VPN 端點 (主腳本)"
+
+    # 使用統一的端點操作驗證 (已包含 load_config_core 和對 AWS_REGION, ENDPOINT_ID 的檢查)
+    if ! validate_endpoint_operation "$CONFIG_FILE"; then
+        echo -e "\n${YELLOW}按任意鍵繼續...${NC}"
+        read -n 1 -s
+        return 1
     fi
     
-    echo -e "${RED}警告: 您即將刪除 VPN 端點 $ENDPOINT_ID${NC}"
-    echo -e "${RED}此操作將會：${NC}"
-    echo -e "${RED}  - 斷開所有用戶連接${NC}"
-    echo -e "${RED}  - 刪除所有路由和授權規則${NC}"
-    echo -e "${RED}  - 無法復原${NC}"
-    
-    read -p "確認刪除? 請輸入 'DELETE' 來確認: " confirm
-    
-    if [ "$confirm" != "DELETE" ]; then
-        echo -e "${BLUE}刪除操作已取消${NC}"
-        return
+    # VPN_NAME 的檢查仍然需要，因為它不是 validate_endpoint_operation 的一部分
+    if [ -z "$VPN_NAME" ]; then
+        echo -e "${YELLOW}警告: VPN_NAME 未在配置中找到。CloudWatch 日誌群組可能無法自動刪除。${NC}"
+        log_message "警告: 嘗試刪除 VPN 但 VPN_NAME 未配置。"
+        # 允許繼續，lib 函式會處理 VPN_NAME 缺失的情況
     fi
-    
-    echo -e "${BLUE}正在刪除 VPN 端點...${NC}"
-    
-    # 解除關聯的網絡
-    target_networks=$(aws ec2 describe-client-vpn-target-networks \
-      --client-vpn-endpoint-id $ENDPOINT_ID \
-      --region $AWS_REGION | jq -r '.ClientVpnTargetNetworks[].AssociationId')
-    
-    for association_id in $target_networks; do
-        echo -e "${BLUE}解除關聯 $association_id...${NC}"
-        aws ec2 disassociate-client-vpn-target-network \
-          --client-vpn-endpoint-id $ENDPOINT_ID \
-          --association-id $association_id \
-          --region $AWS_REGION
-        
-        # 等待解除關聯完成
-        aws ec2 wait client-vpn-target-network-disassociated \
-          --client-vpn-endpoint-id $ENDPOINT_ID \
-          --association-id $association_id \
-          --region $AWS_REGION
-    done
-    
-    # 刪除端點
-    aws ec2 delete-client-vpn-endpoint \
-      --client-vpn-endpoint-id $ENDPOINT_ID \
-      --region $AWS_REGION
-    
-    # 刪除證書
-    if [ ! -z "$SERVER_CERT_ARN" ]; then
-        echo -e "${BLUE}刪除伺服器證書...${NC}"
-        aws acm delete-certificate --certificate-arn $SERVER_CERT_ARN --region $AWS_REGION 2>/dev/null || true
+
+    # 調用庫函式
+    # 參數: aws_region, endpoint_id, vpn_name (用於日誌群組), config_file_path
+    terminate_vpn_endpoint_lib "$AWS_REGION" "$ENDPOINT_ID" "$VPN_NAME" "$CONFIG_FILE"
+    local result=$?
+
+    # 使用統一的日誌記錄
+    log_operation_result "VPN 端點刪除" "$result" "aws_vpn_admin.sh"
+
+    if [ $result -eq 0 ]; then
+        echo -e "${GREEN}VPN 端點刪除操作成功完成。${NC}"
+        # 庫函式已清理配置文件
+    else
+        echo -e "${RED}VPN 端點刪除過程中發生錯誤。請檢查上面的日誌。${NC}"
     fi
-    
-    if [ ! -z "$CLIENT_CERT_ARN" ]; then
-        echo -e "${BLUE}刪除客戶端證書...${NC}"
-        aws acm delete-certificate --certificate-arn $CLIENT_CERT_ARN --region $AWS_REGION 2>/dev/null || true
-    fi
-    
-    # 刪除 CloudWatch 日誌群組
-    if [ ! -z "$VPN_NAME" ]; then
-        log_group_name="/aws/clientvpn/$VPN_NAME"
-        echo -e "${BLUE}刪除 CloudWatch 日誌群組...${NC}"
-        aws logs delete-log-group --log-group-name $log_group_name --region $AWS_REGION 2>/dev/null || true
-    fi
-    
-    # 清理配置文件
-    > $CONFIG_FILE
-    
-    echo -e "${GREEN}VPN 端點已完全刪除${NC}"
-    log_message "VPN 端點已刪除: $ENDPOINT_ID"
     
     echo -e "\n${YELLOW}按任意鍵繼續...${NC}"
-    read -n 1
+    read -n 1 -s
 }
 
 # 查看連接日誌
 view_connection_logs() {
     echo -e "\n${CYAN}=== 查看連接日誌 ===${NC}"
     
-    source $CONFIG_FILE 2>/dev/null || { echo -e "${RED}未找到配置文件${NC}"; return; }
-    
-    if [ -z "$VPN_NAME" ]; then
-        echo -e "${RED}未找到 VPN 名稱${NC}"
-        return
+    # 使用統一的配置驗證 (已包含 load_config_core)
+    if ! validate_main_config "$CONFIG_FILE"; then
+        echo -e "\n${YELLOW}按任意鍵繼續...${NC}"
+        read -n 1
+        return 1
     fi
     
-    log_group_name="/aws/clientvpn/$VPN_NAME"
+    # 檢查 VPN_NAME 是否存在
+    if [ -z "$VPN_NAME" ]; then
+        echo -e "${RED}未找到 VPN 名稱 (VPN_NAME)，無法查看日誌。${NC}"
+        log_message "錯誤：嘗試查看日誌但 VPN_NAME 未配置。"
+        echo -e "\n${YELLOW}按任意鍵繼續...${NC}"
+        read -n 1
+        return 1
+    fi
+    
+    local log_group_name="/aws/clientvpn/$VPN_NAME"
     
     echo -e "${BLUE}查看最近的連接日誌...${NC}"
     
@@ -570,52 +351,22 @@ view_connection_logs() {
 export_team_config() {
     echo -e "\n${CYAN}=== 匯出團隊成員設定檔 ===${NC}"
     
-    source $CONFIG_FILE 2>/dev/null || { echo -e "${RED}未找到配置文件${NC}"; return; }
-    
-    if [ -z "$ENDPOINT_ID" ]; then
-        echo -e "${RED}未找到端點 ID${NC}"
-        return
+    # 使用統一的端點操作驗證 (已包含 load_config_core 和對 ENDPOINT_ID 的檢查)
+    if ! validate_endpoint_operation "$CONFIG_FILE"; then
+        echo -e "\n${YELLOW}按任意鍵繼續...${NC}"
+        read -n 1
+        return 1
     fi
     
-    # 下載基本配置
-    mkdir -p "$SCRIPT_DIR/team-configs"
-    aws ec2 export-client-vpn-client-configuration \
-      --client-vpn-endpoint-id $ENDPOINT_ID \
-      --region $AWS_REGION \
-      --output text > "$SCRIPT_DIR/team-configs/team-config-base.ovpn"
+    # 調用庫函式
+    export_team_config_lib "$SCRIPT_DIR" "$CONFIG_FILE"
+    local result=$?
     
-    # 複製 CA 證書到 team-configs 目錄
-    cp "$SCRIPT_DIR/certificates/pki/ca.crt" "$SCRIPT_DIR/team-configs/"
-    cp "$SCRIPT_DIR/certificates/pki/private/ca.key" "$SCRIPT_DIR/team-configs/"
+    log_operation_result "匯出團隊成員設定檔" "$result" "aws_vpn_admin.sh"
     
-    # 創建團隊成員資訊文件
-    cat > "$SCRIPT_DIR/team-configs/team-setup-info.txt" << EOF
-=== AWS Client VPN 團隊設定資訊 ===
-
-VPN 端點 ID: $ENDPOINT_ID
-AWS 區域: $AWS_REGION
-VPN CIDR: $VPN_CIDR
-VPC ID: $VPC_ID
-VPC CIDR: $VPC_CIDR
-
-設定檔案：
-- team-config-base.ovpn: 基本 VPN 配置檔案
-- ca.crt: CA 證書文件
-- ca.key: CA 私鑰文件 (請安全保管)
-
-使用說明：
-1. 向新團隊成員提供 team_member_setup.sh 腳本
-2. 提供上述端點 ID 和 ca.crt 文件
-3. 不要分享 ca.key 文件，只給負責生成證書的管理員
-
-生成時間: $(date)
-EOF
-    
-    echo -e "${GREEN}團隊設定檔已匯出到 $SCRIPT_DIR/team-configs/${NC}"
-    echo -e "${BLUE}請將以下檔案提供給團隊成員：${NC}"
-    echo -e "  - team_member_setup.sh (團隊成員設定腳本)"
-    echo -e "  - ca.crt (CA 證書)"
-    echo -e "  - 端點 ID: $ENDPOINT_ID"
+    if [ $result -ne 0 ]; then
+        echo -e "${RED}匯出團隊設定檔過程中發生錯誤。${NC}"
+    fi
     
     echo -e "\n${YELLOW}按任意鍵繼續...${NC}"
     read -n 1
@@ -625,11 +376,11 @@ EOF
 system_health_check() {
     echo -e "\n${CYAN}=== 系統健康檢查 ===${NC}"
     
-    source $CONFIG_FILE 2>/dev/null || { echo -e "${RED}未找到配置文件${NC}"; return; }
-    
-    if [ -z "$ENDPOINT_ID" ]; then
-        echo -e "${RED}未找到端點 ID${NC}"
-        return
+    # 使用統一的端點操作驗證 (已包含 load_config_core 和對 ENDPOINT_ID, AWS_REGION 的檢查)
+    if ! validate_endpoint_operation "$CONFIG_FILE"; then
+        echo -e "\n${YELLOW}按任意鍵繼續...${NC}"
+        read -n 1
+        return 1
     fi
     
     echo -e "${BLUE}檢查 VPN 端點狀態...${NC}"
@@ -644,13 +395,23 @@ system_health_check() {
     fi
     
     echo -e "${BLUE}檢查關聯的網絡...${NC}"
-    network_count=$(aws ec2 describe-client-vpn-target-networks \
+    target_networks_json=$(aws ec2 describe-client-vpn-target-networks \
       --client-vpn-endpoint-id $ENDPOINT_ID \
-      --region $AWS_REGION | jq '.ClientVpnTargetNetworks | length')
+      --region $AWS_REGION)
     
-    echo -e "${GREEN}✓ 關聯的網絡數量: $network_count${NC}"
+    network_count=$(echo "$target_networks_json" | jq '.ClientVpnTargetNetworks | length')
+    echo -e "${GREEN}✓ 總關聯的網絡數量: $network_count${NC}"
+
+    if [ "$network_count" -gt 0 ]; then
+        echo "$target_networks_json" | jq -r '.ClientVpnTargetNetworks[] | 
+        "  - 子網路 ID: \(.TargetNetworkId)
+    VPC ID: \(.VpcId)
+    狀態: \(.Status.Code) \(if .Status.Code != "associated" then "(問題!)" else "" end)"'
+    else
+        echo -e "  ${YELLOW}未關聯任何子網路${NC}"
+    fi
     
-    echo -e "${BLUE}檢查授權規則...${NC}"
+    echo -e "\n${BLUE}檢查授權規則...${NC}"
     auth_count=$(aws ec2 describe-client-vpn-authorization-rules \
       --client-vpn-endpoint-id $ENDPOINT_ID \
       --region $AWS_REGION | jq '.AuthorizationRules | length')
@@ -674,6 +435,222 @@ system_health_check() {
     
     echo -e "\n${YELLOW}按任意鍵繼續...${NC}"
     read -n 1
+}
+
+# 添加 VPC 到現有端點
+add_vpc_to_endpoint() {
+    echo -e "\n${CYAN}=== 添加 VPC 到現有端點 ===${NC}"
+    
+    # 使用統一的端點操作驗證
+    if ! validate_endpoint_operation "$CONFIG_FILE"; then
+        echo -e "\n${YELLOW}按任意鍵繼續...${NC}"
+        read -n 1
+        return 1
+    fi
+    
+    echo -e "${BLUE}當前端點 ID: $ENDPOINT_ID${NC}"
+    echo -e "${BLUE}當前 AWS 區域: $AWS_REGION${NC}"
+
+    # 調用庫函式來處理單一 VPC 的關聯
+    associate_single_vpc_lib "$CONFIG_FILE" "$AWS_REGION" "$ENDPOINT_ID"
+    local result=$?
+
+    log_operation_result "VPC 添加" "$result" "aws_vpn_admin.sh"
+
+    if [ $result -eq 0 ]; then
+        echo -e "${GREEN}VPC 添加操作成功完成。${NC}"
+        # 重新載入配置以確保任何更改都已反映
+        if ! load_config_core "$CONFIG_FILE"; then # 使用統一函式
+            echo -e "${RED}錯誤：無法重新載入更新的配置文件${NC}"
+            # 即使重載失敗，也可能部分成功，所以不立即返回 1
+        fi
+    else
+        echo -e "${RED}VPC 添加過程中發生錯誤。請檢查上面的日誌。${NC}"
+    fi
+    
+    echo -e "\n${YELLOW}按任意鍵繼續...${NC}"
+    read -n 1
+}
+
+# 查看多 VPC 拓撲
+show_multi_vpc_topology() {
+    echo -e "\n${CYAN}=== 多 VPC 網路拓撲 ===${NC}"
+    
+    # 使用統一的配置驗證
+    if ! validate_main_config "$CONFIG_FILE"; then
+        echo -e "\n${YELLOW}按任意鍵繼續...${NC}"
+        read -n 1
+        return 1
+    fi
+    
+    # 檢查所有必要的變數是否已從 CONFIG_FILE 加載
+    # validate_main_config 已檢查 AWS_REGION
+    # validate_endpoint_operation (如果適用) 會檢查 ENDPOINT_ID
+    # 此處需要檢查其他特定於此函式的變數
+    local required_vars_topology=("ENDPOINT_ID" "VPN_CIDR" "VPC_ID" "VPC_CIDR" "SUBNET_ID")
+    for var_name in "${required_vars_topology[@]}"; do
+        if [ -z "${!var_name}" ]; then
+            echo -e "${RED}錯誤: 配置文件 .vpn_config 中缺少必要的變數 '$var_name'。${NC}"
+            echo -e "\n${YELLOW}按任意鍵繼續...${NC}"
+            read -n 1
+            return 1
+        fi
+    done
+
+    # 調用庫函式
+    show_multi_vpc_topology_lib "$CONFIG_FILE" "$AWS_REGION" "$ENDPOINT_ID" "$VPN_CIDR" "$VPC_ID" "$VPC_CIDR" "$SUBNET_ID"
+    local result=$?
+
+    log_operation_result "顯示多 VPC 拓撲" "$result" "aws_vpn_admin.sh"
+
+    if [ $result -ne 0 ]; then
+        echo -e "${RED}顯示多 VPC 拓撲過程中發生錯誤。${NC}"
+    fi
+    
+    echo -e "\n${YELLOW}按任意鍵繼續...${NC}"
+    read -n 1
+}
+
+# 移除 VPC 關聯
+remove_vpc_association() {
+    echo -e "\n${CYAN}=== 移除 VPC 關聯 ===${NC}"
+    
+    # 使用統一的端點操作驗證
+    if ! validate_endpoint_operation "$CONFIG_FILE"; then
+        echo -e "\n${YELLOW}按任意鍵繼續...${NC}"
+        read -n 1
+        return 1
+    fi
+    
+    echo -e "${BLUE}當前端點 ID: $ENDPOINT_ID${NC}"
+    echo -e "${BLUE}當前 AWS 區域: $AWS_REGION${NC}"
+
+    # 調用庫函式來處理 VPC 的解除關聯
+    disassociate_vpc_lib "$CONFIG_FILE" "$AWS_REGION" "$ENDPOINT_ID"
+    local result=$?
+
+    log_operation_result "VPC 解除關聯" "$result" "aws_vpn_admin.sh"
+
+    if [ $result -eq 0 ]; then
+        echo -e "${GREEN}VPC 解除關聯操作成功完成。${NC}"
+        # 重新載入配置以確保任何更改都已反映
+        if ! load_config_core "$CONFIG_FILE"; then # 使用統一函式
+             echo -e "${RED}錯誤：無法重新載入更新的配置文件${NC}"
+        fi
+    else
+        echo -e "${RED}VPC 解除關聯過程中發生錯誤。請檢查上面的日誌。${NC}"
+    fi
+    
+    echo -e "\n${YELLOW}按任意鍵繼續...${NC}"
+    read -n 1
+}
+
+# 批量管理 VPC 授權規則
+manage_batch_vpc_auth() {
+    echo -e "\n${CYAN}=== 批量管理 VPC 授權規則 ===${NC}"
+    
+    # 使用統一的端點操作驗證
+    if ! validate_endpoint_operation "$CONFIG_FILE"; then
+        echo -e "\n${YELLOW}按任意鍵返回多 VPC 管理選單...${NC}"
+        read -n 1 -s
+        return 1
+    fi
+
+    # 調用庫函式
+    manage_batch_vpc_auth_lib "$AWS_REGION" "$ENDPOINT_ID"
+    local result=$?
+
+    log_operation_result "批量管理 VPC 授權規則" "$result" "aws_vpn_admin.sh"
+
+    if [ $result -ne 0 ]; then
+        echo -e "${RED}批量管理 VPC 授權規則過程中發生錯誤或操作未成功。${NC}"
+    fi
+    
+    echo -e "\n${YELLOW}按任意鍵返回多 VPC 管理選單...${NC}"
+    read -n 1 -s
+}
+
+# 多 VPC 管理主函數
+manage_multi_vpc() {
+    # 在進入循環前，先做一次配置檢查，確保 AWS_REGION 等基本配置存在
+    if ! validate_main_config "$CONFIG_FILE"; then
+        echo -e "\n${YELLOW}按任意鍵返回主選單...${NC}"
+        read -n 1
+        return 1
+    fi
+
+    while true; do
+        echo -e "\n${CYAN}=== 多 VPC 管理 ===${NC}"
+        echo -e ""
+        echo -e "${BLUE}選擇操作：${NC}"
+        echo -e "  ${GREEN}1.${NC} 發現可用的 VPCs"
+        echo -e "  ${GREEN}2.${NC} 添加 VPC 到現有端點"
+        echo -e "  ${GREEN}3.${NC} 查看多 VPC 網路拓撲"
+        echo -e "  ${GREEN}4.${NC} 移除 VPC 關聯"
+        echo -e "  ${GREEN}5.${NC} 批量管理授權規則"
+        echo -e "  ${GREEN}6.${NC} 跨 VPC 路由管理"
+        echo -e "  ${GREEN}7.${NC} 返回主選單"
+        echo -e ""
+        
+        read -p "請選擇操作 (1-7): " choice
+        
+        case $choice in
+            1)
+                # discover_available_vpcs_core 已移至 core_functions.sh
+                # AWS_REGION 應該已經由 validate_main_config 載入
+                discover_available_vpcs_core "$AWS_REGION"
+                echo -e "\n${YELLOW}按任意鍵繼續...${NC}"
+                read -n 1
+                ;;
+            2)
+                add_vpc_to_endpoint
+                ;;
+            3)
+                show_multi_vpc_topology
+                ;;
+            4)
+                remove_vpc_association
+                ;;
+            5)
+                manage_batch_vpc_auth
+                ;;
+            6)
+                manage_cross_vpc_routes
+                ;;
+            7)
+                return
+                ;;
+            *)
+                echo -e "${RED}無效選擇${NC}"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+# 跨 VPC 路由管理
+manage_cross_vpc_routes() {
+    echo -e "\n${CYAN}=== 跨 VPC 路由管理 ===${NC}"
+    
+    # 使用統一的端點操作驗證
+    if ! validate_endpoint_operation "$CONFIG_FILE"; then
+        echo -e "\n${YELLOW}按任意鍵返回多 VPC 管理選單...${NC}"
+        read -n 1 -s
+        return 1
+    fi
+
+    # 調用庫函式來處理路由管理
+    manage_routes_lib "$AWS_REGION" "$ENDPOINT_ID"
+    local result=$?
+
+    log_operation_result "跨 VPC 路由管理" "$result" "aws_vpn_admin.sh"
+    
+    if [ $result -ne 0 ]; then
+        echo -e "${RED}跨 VPC 路由管理過程中發生內部錯誤。${NC}"
+    fi
+    
+    echo -e "\n${YELLOW}按任意鍵返回多 VPC 管理選單...${NC}"
+    read -n 1 -s
 }
 
 # 顯示管理員指南
@@ -713,17 +690,46 @@ show_admin_guide() {
 # 主函數
 main() {
     # 檢查必要工具
-    check_prerequisites
+    check_prerequisites # 來自 core_functions.sh
     
-    # 確保有配置
-    if [ ! -f $CONFIG_FILE ]; then
-        setup_aws_config
+    # 確保有配置，如果沒有則引導設定
+    # CONFIG_FILE 變數在腳本頂部定義
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo -e "${YELLOW}未找到配置文件 ($CONFIG_FILE)。正在引導初始設定...${NC}"
+        # setup_aws_config 來自 aws_setup.sh, 它會創建 CONFIG_FILE
+        if ! setup_aws_config "$CONFIG_FILE"; then
+            echo -e "${RED}AWS 配置設定失敗。無法繼續。${NC}"
+            exit 1
+        fi
+        echo -e "${GREEN}配置文件已創建。請重新啟動腳本。${NC}"
+        exit 0 # 提示用戶重啟以載入新配置
     fi
     
+    # 驗證基本配置 (如 AWS_REGION)
+    # 這也會通過 load_config_core 載入配置
+    if ! validate_main_config "$CONFIG_FILE"; then
+        echo -e "${RED}配置文件驗證失敗。請檢查 $CONFIG_FILE 或重新執行設定。${NC}"
+        # 如果 validate_main_config 失敗，它已經打印了具體錯誤
+        # 此處可以選擇是否引導用戶重新設定或直接退出
+        # 例如，詢問用戶是否要重新設定
+        read -p "是否要嘗試重新設定 AWS 配置? (y/n): " reconfigure_choice
+        if [[ "$reconfigure_choice" == "y" || "$reconfigure_choice" == "Y" ]]; then
+            if ! setup_aws_config "$CONFIG_FILE"; then
+                echo -e "${RED}AWS 配置設定失敗。無法繼續。${NC}"
+                exit 1
+            fi
+            echo -e "${GREEN}配置已更新。請重新啟動腳本。${NC}"
+            exit 0
+        else
+            echo -e "${YELLOW}腳本將退出。${NC}"
+            exit 1
+        fi
+    fi
+
     # 主循環
     while true; do
         show_menu
-        read -p "請選擇操作 (1-9): " choice
+        read -p "請選擇操作 (1-10): " choice
         
         case $choice in
             1)
@@ -751,6 +757,9 @@ main() {
                 system_health_check
                 ;;
             9)
+                manage_multi_vpc
+                ;;
+            10)
                 echo -e "\n${GREEN}感謝使用 AWS VPN 管理工具！${NC}"
                 log_message "管理工具已退出"
                 exit 0
