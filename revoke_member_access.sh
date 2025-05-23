@@ -1,0 +1,538 @@
+#!/bin/bash
+
+# AWS Client VPN 撤銷團隊成員訪問權限腳本
+# 用途：安全撤銷特定團隊成員的 VPN 訪問權限
+# 版本：1.0
+
+# 顏色設定
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+NC='\033[0m' # No Color
+
+# 全域變數
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REVOCATION_LOG_DIR="$SCRIPT_DIR/revocation-logs"
+LOG_FILE="$REVOCATION_LOG_DIR/revocation.log"
+
+# 阻止腳本在出錯時繼續執行
+set -e
+
+# 記錄函數
+log_message() {
+    mkdir -p $REVOCATION_LOG_DIR
+    echo "$(date '+%Y-%m-%d %H:%M:%S'): $1" >> $LOG_FILE
+}
+
+# 顯示歡迎訊息
+show_welcome() {
+    clear
+    echo -e "${RED}========================================================${NC}"
+    echo -e "${RED}        AWS Client VPN 訪問權限撤銷工具               ${NC}"
+    echo -e "${RED}========================================================${NC}"
+    echo -e ""
+    echo -e "${YELLOW}此工具用於撤銷團隊成員的 VPN 訪問權限${NC}"
+    echo -e "${YELLOW}適用於以下情況：${NC}"
+    echo -e "  ${BLUE}•${NC} 團隊成員角色變更"
+    echo -e "  ${BLUE}•${NC} 暫時停用訪問權限"
+    echo -e "  ${BLUE}•${NC} 安全事件響應"
+    echo -e "  ${BLUE}•${NC} 定期權限審計"
+    echo -e ""
+    echo -e "${RED}警告：此操作會立即生效，請謹慎操作${NC}"
+    echo -e ""
+    echo -e "${CYAN}========================================================${NC}"
+    echo -e ""
+    read -p "按任意鍵繼續... " -n 1
+}
+
+# 檢查必要工具和權限
+check_prerequisites() {
+    echo -e "\n${YELLOW}[1/7] 檢查必要工具和權限...${NC}"
+    
+    # 檢查工具
+    local tools=("aws" "jq")
+    local missing_tools=()
+    
+    for tool in "${tools[@]}"; do
+        if ! command -v $tool &> /dev/null; then
+            missing_tools+=($tool)
+        else
+            echo -e "${GREEN}✓ $tool 已安裝${NC}"
+        fi
+    done
+    
+    if [ ${#missing_tools[@]} -gt 0 ]; then
+        echo -e "${RED}缺少必要工具: ${missing_tools[*]}${NC}"
+        echo -e "${YELLOW}請先安裝缺少的工具再執行此腳本${NC}"
+        exit 1
+    fi
+    
+    # 檢查 AWS 配置
+    if [ ! -f ~/.aws/credentials ] || [ ! -f ~/.aws/config ]; then
+        echo -e "${RED}未找到 AWS 配置${NC}"
+        echo -e "${YELLOW}請先配置 AWS CLI${NC}"
+        exit 1
+    fi
+    
+    # 測試 AWS 連接和權限
+    echo -e "${BLUE}測試 AWS 連接和權限...${NC}"
+    aws_user=$(aws sts get-caller-identity --query 'Arn' --output text 2>/dev/null || echo "failed")
+    
+    if [[ $aws_user == "failed" ]]; then
+        echo -e "${RED}AWS 連接失敗${NC}"
+        exit 1
+    fi
+    
+    echo -e "${GREEN}✓ AWS 連接成功${NC}"
+    echo -e "${BLUE}當前 AWS 身份: $aws_user${NC}"
+    
+    # 檢查管理員權限
+    admin_check=$(aws ec2 describe-client-vpn-endpoints --max-items 1 2>/dev/null || echo "failed")
+    
+    if [[ $admin_check == "failed" ]]; then
+        echo -e "${RED}權限不足：無法訪問 Client VPN 端點${NC}"
+        echo -e "${YELLOW}請確認您有足夠的權限執行此操作${NC}"
+        exit 1
+    fi
+    
+    echo -e "${GREEN}✓ 權限檢查通過${NC}"
+    log_message "權限檢查完成，操作者: $aws_user"
+}
+
+# 獲取撤銷資訊
+get_revocation_info() {
+    echo -e "\n${YELLOW}[2/7] 獲取撤銷資訊...${NC}"
+    
+    # 獲取要撤銷的用戶名
+    echo -e "${BLUE}請輸入要撤銷訪問權限的用戶資訊：${NC}"
+    read -p "用戶名: " username
+    
+    if [ -z "$username" ]; then
+        echo -e "${RED}用戶名不能為空${NC}"
+        exit 1
+    fi
+    
+    # 獲取 AWS 區域
+    aws_region=$(aws configure get region)
+    if [ -z "$aws_region" ]; then
+        read -p "請輸入 AWS 區域: " aws_region
+    fi
+    
+    # 獲取 VPN 端點 ID
+    echo -e "\n${BLUE}可用的 Client VPN 端點：${NC}"
+    endpoints=$(aws ec2 describe-client-vpn-endpoints --region $aws_region)
+    echo $endpoints | jq -r '.ClientVpnEndpoints[] | "端點 ID: \(.ClientVpnEndpointId), 狀態: \(.Status.Code), 名稱: \(.Tags[]? | select(.Key=="Name") | .Value // "無名稱")"'
+    
+    read -p "請輸入 Client VPN 端點 ID: " endpoint_id
+    
+    # 驗證端點 ID
+    endpoint_check=$(aws ec2 describe-client-vpn-endpoints --client-vpn-endpoint-ids $endpoint_id --region $aws_region 2>/dev/null || echo "not_found")
+    
+    if [[ $endpoint_check == "not_found" ]]; then
+        echo -e "${RED}無法找到指定的 VPN 端點${NC}"
+        exit 1
+    fi
+    
+    echo -e "${GREEN}✓ VPN 端點驗證成功${NC}"
+    
+    # 撤銷原因
+    echo -e "\n${BLUE}請選擇撤銷原因：${NC}"
+    echo -e "  ${GREEN}1.${NC} 人員離職"
+    echo -e "  ${GREEN}2.${NC} 角色變更"
+    echo -e "  ${GREEN}3.${NC} 安全事件"
+    echo -e "  ${GREEN}4.${NC} 暫時停用"
+    echo -e "  ${GREEN}5.${NC} 其他"
+    
+    read -p "請選擇 (1-5): " reason_choice
+    
+    case $reason_choice in
+        1) revocation_reason="人員離職" ;;
+        2) revocation_reason="角色變更" ;;
+        3) revocation_reason="安全事件" ;;
+        4) revocation_reason="暫時停用" ;;
+        5) 
+            read -p "請輸入撤銷原因: " custom_reason
+            revocation_reason=${custom_reason:-"其他"}
+            ;;
+        *) revocation_reason="未指定" ;;
+    esac
+    
+    # 確認資訊
+    echo -e "\n${CYAN}撤銷資訊確認：${NC}"
+    echo -e "  用戶名: ${YELLOW}$username${NC}"
+    echo -e "  VPN 端點 ID: ${YELLOW}$endpoint_id${NC}"
+    echo -e "  AWS 區域: ${YELLOW}$aws_region${NC}"
+    echo -e "  撤銷原因: ${YELLOW}$revocation_reason${NC}"
+    
+    log_message "準備撤銷用戶 $username 的訪問權限，原因: $revocation_reason"
+}
+
+# 搜尋用戶證書
+find_user_certificates() {
+    echo -e "\n${YELLOW}[3/7] 搜尋用戶證書...${NC}"
+    
+    echo -e "${BLUE}正在 AWS Certificate Manager 中搜尋 ${username} 的證書...${NC}"
+    
+    # 列出所有證書
+    certificates=$(aws acm list-certificates --region $aws_region)
+    
+    # 搜索包含用戶名的證書
+    user_cert_arns=()
+    
+    # 方法1: 通過域名搜索
+    while IFS= read -r cert_arn; do
+        if [ ! -z "$cert_arn" ]; then
+            cert_details=$(aws acm describe-certificate --certificate-arn "$cert_arn" --region $aws_region)
+            domain_name=$(echo $cert_details | jq -r '.Certificate.DomainName // ""')
+            
+            if [[ $domain_name == *"$username"* ]]; then
+                user_cert_arns+=("$cert_arn")
+                echo -e "${GREEN}✓ 找到證書 (域名匹配): $cert_arn${NC}"
+            fi
+        fi
+    done <<< "$(echo $certificates | jq -r '.CertificateSummaryList[].CertificateArn')"
+    
+    # 方法2: 通過標籤搜索
+    while IFS= read -r cert_arn; do
+        if [ ! -z "$cert_arn" ]; then
+            tags=$(aws acm list-tags-for-certificate --certificate-arn "$cert_arn" --region $aws_region 2>/dev/null || echo '{"Tags":[]}')
+            contains_username=$(echo $tags | jq -r --arg username "$username" 'select(.Tags[] | select(.Key=="Name" or .Key=="User") | .Value | contains($username)) | true')
+            
+            if [[ "$contains_username" == "true" ]] && [[ ! " ${user_cert_arns[@]} " =~ " ${cert_arn} " ]]; then
+                user_cert_arns+=("$cert_arn")
+                echo -e "${GREEN}✓ 找到證書 (標籤匹配): $cert_arn${NC}"
+            fi
+        fi
+    done <<< "$(echo $certificates | jq -r '.CertificateSummaryList[].CertificateArn')"
+    
+    if [ ${#user_cert_arns[@]} -eq 0 ]; then
+        echo -e "${YELLOW}未找到 ${username} 的證書${NC}"
+        echo -e "${BLUE}請手動提供證書 ARN (如果知道的話):${NC}"
+        read -p "證書 ARN (或按 Enter 跳過): " manual_cert_arn
+        
+        if [ ! -z "$manual_cert_arn" ]; then
+            user_cert_arns+=("$manual_cert_arn")
+        fi
+    else
+        echo -e "${GREEN}找到 ${#user_cert_arns[@]} 個用戶證書${NC}"
+    fi
+    
+    log_message "找到 ${#user_cert_arns[@]} 個 $username 的證書"
+}
+
+# 檢查當前連接
+check_current_connections() {
+    echo -e "\n${YELLOW}[4/7] 檢查當前連接...${NC}"
+    
+    echo -e "${BLUE}檢查 ${username} 的活躍連接...${NC}"
+    
+    # 獲取當前連接
+    connections=$(aws ec2 describe-client-vpn-connections \
+      --client-vpn-endpoint-id $endpoint_id \
+      --region $aws_region)
+    
+    # 搜索用戶的連接
+    user_connections=$(echo $connections | jq -r --arg username "$username" '.Connections[] | select(.CommonName | contains($username)) | .ConnectionId')
+    
+    if [ ! -z "$user_connections" ]; then
+        echo -e "${RED}⚠ 發現用戶的活躍連接:${NC}"
+        echo $user_connections | while read connection_id; do
+            echo -e "  連接 ID: ${YELLOW}$connection_id${NC}"
+        done
+        
+        read -p "是否要斷開這些連接? (y/n): " disconnect_choice
+        
+        if [[ $disconnect_choice == "y" ]]; then
+            echo $user_connections | while read connection_id; do
+                echo -e "${BLUE}斷開連接 $connection_id...${NC}"
+                aws ec2 terminate-client-vpn-connections \
+                  --client-vpn-endpoint-id $endpoint_id \
+                  --connection-id $connection_id \
+                  --region $aws_region
+            done
+            echo -e "${GREEN}✓ 已斷開用戶的所有連接${NC}"
+        fi
+    else
+        echo -e "${GREEN}✓ 未發現用戶的活躍連接${NC}"
+    fi
+    
+    log_message "檢查並處理了 $username 的活躍連接"
+}
+
+# 撤銷證書和權限
+revoke_certificates() {
+    echo -e "\n${YELLOW}[5/7] 撤銷證書和權限...${NC}"
+    
+    if [ ${#user_cert_arns[@]} -eq 0 ]; then
+        echo -e "${YELLOW}沒有找到要撤銷的證書${NC}"
+        return
+    fi
+    
+    echo -e "${BLUE}開始撤銷證書...${NC}"
+    
+    revoked_certs=()
+    failed_certs=()
+    
+    for cert_arn in "${user_cert_arns[@]}"; do
+        echo -e "${BLUE}處理證書: $cert_arn${NC}"
+        
+        # 嘗試刪除證書
+        delete_result=$(aws acm delete-certificate --certificate-arn "$cert_arn" --region $aws_region 2>&1 || echo "failed")
+        
+        if [[ $delete_result == "failed" ]] || [[ $delete_result == *"error"* ]]; then
+            echo -e "${RED}✗ 無法刪除證書 $cert_arn${NC}"
+            echo -e "${YELLOW}錯誤詳情: $delete_result${NC}"
+            failed_certs+=("$cert_arn")
+            
+            # 嘗試標記證書為已撤銷
+            tag_result=$(aws acm add-tags-to-certificate \
+              --certificate-arn "$cert_arn" \
+              --tags Key=Status,Value=Revoked Key=RevokedBy,Value=$(whoami) Key=RevokedDate,Value=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+              --region $aws_region 2>&1 || echo "tag_failed")
+            
+            if [[ $tag_result != "tag_failed" ]]; then
+                echo -e "${YELLOW}已標記證書為已撤銷${NC}"
+            fi
+        else
+            echo -e "${GREEN}✓ 成功刪除證書 $cert_arn${NC}"
+            revoked_certs+=("$cert_arn")
+        fi
+    done
+    
+    echo -e "\n${CYAN}證書撤銷結果:${NC}"
+    echo -e "  成功撤銷: ${GREEN}${#revoked_certs[@]}${NC} 個證書"
+    echo -e "  撤銷失敗: ${RED}${#failed_certs[@]}${NC} 個證書"
+    
+    if [ ${#failed_certs[@]} -gt 0 ]; then
+        echo -e "\n${YELLOW}失敗的證書需要手動處理:${NC}"
+        for cert in "${failed_certs[@]}"; do
+            echo -e "  ${RED}$cert${NC}"
+        done
+    fi
+    
+    log_message "證書撤銷完成，成功: ${#revoked_certs[@]}, 失敗: ${#failed_certs[@]}"
+}
+
+# 檢查和移除 IAM 權限
+check_iam_permissions() {
+    echo -e "\n${YELLOW}[6/7] 檢查和處理 IAM 權限...${NC}"
+    
+    # 檢查是否有同名的 IAM 用戶
+    iam_user_exists=$(aws iam get-user --user-name $username 2>/dev/null || echo "not_found")
+    
+    if [[ "$iam_user_exists" != "not_found" ]]; then
+        echo -e "${BLUE}找到 IAM 用戶: $username${NC}"
+        
+        read -p "是否要處理此 IAM 用戶的權限? (y/n): " handle_iam
+        
+        if [[ $handle_iam == "y" ]]; then
+            echo -e "${BLUE}處理 IAM 用戶權限...${NC}"
+            
+            # 列出並停用訪問密鑰
+            echo -e "${BLUE}處理訪問密鑰...${NC}"
+            access_keys=$(aws iam list-access-keys --user-name $username --query 'AccessKeyMetadata[*].AccessKeyId' --output text)
+            
+            for key_id in $access_keys; do
+                echo -e "${BLUE}停用訪問密鑰: $key_id${NC}"
+                aws iam update-access-key --access-key-id $key_id --status Inactive --user-name $username
+            done
+            
+            # 分離政策
+            echo -e "${BLUE}分離用戶政策...${NC}"
+            attached_policies=$(aws iam list-attached-user-policies --user-name $username --query 'AttachedPolicies[*].PolicyArn' --output text)
+            for policy in $attached_policies; do
+                echo -e "${BLUE}分離政策: $policy${NC}"
+                aws iam detach-user-policy --user-name $username --policy-arn $policy
+            done
+            
+            # 移除內嵌政策
+            inline_policies=$(aws iam list-user-policies --user-name $username --query 'PolicyNames' --output text)
+            for policy in $inline_policies; do
+                echo -e "${BLUE}刪除內嵌政策: $policy${NC}"
+                aws iam delete-user-policy --user-name $username --policy-name $policy
+            done
+            
+            # 從群組中移除
+            user_groups=$(aws iam list-groups-for-user --user-name $username --query 'Groups[*].GroupName' --output text)
+            for group in $user_groups; do
+                echo -e "${BLUE}從群組移除: $group${NC}"
+                aws iam remove-user-from-group --user-name $username --group-name $group
+            done
+            
+            echo -e "${GREEN}✓ IAM 用戶權限已撤銷${NC}"
+            
+            # 詢問是否刪除用戶
+            read -p "是否要刪除 IAM 用戶? (y/n): " delete_user
+            
+            if [[ $delete_user == "y" ]]; then
+                # 刪除訪問密鑰
+                for key_id in $access_keys; do
+                    echo -e "${BLUE}刪除訪問密鑰: $key_id${NC}"
+                    aws iam delete-access-key --access-key-id $key_id --user-name $username
+                done
+                
+                # 刪除用戶
+                aws iam delete-user --user-name $username
+                echo -e "${GREEN}✓ IAM 用戶已刪除${NC}"
+            fi
+        fi
+    else
+        echo -e "${GREEN}✓ 未找到同名的 IAM 用戶${NC}"
+    fi
+    
+    log_message "IAM 權限檢查和處理完成"
+}
+
+# 生成撤銷報告
+generate_revocation_report() {
+    echo -e "\n${YELLOW}[7/7] 生成撤銷報告...${NC}"
+    
+    # 創建報告文件
+    report_file="$REVOCATION_LOG_DIR/${username}_revocation_$(date +%Y%m%d_%H%M%S).log"
+    
+    cat > $report_file << EOF
+=== AWS Client VPN 訪問權限撤銷報告 ===
+
+撤銷時間: $(date)
+操作者: $(whoami)
+AWS 身份: $(aws sts get-caller-identity --query 'Arn' --output text)
+
+被撤銷用戶資訊:
+  用戶名: $username
+  撤銷原因: $revocation_reason
+
+VPN 端點資訊:
+  端點 ID: $endpoint_id
+  AWS 區域: $aws_region
+
+撤銷的證書:
+EOF
+    
+    if [ ${#revoked_certs[@]} -gt 0 ]; then
+        for cert in "${revoked_certs[@]}"; do
+            echo "  ✓ $cert" >> $report_file
+        done
+    else
+        echo "  無證書被撤銷" >> $report_file
+    fi
+    
+    if [ ${#failed_certs[@]} -gt 0 ]; then
+        echo "" >> $report_file
+        echo "撤銷失敗的證書:" >> $report_file
+        for cert in "${failed_certs[@]}"; do
+            echo "  ✗ $cert" >> $report_file
+        done
+    fi
+    
+    cat >> $report_file << EOF
+
+IAM 用戶處理:
+  $([ "$iam_user_exists" != "not_found" ] && echo "已處理同名 IAM 用戶" || echo "未發現同名 IAM 用戶")
+
+後續建議:
+  1. 監控日誌，確認沒有來自此用戶的連接嘗試
+  2. 檢查生產環境訪問日誌
+  3. 如需重新授權，需要重新生成證書
+  4. 更新團隊的用戶清單文檔
+
+操作完成時間: $(date)
+EOF
+    
+    echo -e "${GREEN}✓ 撤銷報告已生成: ${BLUE}$report_file${NC}"
+    
+    # 顯示摘要
+    echo -e "\n${CYAN}撤銷操作摘要:${NC}"
+    echo -e "  被撤銷用戶: ${YELLOW}$username${NC}"
+    echo -e "  撤銷原因: ${YELLOW}$revocation_reason${NC}"
+    echo -e "  處理的證書: ${GREEN}${#revoked_certs[@]} 成功${NC}, ${RED}${#failed_certs[@]} 失敗${NC}"
+    echo -e "  IAM 用戶: $([ "$iam_user_exists" != "not_found" ] && echo "${YELLOW}已處理${NC}" || echo "${GREEN}未涉及${NC}")"
+    echo -e "  報告文件: ${BLUE}$report_file${NC}"
+    
+    log_message "撤銷報告已生成: $report_file"
+}
+
+# 顯示最終指示
+show_final_instructions() {
+    echo -e "\n${GREEN}=============================================${NC}"
+    echo -e "${GREEN}     訊問權限撤銷操作完成！          ${NC}"
+    echo -e "${GREEN}=============================================${NC}"
+    echo -e ""
+    echo -e "${CYAN}後續確認步驟：${NC}"
+    echo -e "${BLUE}1.${NC} 監控 VPN 連接日誌，確認用戶無法連接"
+    echo -e "${BLUE}2.${NC} 檢查 AWS CloudWatch 中的 VPN 日誌"
+    echo -e "${BLUE}3.${NC} 確認生產環境中沒有來自此用戶的活動"
+    echo -e "${BLUE}4.${NC} 更新團隊的訪問權限文檔"
+    echo -e ""
+    echo -e "${CYAN}安全建議：${NC}"
+    echo -e "${BLUE}•${NC} 持續監控異常訪問嘗試"
+    echo -e "${BLUE}•${NC} 定期審計 VPN 用戶權限"
+    echo -e "${BLUE}•${NC} 保留撤銷記錄以備審計"
+    echo -e "${BLUE}•${NC} 如需重新授權，請重新生成證書"
+    echo -e ""
+    echo -e "${YELLOW}如果發現任何問題，請立即聯繫安全團隊${NC}"
+    echo -e ""
+    echo -e "${GREEN}操作完成！${NC}"
+}
+
+# 確認操作
+confirm_revocation() {
+    echo -e "\n${RED}========================================${NC}"
+    echo -e "${RED}           最終確認                     ${NC}"
+    echo -e "${RED}========================================${NC}"
+    echo -e ""
+    echo -e "${RED}您即將撤銷以下用戶的 VPN 訪問權限：${NC}"
+    echo -e "  用戶名: ${YELLOW}$username${NC}"
+    echo -e "  原因: ${YELLOW}$revocation_reason${NC}"
+    echo -e "  影響的證書: ${YELLOW}${#user_cert_arns[@]} 個${NC}"
+    echo -e ""
+    echo -e "${RED}此操作將會：${NC}"
+    echo -e "${RED}  • 刪除用戶的客戶端證書${NC}"
+    echo -e "${RED}  • 斷開用戶的當前連接${NC}"
+    echo -e "${RED}  • 阻止用戶未來的連接${NC}"
+    echo -e "${RED}  • 可能影響用戶的 IAM 權限${NC}"
+    echo -e ""
+    echo -e "${RED}此操作無法撤銷！${NC}"
+    echo -e ""
+    read -p "確認撤銷? 請輸入 'REVOKE' 來確認: " final_confirm
+    
+    if [ "$final_confirm" != "REVOKE" ]; then
+        echo -e "${BLUE}撤銷操作已取消${NC}"
+        log_message "用戶取消了 $username 的撤銷操作"
+        exit 0
+    fi
+    
+    log_message "用戶確認撤銷 $username 的訪問權限"
+}
+
+# 主函數
+main() {
+    # 顯示歡迎訊息
+    show_welcome
+    
+    # 執行撤銷步驟
+    check_prerequisites
+    get_revocation_info
+    find_user_certificates
+    
+    # 最終確認
+    confirm_revocation
+    
+    # 執行撤銷操作
+    check_current_connections
+    revoke_certificates
+    check_iam_permissions
+    generate_revocation_report
+    
+    # 顯示最終指示
+    show_final_instructions
+    
+    log_message "訪問權限撤銷操作完成"
+}
+
+# 記錄腳本啟動
+log_message "訪問權限撤銷腳本已啟動"
+
+# 執行主程序
+main

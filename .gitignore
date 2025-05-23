@@ -1,0 +1,46 @@
+# 敏感配置文件
+.vpn_config
+.user_vpn_config
+*.key
+*.crt
+*.pem
+
+# 日誌文件
+*.log
+
+# 證書目錄
+certificates/
+user-certificates/
+team-configs/
+configs/
+vpn-config/
+offboarding-logs/
+revocation-logs/
+
+# AWS 配置文件 (如果意外複製到專案目錄)
+.aws/
+
+# macOS 系統文件
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# 臨時文件
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# 編輯器文件
+.vscode/
+.idea/
+*.sublime-*
+
+# 執行時生成的文件
+pki/
+*.ovpn
