@@ -5,24 +5,27 @@
 # 版本：1.0
 
 # 顏色設定
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-RED='\033[0;31m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+GREEN=\'\\\\033[0;32m\'
+BLUE=\'\\\\033[0;34m\'
+RED=\'\\\\033[0;31m\'
+YELLOW=\'\\\\033[1;33m\'
+CYAN=\'\\\\033[0;36m\'
+NC=\'\\\\033[0m\' # No Color
 
 # 全域變數
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 USER_CONFIG_FILE="$SCRIPT_DIR/.user_vpn_config"
 LOG_FILE="$SCRIPT_DIR/user_vpn_setup.log"
 
+# 載入核心函式庫
+source "$SCRIPT_DIR/lib/core_functions.sh"
+
 # 阻止腳本在出錯時繼續執行
 set -e
 
 # 記錄函數
 log_message() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S'): $1" >> $LOG_FILE
+    echo "$(date \'+%Y-%m-%d %H:%M:%S\'): $1" >> "$LOG_FILE"
 }
 
 # 顯示歡迎訊息
@@ -47,14 +50,14 @@ show_welcome() {
 
 # 檢查必要工具
 check_prerequisites() {
-    echo -e "\n${YELLOW}[1/6] 檢查必要工具...${NC}"
+    echo -e "\\\\n${YELLOW}[1/6] 檢查必要工具...${NC}"
     
     local tools=("brew" "aws" "jq" "openssl")
     local missing_tools=()
     
     for tool in "${tools[@]}"; do
-        if ! command -v $tool &> /dev/null; then
-            missing_tools+=($tool)
+        if ! command -v "$tool" &> /dev/null; then
+            missing_tools+=("$tool")
         else
             echo -e "${GREEN}✓ $tool 已安裝${NC}"
         fi
@@ -74,7 +77,7 @@ check_prerequisites() {
         for tool in "${missing_tools[@]}"; do
             if [[ "$tool" != "brew" ]]; then
                 echo -e "${BLUE}安裝 $tool...${NC}"
-                case $tool in
+                case "$tool" in
                     "aws")
                         brew install awscli
                         ;;
@@ -95,7 +98,7 @@ check_prerequisites() {
 
 # 設定 AWS 配置
 setup_aws_config() {
-    echo -e "\n${YELLOW}[2/6] 設定 AWS 配置...${NC}"
+    echo -e "\\\\n${YELLOW}[2/6] 設定 AWS 配置...${NC}"
     
     if [ ! -f ~/.aws/credentials ] || [ ! -f ~/.aws/config ]; then
         echo -e "${YELLOW}請提供您的 AWS 帳戶資訊：${NC}"
@@ -134,14 +137,14 @@ EOF
     echo -e "${GREEN}✓ AWS 連接測試成功${NC}"
     
     # 獲取 VPN 端點資訊
-    echo -e "\n${YELLOW}請向管理員獲取以下資訊：${NC}"
+    echo -e "\\\\n${YELLOW}請向管理員獲取以下資訊：${NC}"
     read -p "請輸入 Client VPN 端點 ID: " endpoint_id
     
     # 驗證端點 ID
     echo -e "${BLUE}驗證 VPN 端點...${NC}"
-    endpoint_check=$(aws ec2 describe-client-vpn-endpoints --client-vpn-endpoint-ids $endpoint_id --region $aws_region 2>/dev/null || echo "not_found")
+    endpoint_check=$(aws ec2 describe-client-vpn-endpoints --client-vpn-endpoint-ids "$endpoint_id" --region "$aws_region" 2>/dev/null || echo "not_found")
     
-    if [[ $endpoint_check == "not_found" ]]; then
+    if [[ "$endpoint_check" == "not_found" ]]; then
         echo -e "${RED}無法找到指定的 VPN 端點。請確認 ID 是否正確，以及您是否有權限訪問。${NC}"
         exit 1
     fi
@@ -149,7 +152,7 @@ EOF
     echo -e "${GREEN}✓ VPN 端點驗證成功${NC}"
     
     # 保存配置
-    cat > $USER_CONFIG_FILE << EOF
+    cat > "$USER_CONFIG_FILE" << EOF
 AWS_REGION=$aws_region
 ENDPOINT_ID=$endpoint_id
 USER_NAME=""
@@ -161,11 +164,11 @@ EOF
 
 # 設定用戶資訊
 setup_user_info() {
-    echo -e "\n${YELLOW}[3/6] 設定用戶資訊...${NC}"
+    echo -e "\\\\n${YELLOW}[3/6] 設定用戶資訊...${NC}"
     
     # 獲取用戶名
     read -p "請輸入您的用戶名或姓名 (僅使用英文字母和數字，不含空格): " username
-    username=$(echo $username | tr -cd '[:alnum:]')
+    username=$(echo "$username" | tr -cd \'[:alnum:]\')
     
     if [ -z "$username" ]; then
         echo -e "${RED}用戶名不能為空${NC}"
@@ -176,13 +179,13 @@ setup_user_info() {
     echo -e "${BLUE}您的用戶名: $username${NC}"
     read -p "確認使用此用戶名？(y/n): " confirm
     
-    if [[ $confirm != "y" ]]; then
+    if [[ "$confirm" != "y" ]]; then
         echo -e "${YELLOW}請重新執行腳本並設定正確的用戶名${NC}"
         exit 0
     fi
     
     # 更新配置文件
-    sed -i '' "s/USER_NAME=\"\"/USER_NAME=\"$username\"/" $USER_CONFIG_FILE
+    sed -i \'\' "s/USER_NAME=\\\"\\\"/USER_NAME=\\\"$username\\\"/" "$USER_CONFIG_FILE"
     
     echo -e "${GREEN}用戶資訊設定完成！${NC}"
     log_message "用戶資訊已設定: $username"
@@ -190,9 +193,9 @@ setup_user_info() {
 
 # 生成個人客戶端證書
 generate_client_certificate() {
-    echo -e "\n${YELLOW}[4/6] 生成個人 VPN 客戶端證書...${NC}"
+    echo -e "\\\\n${YELLOW}[4/6] 生成個人 VPN 客戶端證書...${NC}"
     
-    source $USER_CONFIG_FILE
+    source "$USER_CONFIG_FILE"
     
     # 檢查 CA 證書
     echo -e "${YELLOW}檢查 CA 證書文件...${NC}"
@@ -235,8 +238,8 @@ generate_client_certificate() {
     
     # 創建證書目錄
     cert_dir="$SCRIPT_DIR/user-certificates"
-    mkdir -p $cert_dir
-    cd $cert_dir
+    mkdir -p "$cert_dir"
+    cd "$cert_dir"
     
     # 複製 CA 證書
     cp "$ca_cert_path" ./ca.crt
@@ -245,19 +248,37 @@ generate_client_certificate() {
         # 有 CA 私鑰，可以自動生成證書
         echo -e "${BLUE}自動生成客戶端證書...${NC}"
         
-        # 生成私鑰
-        openssl genrsa -out ${USER_NAME}.key 2048
+        # 產生使用者私鑰和 CSR
+        if [ -f "${USER_NAME}.key" ] || [ -f "${USER_NAME}.csr" ]; then
+            read -p "金鑰檔案 ${USER_NAME}.key 或 ${USER_NAME}.csr 已存在。是否覆蓋? (y/n): " overwrite_key
+            if [[ "$overwrite_key" == "y" ]]; then
+                rm -f "${USER_NAME}.key" "${USER_NAME}.csr"
+            else
+                echo -e "${YELLOW}保留現有金鑰檔案。如果您想重新產生，請先刪除它們。${NC}"
+                # 如果使用者選擇不覆蓋，我們需要確保現有的 .key 檔案權限正確
+                if [ -f "${USER_NAME}.key" ]; then
+                    chmod 600 "${USER_NAME}.key"
+                    chown "$(whoami)" "${USER_NAME}.key"
+                fi
+                return 0 # 假設如果保留，則不需要後續簽署等步驟，或者調用者會處理
+            fi
+        fi
         
-        # 生成證書請求
-        openssl req -new -key ${USER_NAME}.key -out ${USER_NAME}.csr \
+        echo -e "${BLUE}正在為使用者 $USER_NAME 產生私鑰和證書簽署請求 (CSR)...${NC}"
+        openssl genrsa -out "${USER_NAME}.key" 2048
+        chmod 600 "${USER_NAME}.key"
+        chown "$(whoami)" "${USER_NAME}.key"
+        
+        # 提示使用者輸入 CSR 的詳細資訊
+        openssl req -new -key "${USER_NAME}.key" -out "${USER_NAME}.csr" \\
           -subj "/CN=${USER_NAME}/O=Client/C=TW"
         
         # 簽署證書
-        openssl x509 -req -in ${USER_NAME}.csr -CA ./ca.crt -CAkey "$ca_key_path" \
-          -CAcreateserial -out ${USER_NAME}.crt -days 365
+        openssl x509 -req -in "${USER_NAME}.csr" -CA ./ca.crt -CAkey "$ca_key_path" \\
+          -CAcreateserial -out "${USER_NAME}.crt" -days 365
         
         # 清理
-        rm ${USER_NAME}.csr
+        rm "${USER_NAME}.csr"
         
         echo -e "${GREEN}✓ 客戶端證書生成完成${NC}"
     else
@@ -267,13 +288,13 @@ generate_client_certificate() {
         echo -e "  用戶名: $USER_NAME"
         echo -e "  證書請求: 需要為此用戶生成客戶端證書"
         
-        echo -e "\n${BLUE}如果您已有客戶端證書，請將其放在以下位置：${NC}"
+        echo -e "\\\\n${BLUE}如果您已有客戶端證書，請將其放在以下位置：${NC}"
         echo -e "  證書文件: $cert_dir/${USER_NAME}.crt"
         echo -e "  私鑰文件: $cert_dir/${USER_NAME}.key"
         
         read -p "證書文件已準備好？(y/n): " cert_ready
         
-        if [[ $cert_ready != "y" ]]; then
+        if [[ "$cert_ready" != "y" ]]; then
             echo -e "${YELLOW}請準備好證書文件後重新執行腳本${NC}"
             exit 0
         fi
@@ -290,9 +311,9 @@ generate_client_certificate() {
 
 # 導入證書到 ACM
 import_certificate() {
-    echo -e "\n${YELLOW}[5/6] 導入證書到 AWS Certificate Manager...${NC}"
+    echo -e "\\\\n${YELLOW}[5/6] 導入證書到 AWS Certificate Manager...${NC}"
     
-    source $USER_CONFIG_FILE
+    source "$USER_CONFIG_FILE"
     cert_dir="$SCRIPT_DIR/user-certificates"
     
     # 檢查證書文件
@@ -306,56 +327,56 @@ import_certificate() {
     
     # 導入客戶端證書
     echo -e "${BLUE}導入客戶端證書到 ACM...${NC}"
-    client_cert=$(aws acm import-certificate \
-      --certificate fileb://$cert_dir/${USER_NAME}.crt \
-      --private-key fileb://$cert_dir/${USER_NAME}.key \
-      --certificate-chain fileb://$cert_dir/ca.crt \
-      --region $AWS_REGION \
+    client_cert=$(aws acm import-certificate \\
+      --certificate "fileb://$cert_dir/${USER_NAME}.crt" \\
+      --private-key "fileb://$cert_dir/${USER_NAME}.key" \\
+      --certificate-chain "fileb://$cert_dir/ca.crt" \\
+      --region "$AWS_REGION" \\
       --tags Key=Name,Value="VPN-Client-${USER_NAME}" Key=Purpose,Value="ClientVPN" Key=User,Value="$USER_NAME")
     
-    client_cert_arn=$(echo $client_cert | jq -r '.CertificateArn')
+    client_cert_arn=$(echo "$client_cert" | jq -r \'.CertificateArn\')
     
     echo -e "${GREEN}✓ 證書導入完成${NC}"
     echo -e "證書 ARN: ${BLUE}$client_cert_arn${NC}"
     
     # 更新配置文件
-    sed -i '' "s/CLIENT_CERT_ARN=\"\"/CLIENT_CERT_ARN=\"$client_cert_arn\"/" $USER_CONFIG_FILE
+    sed -i \'\' "s/CLIENT_CERT_ARN=\\\"\\\"/CLIENT_CERT_ARN=\\\"$client_cert_arn\\\"/" "$USER_CONFIG_FILE"
     
     log_message "證書已導入到 ACM: $client_cert_arn"
 }
 
 # 設置 VPN 客戶端
 setup_vpn_client() {
-    echo -e "\n${YELLOW}[6/6] 設置 VPN 客戶端...${NC}"
+    echo -e "\\\\n${YELLOW}[6/6] 設置 VPN 客戶端...${NC}"
     
-    source $USER_CONFIG_FILE
+    source "$USER_CONFIG_FILE"
     cert_dir="$SCRIPT_DIR/user-certificates"
     
     # 下載 VPN 配置
     echo -e "${BLUE}下載 VPN 配置文件...${NC}"
     config_dir="$SCRIPT_DIR/vpn-config"
-    mkdir -p $config_dir
+    mkdir -p "$config_dir"
     
-    aws ec2 export-client-vpn-client-configuration \
-      --client-vpn-endpoint-id $ENDPOINT_ID \
-      --region $AWS_REGION \
-      --output text > $config_dir/client-config-base.ovpn
+    aws ec2 export-client-vpn-client-configuration \\
+      --client-vpn-endpoint-id "$ENDPOINT_ID" \\
+      --region "$AWS_REGION" \\
+      --output text > "$config_dir/client-config-base.ovpn"
     
     # 創建個人配置文件
     echo -e "${BLUE}建立個人配置文件...${NC}"
-    cp $config_dir/client-config-base.ovpn $config_dir/${USER_NAME}-config.ovpn
+    cp "$config_dir/client-config-base.ovpn" "$config_dir/${USER_NAME}-config.ovpn"
     
     # 添加配置選項
-    echo "reneg-sec 0" >> $config_dir/${USER_NAME}-config.ovpn
+    echo "reneg-sec 0" >> "$config_dir/${USER_NAME}-config.ovpn"
     
     # 添加客戶端證書和密鑰
-    echo "<cert>" >> $config_dir/${USER_NAME}-config.ovpn
-    cat $cert_dir/${USER_NAME}.crt >> $config_dir/${USER_NAME}-config.ovpn
-    echo "</cert>" >> $config_dir/${USER_NAME}-config.ovpn
+    echo "<cert>" >> "$config_dir/${USER_NAME}-config.ovpn"
+    cat "$cert_dir/${USER_NAME}.crt" >> "$config_dir/${USER_NAME}-config.ovpn"
+    echo "</cert>" >> "$config_dir/${USER_NAME}-config.ovpn"
     
-    echo "<key>" >> $config_dir/${USER_NAME}-config.ovpn
-    cat $cert_dir/${USER_NAME}.key >> $config_dir/${USER_NAME}-config.ovpn
-    echo "</key>" >> $config_dir/${USER_NAME}-config.ovpn
+    echo "<key>" >> "$config_dir/${USER_NAME}-config.ovpn"
+    cat "$cert_dir/${USER_NAME}.key" >> "$config_dir/${USER_NAME}-config.ovpn"
+    echo "</key>" >> "$config_dir/${USER_NAME}-config.ovpn"
     
     echo -e "${GREEN}✓ 個人配置文件已建立${NC}"
     
@@ -366,7 +387,7 @@ setup_vpn_client() {
     if [ ! -d "/Applications/AWS VPN Client.app" ]; then
         echo -e "${BLUE}下載 AWS VPN 客戶端...${NC}"
         vpn_client_url="https://d20adtppz83p9s.cloudfront.net/OSX/latest/AWS_VPN_Client.pkg"
-        curl -L -o ~/Downloads/AWS_VPN_Client.pkg $vpn_client_url
+        curl -L -o ~/Downloads/AWS_VPN_Client.pkg "$vpn_client_url"
         
         echo -e "${BLUE}安裝 AWS VPN 客戶端...${NC}"
         sudo installer -pkg ~/Downloads/AWS_VPN_Client.pkg -target /
@@ -384,9 +405,9 @@ setup_vpn_client() {
 
 # 顯示連接指示
 show_connection_instructions() {
-    source $USER_CONFIG_FILE
+    source "$USER_CONFIG_FILE"
     
-    echo -e "\n${GREEN}=============================================${NC}"
+    echo -e "\\\\n${GREEN}=============================================${NC}"
     echo -e "${GREEN}       AWS Client VPN 設置完成！      ${NC}"
     echo -e "${GREEN}=============================================${NC}"
     echo -e ""
@@ -421,10 +442,10 @@ show_connection_instructions() {
 
 # 清理和測試函數
 test_connection() {
-    echo -e "\n${BLUE}是否要進行連接測試？(需要先手動連接 VPN) (y/n): ${NC}"
+    echo -e "\\\\n${BLUE}是否要進行連接測試？(需要先手動連接 VPN) (y/n): ${NC}"
     read test_choice
     
-    if [[ $test_choice == "y" ]]; then
+    if [[ "$test_choice" == "y" ]]; then
         echo -e "${BLUE}請先使用 AWS VPN 客戶端連接，然後按任意鍵繼續測試...${NC}"
         read -n 1
         
@@ -437,10 +458,10 @@ test_connection() {
             echo -e "${GREEN}✓ 檢測到 VPN 介面: $vpn_interface${NC}"
             
             # 嘗試 ping VPN 閘道
-            vpn_gateway=$(route -n get default | grep "gateway" | awk '{print $2}')
+            vpn_gateway=$(route -n get default | grep "gateway" | awk \'{print $2}\')
             if [ ! -z "$vpn_gateway" ]; then
                 echo -e "${BLUE}測試連接到閘道 $vpn_gateway...${NC}"
-                if ping -c 3 $vpn_gateway > /dev/null 2>&1; then
+                if ping -c 3 "$vpn_gateway" > /dev/null 2>&1; then
                     echo -e "${GREEN}✓ VPN 連接測試成功${NC}"
                 else
                     echo -e "${YELLOW}⚠ 無法 ping 閘道，但這可能是正常的${NC}"

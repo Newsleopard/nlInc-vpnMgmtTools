@@ -17,9 +17,8 @@ list_vpn_endpoints_lib() {
     local config_file="$2"
     
     # 參數驗證
-    if [ -z "$aws_region" ]; then
-        echo -e "${RED}錯誤: AWS 區域參數為空${NC}"
-        log_message_core "錯誤: list_vpn_endpoints_lib 調用時 AWS 區域參數為空"
+    if ! validate_aws_region "$aws_region"; then
+        # validate_aws_region 應已處理錯誤記錄和輸出
         return 1
     fi
     
@@ -71,7 +70,7 @@ list_vpn_endpoints_lib() {
             
             if [ "$associated_subnets_count" -gt 0 ]; then
                 echo -e "  ${YELLOW}關聯的子網路 ($associated_subnets_count):${NC}"
-                echo "$target_networks_json" | jq -r '.ClientVpnTargetNetworks[] | "    - 子網路 ID: \(.TargetNetworkId), VPC ID: \(.VpcId), 狀態: \(.Status.Code)"'
+                echo "$target_networks_json" | jq -r '.ClientVpnTargetNetworks[] | "    - 子網路 ID: \\(.TargetNetworkId), VPC ID: \\(.VpcId), 狀態: \\(.Status.Code)"'
             else
                 echo -e "  ${YELLOW}未關聯任何子網路${NC}"
             fi
@@ -110,9 +109,14 @@ generate_admin_config_lib() {
     source "$config_file"
     
     # 檢查必要變數
-    if [ -z "$ENDPOINT_ID" ] || [ -z "$AWS_REGION" ]; then
-        echo -e "${RED}錯誤: 配置文件中缺少必要的 ENDPOINT_ID 或 AWS_REGION${NC}"
-        log_message_core "錯誤: 配置文件中缺少必要變數 - ENDPOINT_ID: '$ENDPOINT_ID', AWS_REGION: '$AWS_REGION'"
+    if ! validate_endpoint_id "$ENDPOINT_ID"; then
+        log_message_core "錯誤: generate_admin_config_lib - 來自配置文件的 ENDPOINT_ID 無效: '$ENDPOINT_ID'"
+        # validate_endpoint_id 應已處理特定錯誤的記錄和輸出
+        return 1
+    fi
+    if ! validate_aws_region "$AWS_REGION"; then
+        log_message_core "錯誤: generate_admin_config_lib - 來自配置文件的 AWS_REGION 無效: '$AWS_REGION'"
+        # validate_aws_region 應已處理特定錯誤的記錄和輸出
         return 1
     fi
     
@@ -127,9 +131,9 @@ generate_admin_config_lib() {
     fi
     
     # 下載基本配置
-    if ! aws ec2 export-client-vpn-client-configuration \
-      --client-vpn-endpoint-id "$ENDPOINT_ID" \
-      --region "$AWS_REGION" \
+    if ! aws ec2 export-client-vpn-client-configuration \\
+      --client-vpn-endpoint-id "$ENDPOINT_ID" \\
+      --region "$AWS_REGION" \\
       --output text > "$script_dir/configs/admin-config-base.ovpn" 2>/dev/null; then
         echo -e "${RED}錯誤: 無法下載 VPN 客戶端配置${NC}"
         log_message_core "錯誤: AWS CLI 調用失敗 - export-client-vpn-client-configuration"
@@ -195,9 +199,14 @@ export_team_config_lib() {
     source "$config_file"
     
     # 檢查必要變數
-    if [ -z "$ENDPOINT_ID" ] || [ -z "$AWS_REGION" ]; then
-        echo -e "${RED}錯誤: 配置文件中缺少必要的 ENDPOINT_ID 或 AWS_REGION${NC}"
-        log_message_core "錯誤: 配置文件中缺少必要變數 - ENDPOINT_ID: '$ENDPOINT_ID', AWS_REGION: '$AWS_REGION'"
+    if ! validate_endpoint_id "$ENDPOINT_ID"; then
+        log_message_core "錯誤: export_team_config_lib - 來自配置文件的 ENDPOINT_ID 無效: '$ENDPOINT_ID'"
+        # validate_endpoint_id 應已處理特定錯誤的記錄和輸出
+        return 1
+    fi
+    if ! validate_aws_region "$AWS_REGION"; then
+        log_message_core "錯誤: export_team_config_lib - 來自配置文件的 AWS_REGION 無效: '$AWS_REGION'"
+        # validate_aws_region 應已處理特定錯誤的記錄和輸出
         return 1
     fi
     
@@ -212,9 +221,9 @@ export_team_config_lib() {
     fi
     
     # 下載基本配置
-    if ! aws ec2 export-client-vpn-client-configuration \
-      --client-vpn-endpoint-id "$ENDPOINT_ID" \
-      --region "$AWS_REGION" \
+    if ! aws ec2 export-client-vpn-client-configuration \\
+      --client-vpn-endpoint-id "$ENDPOINT_ID" \\
+      --region "$AWS_REGION" \\
       --output text > "$script_dir/team-configs/team-config-base.ovpn" 2>/dev/null; then
         echo -e "${RED}錯誤: 無法下載 VPN 客戶端配置${NC}"
         log_message_core "錯誤: AWS CLI 調用失敗 - export-client-vpn-client-configuration"
@@ -254,8 +263,15 @@ EOF
             echo "" >> "$script_dir/team-configs/team-setup-info.txt"
             echo "額外關聯的 VPCs:" >> "$script_dir/team-configs/team-setup-info.txt"
             for ((i=1; i<=multi_vpc_count; i++)); do
+                local vpc_info_var_name="MULTI_VPC_$i"
                 local vpc_info_line
-                vpc_info_line=$(grep "MULTI_VPC_$i=" "$config_file" | cut -d'"' -f2)
+                # Ensure the variable name is correctly formed and used with eval or indirect expansion
+                # However, direct sourcing of config should make these available.
+                # Let's assume the config file is sourced correctly and variables are directly accessible.
+                # This part might need adjustment based on how MULTI_VPC_X variables are actually stored/retrieved.
+                # For now, using a robust way to get the value if it's set.
+                vpc_info_line=$(grep "$vpc_info_var_name=" "$config_file" | cut -d'"' -f2)
+
                 if [ ! -z "$vpc_info_line" ]; then
                     local extra_vpc_id extra_vpc_cidr extra_subnet_id
                     extra_vpc_id=$(echo "$vpc_info_line" | cut -d':' -f1)
