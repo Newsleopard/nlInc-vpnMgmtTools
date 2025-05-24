@@ -20,6 +20,9 @@ LOG_FILE="$SCRIPT_DIR/user_vpn_setup.log"
 # 載入核心函式庫
 source "$SCRIPT_DIR/lib/core_functions.sh"
 
+# 執行兼容性檢查
+check_macos_compatibility
+
 # 阻止腳本在出錯時繼續執行
 set -e
 
@@ -252,7 +255,7 @@ setup_user_info() {
     fi
     
     # 更新配置文件
-    sed -i '' "s/USERNAME=\"\"/USERNAME=\"$username\"/" "$USER_CONFIG_FILE"
+    update_config "$USER_CONFIG_FILE" "USERNAME" "$username"
     
     echo -e "${GREEN}用戶資訊設定完成！${NC}"
     log_team_setup_message "用戶資訊已設定: $username"
@@ -433,7 +436,7 @@ import_certificate() {
     echo -e "證書 ARN: ${BLUE}$client_cert_arn${NC}"
     
     # 更新配置文件
-    sed -i '' "s/CLIENT_CERT_ARN=\"\"/CLIENT_CERT_ARN=\"$client_cert_arn\"/" "$USER_CONFIG_FILE"
+    update_config "$USER_CONFIG_FILE" "CLIENT_CERT_ARN" "$client_cert_arn"
     
     log_team_setup_message "證書已導入到 ACM: $client_cert_arn"
 }

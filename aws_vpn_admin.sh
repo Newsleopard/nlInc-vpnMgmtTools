@@ -240,6 +240,11 @@ create_vpn_endpoint() {
             echo -e "${RED}錯誤：無法重新載入配置文件${NC}"
             return 1
         fi
+        # 需要確保 ENDPOINT_ID 已正確設定
+        if [ -z "$ENDPOINT_ID" ]; then
+            echo -e "${RED}錯誤：ENDPOINT_ID 未設定${NC}"
+            return 1
+        fi
     else
         echo -e "${RED}錯誤：ENDPOINT_ID 或 AWS_REGION 未設定，無法進行額外 VPC 關聯。${NC}"
         # 這是嚴重錯誤，可能表示主端點創建失敗
@@ -290,7 +295,7 @@ list_vpn_endpoints() {
 
 # 管理 VPN 端點設定
 manage_vpn_settings() {
-    echo -e "\\\\n${CYAN}=== 管理 VPN 端點設定 ===${NC}"
+    echo -e "\n${CYAN}=== 管理 VPN 端點設定 ===${NC}"
     
     # 使用統一的端點操作驗證
     if ! validate_endpoint_operation "$CONFIG_FILE"; then
@@ -444,10 +449,10 @@ view_connection_logs() {
     start_time=$(date -u -d '1 hour ago' +%s)000
     end_time=$(date -u +%s)000
     
-    aws logs filter-log-events \\
-      --log-group-name "$log_group_name" \\
-      --start-time "$start_time" \\
-      --end-time "$end_time" \\
+    aws logs filter-log-events \
+      --log-group-name "$log_group_name" \
+      --start-time "$start_time" \
+      --end-time "$end_time" \
       --region "$AWS_REGION" | jq -r '.events[] | "\\(.timestamp | strftime("%Y-%m-%d %H:%M:%S")): \\(.message)"' | tail -20
     
     echo -e "\\n${YELLOW}按任意鍵繼續...${NC}"

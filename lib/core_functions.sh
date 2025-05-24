@@ -851,28 +851,99 @@ update_config() {
     # 如果配置文件不存在，創建一個新的
     if [ ! -f "$config_file" ]; then
         echo "# VPN 管理配置文件" > "$config_file"
+        chmod 600 "$config_file"
         log_message_core "創建新的配置文件: $config_file"
     fi
     
-    # 使用 sed 更新或添加參數
-    if grep -q "^${param_name}=" "$config_file"; then
-        # 參數已存在，更新值
-        if [ "$(uname)" = "Darwin" ]; then
-            # macOS 版本的 sed
-            sed -i '' "s|^${param_name}=.*|${param_name}=\"${param_value}\"|" "$config_file"
-        else
-            # Linux 版本的 sed
-            sed -i "s|^${param_name}=.*|${param_name}=\"${param_value}\"|" "$config_file"
-        fi
-        log_message_core "更新配置參數: ${param_name}=${param_value}"
+    # 使用更安全的方法更新配置文件
+    update_config_safe "$config_file" "$param_name" "$param_value"
+    local update_result=$?
+    
+    if [ $update_result -eq 0 ]; then
+        echo -e "${GREEN}已更新配置：${param_name}=${param_value}${NC}"
+        log_message_core "配置參數更新成功: ${param_name}=${param_value}"
     else
-        # 參數不存在，添加到文件末尾
-        echo "${param_name}=\"${param_value}\"" >> "$config_file"
-        log_message_core "添加新配置參數: ${param_name}=${param_value}"
+        echo -e "${RED}錯誤：無法更新配置參數${NC}" >&2
+        log_message_core "錯誤：無法更新配置參數 ${param_name}"
+        return 1
     fi
     
-    echo -e "${GREEN}已更新配置：${param_name}=${param_value}${NC}"
     return 0
+}
+
+# 安全的配置文件更新函數
+# 使用臨時文件來避免 sed 可能的問題
+update_config_safe() {
+    local config_file="$1"
+    local param_name="$2"
+    local param_value="$3"
+    
+    # 創建臨時文件
+    local temp_file
+    temp_file=$(mktemp "${config_file}.XXXXXX")
+    if [ ! -f "$temp_file" ]; then
+        log_message_core "錯誤：無法創建臨時文件"
+        return 1
+    fi
+    
+    # 設置臨時文件權限與原文件相同（兼容 macOS）
+    if [ -f "$config_file" ]; then
+        # 在 macOS 上，--reference 選項不存在，使用替代方法
+        if [ "$(uname)" = "Darwin" ]; then
+            # 獲取原文件的權限
+            local original_perms
+            original_perms=$(stat -f "%A" "$config_file" 2>/dev/null)
+            if [ -n "$original_perms" ]; then
+                chmod "$original_perms" "$temp_file" 2>/dev/null || chmod 600 "$temp_file"
+            else
+                chmod 600 "$temp_file"
+            fi
+        else
+            # Linux 系統使用 --reference
+            chmod --reference="$config_file" "$temp_file" 2>/dev/null || chmod 600 "$temp_file"
+        fi
+    else
+        chmod 600 "$temp_file"
+    fi
+    
+    local param_found=false
+    
+    # 處理現有配置文件
+    if [ -f "$config_file" ]; then
+        while IFS= read -r line || [ -n "$line" ]; do
+            # 檢查是否是要更新的參數行
+            if echo "$line" | grep -q "^${param_name}="; then
+                echo "${param_name}=\"${param_value}\"" >> "$temp_file"
+                param_found=true
+                log_message_core "更新現有配置參數: ${param_name}"
+            else
+                echo "$line" >> "$temp_file"
+            fi
+        done < "$config_file"
+    fi
+    
+    # 如果參數不存在，添加到文件末尾
+    if [ "$param_found" = false ]; then
+        echo "${param_name}=\"${param_value}\"" >> "$temp_file"
+        log_message_core "添加新配置參數: ${param_name}"
+    fi
+    
+    # 驗證臨時文件是否有效
+    if [ ! -s "$temp_file" ]; then
+        log_message_core "錯誤：臨時文件為空"
+        rm -f "$temp_file"
+        return 1
+    fi
+    
+    # 原子性替換原文件
+    if mv "$temp_file" "$config_file"; then
+        log_message_core "配置文件更新成功"
+        return 0
+    else
+        log_message_core "錯誤：無法替換配置文件"
+        rm -f "$temp_file"
+        return 1
+    fi
 }
 
 # 安全輸入函數
@@ -1013,4 +1084,106 @@ read_secure_hidden_input() {
 press_any_key_to_continue() {
     echo -e "${YELLOW}按任意鍵繼續...${NC}"
     read -n 1 -s
+}
+
+# macOS 兼容性檢查函數
+check_macos_compatibility() {
+    if [ "$(uname)" = "Darwin" ]; then
+        echo -e "${BLUE}檢測到 macOS 系統，使用兼容性設置...${NC}"
+        log_message_core "檢測到 macOS 系統"
+        
+        # 檢查 GNU coreutils 是否可用（有些用戶可能通過 brew 安裝了它們）
+        if command -v gchmod >/dev/null 2>&1; then
+            echo -e "${GREEN}✓ 檢測到 GNU coreutils，使用增強功能${NC}"
+            export USE_GNU_TOOLS=true
+        else
+            echo -e "${YELLOW}使用 BSD 工具 (macOS 默認)${NC}"
+            export USE_GNU_TOOLS=false
+        fi
+        
+        # 檢查 sed 版本
+        if sed --version >/dev/null 2>&1; then
+            echo -e "${GREEN}✓ 檢測到 GNU sed${NC}"
+            export USE_GNU_SED=true
+        else
+            echo -e "${YELLOW}使用 BSD sed (macOS 默認)${NC}"
+            export USE_GNU_SED=false
+        fi
+    else
+        echo -e "${BLUE}檢測到 Linux 系統${NC}"
+        log_message_core "檢測到 Linux 系統"
+        export USE_GNU_TOOLS=true
+        export USE_GNU_SED=true
+    fi
+}
+
+# 跨平台安全的文件權限設置函數
+set_file_permissions_safe() {
+    local file_path="$1"
+    local permissions="$2"
+    
+    if [ -z "$file_path" ] || [ -z "$permissions" ]; then
+        log_message_core "錯誤：set_file_permissions_safe 缺少必要參數"
+        return 1
+    fi
+    
+    if [ ! -f "$file_path" ]; then
+        log_message_core "錯誤：文件不存在: $file_path"
+        return 1
+    fi
+    
+    # 根據系統類型和可用工具設置權限
+    if [ "$USE_GNU_TOOLS" = "true" ] && command -v gchmod >/dev/null 2>&1; then
+        gchmod "$permissions" "$file_path"
+    else
+        chmod "$permissions" "$file_path"
+    fi
+    
+    local chmod_result=$?
+    if [ $chmod_result -eq 0 ]; then
+        log_message_core "文件權限設置成功: $file_path ($permissions)"
+    else
+        log_message_core "錯誤：無法設置文件權限: $file_path"
+        return 1
+    fi
+    
+    return 0
+}
+
+# 跨平台安全的文件複製函數
+copy_file_safe() {
+    local source_file="$1"
+    local dest_file="$2"
+    local preserve_permissions="${3:-true}"
+    
+    if [ -z "$source_file" ] || [ -z "$dest_file" ]; then
+        log_message_core "錯誤：copy_file_safe 缺少必要參數"
+        return 1
+    fi
+    
+    if [ ! -f "$source_file" ]; then
+        log_message_core "錯誤：源文件不存在: $source_file"
+        return 1
+    fi
+    
+    # 執行複製
+    if [ "$preserve_permissions" = "true" ]; then
+        if [ "$USE_GNU_TOOLS" = "true" ] && command -v gcp >/dev/null 2>&1; then
+            gcp -p "$source_file" "$dest_file"
+        else
+            cp -p "$source_file" "$dest_file"
+        fi
+    else
+        cp "$source_file" "$dest_file"
+    fi
+    
+    local cp_result=$?
+    if [ $cp_result -eq 0 ]; then
+        log_message_core "文件複製成功: $source_file -> $dest_file"
+    else
+        log_message_core "錯誤：文件複製失敗: $source_file -> $dest_file"
+        return 1
+    fi
+    
+    return 0
 }
