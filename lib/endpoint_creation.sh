@@ -432,7 +432,9 @@ _associate_one_vpc_to_endpoint_lib() {
     fi
 
     local new_count=$((current_count + 1))
-    local temp_config_file_assoc_one="${main_config_file}.tmp_assoc_one.$$" # Add PID for temp file
+    local temp_config_file_assoc_one
+    temp_config_file_assoc_one=$(mktemp "${main_config_file}.tmp_assoc_one.XXXXXX")
+    trap "rm -f '$temp_config_file_assoc_one'" EXIT
     grep -v "MULTI_VPC_COUNT=" "$main_config_file" > "$temp_config_file_assoc_one"
     echo "MULTI_VPC_COUNT=$new_count" >> "$temp_config_file_assoc_one"
     mv "$temp_config_file_assoc_one" "$main_config_file"
@@ -626,7 +628,9 @@ disassociate_vpc_lib() {
         return 0
     fi
 
-    local temp_config_file_disassoc="${main_config_file}.tmp_disassoc.$$"
+    local temp_config_file_disassoc
+    temp_config_file_disassoc=$(mktemp "${main_config_file}.tmp_disassoc.XXXXXX")
+    trap "rm -f '$temp_config_file_disassoc'" EXIT
     # Copy lines that are NOT MULTI_VPC_COUNT and NOT MULTI_VPC_i
     grep -v "^MULTI_VPC_COUNT=" "$main_config_file" | grep -v "^MULTI_VPC_[0-9]\+=" > "$temp_config_file_disassoc"
 
@@ -1792,7 +1796,9 @@ terminate_vpn_endpoint_lib() {
     # 6. Update config file
     if [ -f "$arg_config_file_path" ]; then
         echo -e "\n${BLUE}正在清理配置文件 $arg_config_file_path...${NC}"
-        local temp_conf_terminate="${arg_config_file_path}.tmp_terminate.$$"
+        local temp_conf_terminate
+        temp_conf_terminate=$(mktemp "${arg_config_file_path}.tmp_terminate.XXXXXX")
+        trap "rm -f '$temp_conf_terminate'" EXIT
         
         # Keep lines that are NOT the ones we want to remove
         grep -E -v '^(ENDPOINT_ID|VPN_CIDR|VPN_NAME|SERVER_CERT_ARN|CLIENT_CERT_ARN|VPC_ID|VPC_CIDR|SUBNET_ID|MULTI_VPC_COUNT|MULTI_VPC_[0-9]+)=' "$arg_config_file_path" > "$temp_conf_terminate"
