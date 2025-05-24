@@ -84,19 +84,32 @@ create_vpn_endpoint() {
     
     local main_server_cert_arn # 更清楚的命名以避免與 CONFIG_FILE 中的變數衝突
     local main_client_cert_arn
-    # 使用更健壯的方式來解析來自 import_certificates_to_acm_lib 的輸出
-    # 假設 import_certificates_to_acm_lib 現在返回 JSON
+    
+    # 解析 JSON 回應中的證書 ARN
+    # import_certificates_to_acm_lib 現在返回 JSON 格式
     # 例如: {"server_cert_arn": "arn1", "client_cert_arn": "arn2"}
-    if ! main_server_cert_arn=$(echo "$acm_arns_result" | jq -r '.server_cert_arn'); then
-        handle_error "無法從 ACM 導入結果中解析伺服器證書 ARN。"
-        return 1
-    fi
-    if ! main_client_cert_arn=$(echo "$acm_arns_result" | jq -r '.client_cert_arn'); then
-        handle_error "無法從 ACM 導入結果中解析客戶端證書 ARN。"
-        return 1
+    if command -v jq >/dev/null 2>&1; then
+        # 如果系統有 jq，使用 jq 解析
+        if ! main_server_cert_arn=$(echo "$acm_arns_result" | jq -r '.server_cert_arn' 2>/dev/null); then
+            handle_error "無法從 ACM 導入結果中解析伺服器證書 ARN。"
+            return 1
+        fi
+        if ! main_client_cert_arn=$(echo "$acm_arns_result" | jq -r '.client_cert_arn' 2>/dev/null); then
+            handle_error "無法從 ACM 導入結果中解析客戶端證書 ARN。"
+            return 1
+        fi
+    else
+        # 備用解析方法：使用 sed 和 grep 從 JSON 中提取 ARN
+        main_server_cert_arn=$(echo "$acm_arns_result" | grep -o '"server_cert_arn":"[^"]*"' | sed 's/"server_cert_arn":"\([^"]*\)"/\1/')
+        main_client_cert_arn=$(echo "$acm_arns_result" | grep -o '"client_cert_arn":"[^"]*"' | sed 's/"client_cert_arn":"\([^"]*\)"/\1/')
+        
+        if [ -z "$main_server_cert_arn" ] || [ -z "$main_client_cert_arn" ]; then
+            handle_error "無法解析 ACM 導入結果。請安裝 jq 工具以獲得更好的 JSON 解析支援。"
+            return 1
+        fi
     fi
 
-    if [ -z "$main_server_cert_arn" ] || [ "$main_server_cert_arn" == "null" ] || \\
+    if [ -z "$main_server_cert_arn" ] || [ "$main_server_cert_arn" == "null" ] || \
        [ -z "$main_client_cert_arn" ] || [ "$main_client_cert_arn" == "null" ]; then
         handle_error "從 ACM 導入結果中獲取的證書 ARN 無效。"
         return 1
@@ -121,26 +134,42 @@ create_vpn_endpoint() {
     fi
 
     local vpc_id subnet_id vpn_cidr vpn_name
-    if ! vpc_id=$(echo "$vpn_details_json" | jq -r '.vpc_id'); then
-        handle_error "無法從詳細資訊中解析 VPC ID。"
-        return 1
-    fi
-    if ! subnet_id=$(echo "$vpn_details_json" | jq -r '.subnet_id'); then
-        handle_error "無法從詳細資訊中解析子網路 ID。"
-        return 1
-    fi
-    if ! vpn_cidr=$(echo "$vpn_details_json" | jq -r '.vpn_cidr'); then
-        handle_error "無法從詳細資訊中解析 VPN CIDR。"
-        return 1
-    fi
-    if ! vpn_name=$(echo "$vpn_details_json" | jq -r '.vpn_name'); then
-        handle_error "無法從詳細資訊中解析 VPN 名稱。"
-        return 1
+    
+    # 解析 VPC 詳細資訊 JSON
+    if command -v jq >/dev/null 2>&1; then
+        # 如果系統有 jq，使用 jq 解析
+        if ! vpc_id=$(echo "$vpn_details_json" | jq -r '.vpc_id' 2>/dev/null); then
+            handle_error "無法從詳細資訊中解析 VPC ID。"
+            return 1
+        fi
+        if ! subnet_id=$(echo "$vpn_details_json" | jq -r '.subnet_id' 2>/dev/null); then
+            handle_error "無法從詳細資訊中解析子網路 ID。"
+            return 1
+        fi
+        if ! vpn_cidr=$(echo "$vpn_details_json" | jq -r '.vpn_cidr' 2>/dev/null); then
+            handle_error "無法從詳細資訊中解析 VPN CIDR。"
+            return 1
+        fi
+        if ! vpn_name=$(echo "$vpn_details_json" | jq -r '.vpn_name' 2>/dev/null); then
+            handle_error "無法從詳細資訊中解析 VPN 名稱。"
+            return 1
+        fi
+    else
+        # 備用解析方法：使用 sed 和 grep 從 JSON 中提取值
+        vpc_id=$(echo "$vpn_details_json" | grep -o '"vpc_id":"[^"]*"' | sed 's/"vpc_id":"\([^"]*\)"/\1/')
+        subnet_id=$(echo "$vpn_details_json" | grep -o '"subnet_id":"[^"]*"' | sed 's/"subnet_id":"\([^"]*\)"/\1/')
+        vpn_cidr=$(echo "$vpn_details_json" | grep -o '"vpn_cidr":"[^"]*"' | sed 's/"vpn_cidr":"\([^"]*\)"/\1/')
+        vpn_name=$(echo "$vpn_details_json" | grep -o '"vpn_name":"[^"]*"' | sed 's/"vpn_name":"\([^"]*\)"/\1/')
+        
+        if [ -z "$vpc_id" ] || [ -z "$subnet_id" ] || [ -z "$vpn_cidr" ] || [ -z "$vpn_name" ]; then
+            handle_error "無法解析 VPC 詳細資訊。請安裝 jq 工具以獲得更好的 JSON 解析支援。"
+            return 1
+        fi
     fi
 
-    if [ -z "$vpc_id" ] || [ "$vpc_id" == "null" ] || \\
-       [ -z "$subnet_id" ] || [ "$subnet_id" == "null" ] || \\
-       [ -z "$vpn_cidr" ] || [ "$vpn_cidr" == "null" ] || \\
+    if [ -z "$vpc_id" ] || [ "$vpc_id" == "null" ] || \
+       [ -z "$subnet_id" ] || [ "$subnet_id" == "null" ] || \
+       [ -z "$vpn_cidr" ] || [ "$vpn_cidr" == "null" ] || \
        [ -z "$vpn_name" ] || [ "$vpn_name" == "null" ]; then
         handle_error "從 get_vpc_subnet_vpn_details_lib 獲取的詳細資訊無效。"
         return 1

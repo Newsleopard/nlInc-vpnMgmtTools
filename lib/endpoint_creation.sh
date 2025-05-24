@@ -5,6 +5,87 @@ source "$(dirname "${BASH_SOURCE[0]}")/core_functions.sh"
 # cert_management.sh 已經在主腳本中載入，這裡不需要重複載入
 # aws_setup.sh 同樣在主腳本中載入
 
+# 獲取 VPC、子網路和 VPN 詳細資訊 (庫函式版本)
+# 參數: $1 = AWS_REGION
+# 返回: JSON 格式 {"vpc_id": "vpc-xxx", "subnet_id": "subnet-xxx", "vpn_cidr": "172.16.0.0/22", "vpn_name": "Production-VPN"}
+get_vpc_subnet_vpn_details_lib() {
+    local aws_region="$1"
+
+    # 參數驗證
+    if ! validate_aws_region "$aws_region"; then
+        return 1
+    fi
+
+    log_message_core "開始獲取 VPC/子網路/VPN 詳細資訊 (lib) - Region: $aws_region"
+
+    # 提示使用者選擇 VPC
+    echo -e "\\n${BLUE}選擇網絡設定...${NC}"
+    
+    echo -e "${YELLOW}可用的 VPCs:${NC}"
+    aws ec2 describe-vpcs --region "$aws_region" | jq -r '.Vpcs[] | "VPC ID: \\(.VpcId), CIDR: \\(.CidrBlock), 名稱: \\(if .Tags then (.Tags[] | select(.Key=="Name") | .Value) else "無名稱" end)"'
+    
+    local vpc_id
+    while true; do
+        read -p "請輸入要連接的 VPC ID: " vpc_id
+        if aws ec2 describe-vpcs --vpc-ids "$vpc_id" --region "$aws_region" >/dev/null 2>&1; then
+            break
+        else
+            echo -e "${RED}VPC ID '$vpc_id' 無效或不存在於區域 '$aws_region'。請重試。${NC}"
+        fi
+    done
+    
+    # 顯示選定 VPC 中的子網路
+    echo -e "\\n${YELLOW}VPC $vpc_id 中的子網路:${NC}"
+    aws ec2 describe-subnets --filters "Name=vpc-id,Values=$vpc_id" --region "$aws_region" | \
+      jq -r '.Subnets[] | "子網路 ID: \\(.SubnetId), 可用區: \\(.AvailabilityZone), CIDR: \\(.CidrBlock)"'
+    
+    local subnet_id
+    while true; do
+        read -p "請輸入要關聯的子網路 ID: " subnet_id
+        if aws ec2 describe-subnets --subnet-ids "$subnet_id" --filters "Name=vpc-id,Values=$vpc_id" --region "$aws_region" >/dev/null 2>&1; then
+            break
+        else
+            echo -e "${RED}子網路 ID '$subnet_id' 無效、不存在於 VPC '$vpc_id' 或區域 '$aws_region'。請重試。${NC}"
+        fi
+    done
+    
+    # 獲取 VPN 設定
+    local default_vpn_cidr="172.16.0.0/22"
+    local vpn_cidr
+    read -p "請輸入 VPN CIDR (預設: $default_vpn_cidr): " vpn_cidr
+    vpn_cidr=${vpn_cidr:-$default_vpn_cidr}
+    
+    local vpn_name
+    read -p "請輸入 VPN 端點名稱 (預設: Production-VPN): " vpn_name
+    vpn_name=${vpn_name:-Production-VPN}
+
+    # 驗證輸入
+    if [ -z "$vpc_id" ] || [ -z "$subnet_id" ] || [ -z "$vpn_cidr" ] || [ -z "$vpn_name" ]; then
+        echo -e "${RED}錯誤: 獲取的詳細資訊不完整${NC}" >&2
+        log_message_core "錯誤: get_vpc_subnet_vpn_details_lib - 詳細資訊不完整"
+        return 1
+    fi
+
+    # 生成 JSON 回應
+    local result_json
+    if command -v jq >/dev/null 2>&1; then
+        result_json=$(jq -n \
+            --arg vpc_id "$vpc_id" \
+            --arg subnet_id "$subnet_id" \
+            --arg vpn_cidr "$vpn_cidr" \
+            --arg vpn_name "$vpn_name" \
+            '{vpc_id: $vpc_id, subnet_id: $subnet_id, vpn_cidr: $vpn_cidr, vpn_name: $vpn_name}')
+    else
+        # 備用方法：手動構建 JSON
+        result_json="{\"vpc_id\":\"$vpc_id\",\"subnet_id\":\"$subnet_id\",\"vpn_cidr\":\"$vpn_cidr\",\"vpn_name\":\"$vpn_name\"}"
+    fi
+
+    log_message_core "VPC/子網路詳細資訊獲取完成: VPC=$vpc_id, Subnet=$subnet_id, VPN_CIDR=$vpn_cidr, VPN_Name=$vpn_name"
+    
+    echo "$result_json"
+    return 0
+}
+
 # 輔助函式：提示網絡詳細資訊
 _prompt_network_details_ec() {
     local aws_region="$1"
@@ -140,25 +221,30 @@ _setup_authorization_and_routes_ec() {
 }
 
 # 主要的端點創建函式
-# 參數: main_script_dir, main_config_file, server_cert_arn, client_cert_arn
+# 參數: main_config_file, aws_region, vpc_id, subnet_id, vpn_cidr, server_cert_arn, client_cert_arn, vpn_name
 create_vpn_endpoint_lib() {
-    local main_script_dir="$1"
-    local main_config_file="$2"
-    local arg_server_cert_arn="$3"
-    local arg_client_cert_arn="$4"
+    local main_config_file="$1"
+    local aws_region="$2"
+    local vpc_id="$3"
+    local subnet_id="$4"
+    local vpn_cidr="$5"
+    local arg_server_cert_arn="$6"
+    local arg_client_cert_arn="$7"
+    local vpn_name="$8"
 
     echo -e "\\n${CYAN}=== 建立新的 VPN 端點 (來自 lib) ===${NC}"
 
-    # 載入配置 (確保 AWS_REGION 可用)
+    # 載入配置 (確保其他配置變數可用)
     if [ -f "$main_config_file" ]; then
-        source "$main_config_file" # 這會載入 AWS_REGION 等
+        source "$main_config_file" # 這會載入配置變數
     else
         echo -e "${RED}錯誤: 配置文件 \"$main_config_file\" 未找到。請先執行 AWS 配置。${NC}" # Quoted $main_config_file
         return 1
     fi
 
-    if [ -z "$AWS_REGION" ]; then
-        echo -e "${RED}錯誤: AWS_REGION 未在配置文件中設定。${NC}"
+    # 使用傳入的 AWS_REGION 參數
+    if [ -z "$aws_region" ]; then
+        echo -e "${RED}錯誤: AWS_REGION 未提供。${NC}"
         return 1
     fi
 
@@ -177,58 +263,49 @@ create_vpn_endpoint_lib() {
         return 1
     fi
 
-    # 3. 獲取網絡資訊
-    local network_details
-    network_details=$(_prompt_network_details_ec "$AWS_REGION")
-    # 解析 network_details
-    local vpc_id
-    vpc_id=$(echo "$network_details" | jq -r '.vpc_id') # Updated to parse JSON
-    local vpc_cidr
-    vpc_cidr=$(echo "$network_details" | jq -r '.vpc_cidr') # Updated to parse JSON
-    local subnet_id
-    subnet_id=$(echo "$network_details" | jq -r '.subnet_id') # Updated to parse JSON
-    local vpn_cidr
-    vpn_cidr=$(echo "$network_details" | jq -r '.vpn_cidr') # Updated to parse JSON
-    local vpn_name
-    vpn_name=$(echo "$network_details" | jq -r '.vpn_name') # Updated to parse JSON
+    # 驗證傳入的網絡參數
+    if [ -z "$vpc_id" ] || [ -z "$subnet_id" ] || [ -z "$vpn_cidr" ] || [ -z "$vpn_name" ]; then
+        echo -e "${RED}錯誤: 網絡參數 (vpc_id, subnet_id, vpn_cidr, vpn_name) 未完整提供。${NC}"
+        return 1
+    fi
 
-    # 4. 創建 Client VPN 端點
+    # 獲取 VPC CIDR 用於授權規則
+    local vpc_cidr
+    vpc_cidr=$(aws ec2 describe-vpcs --vpc-ids "$vpc_id" --region "$aws_region" --query 'Vpcs[0].CidrBlock' --output text)
+    if [ -z "$vpc_cidr" ] || [ "$vpc_cidr" == "None" ]; then
+        echo -e "${RED}錯誤: 無法獲取 VPC $vpc_id 的 CIDR。${NC}"
+        return 1
+    fi
+
+    # 創建 Client VPN 端點
     local endpoint_id
-    endpoint_id=$(_create_aws_client_vpn_endpoint_ec "$vpn_cidr" "$arg_server_cert_arn" "$arg_client_cert_arn" "$vpn_name" "$AWS_REGION")
+    endpoint_id=$(_create_aws_client_vpn_endpoint_ec "$vpn_cidr" "$arg_server_cert_arn" "$arg_client_cert_arn" "$vpn_name" "$aws_region")
     if [ $? -ne 0 ] || [ -z "$endpoint_id" ] || [ "$endpoint_id" == "null" ]; then
         echo -e "${RED}創建 VPN 端點失敗。中止。${NC}"
         return 1
     fi
     echo -e "${BLUE}端點 ID: $endpoint_id${NC}" # endpoint_id is a variable
 
-    # 5. 等待端點可用
+    # 等待端點可用
     echo -e "${BLUE}等待 VPN 端點可用...${NC}"
-    if ! aws ec2 wait client-vpn-endpoint-available --client-vpn-endpoint-id "$endpoint_id" --region "$AWS_REGION"; then
+    if ! aws ec2 wait client-vpn-endpoint-available --client-vpn-endpoint-id "$endpoint_id" --region "$aws_region"; then
         echo -e "${RED}等待 VPN 端點可用時發生錯誤或超時。${NC}"
         # 可以考慮是否需要刪除部分創建的資源
         return 1
     fi
 
-    # 6. 關聯子網路
-    _associate_target_network_ec "$endpoint_id" "$subnet_id" "$AWS_REGION"
+    # 關聯子網路
+    _associate_target_network_ec "$endpoint_id" "$subnet_id" "$aws_region"
 
-    # 7. 添加授權規則和路由
-    _setup_authorization_and_routes_ec "$endpoint_id" "$vpc_cidr" "$subnet_id" "$AWS_REGION"
+    # 添加授權規則和路由
+    _setup_authorization_and_routes_ec "$endpoint_id" "$vpc_cidr" "$subnet_id" "$aws_region"
 
-    # 8. 保存配置
+    # 保存配置
     echo -e "${BLUE}保存配置到 \"$main_config_file\"...${NC}" # Quoted $main_config_file
     # 注意：AWS_REGION 應該已經在 config file 中了，如果 setup_aws_config 被調用過
     # 如果是首次創建，確保 AWS_REGION 也被寫入
     echo "ENDPOINT_ID=$endpoint_id" > "$main_config_file" # 覆蓋舊配置
-    # AWS_REGION 應該由 setup_aws_config 寫入，這裡不再重複寫入，除非確認邏輯上需要
-    # 為了安全起見，如果主腳本的 setup_aws_config 確保了 AWS_REGION 在 $main_config_file 中，這裡可以省略
-    # 但如果 create_vpn_endpoint_lib 可能在 AWS_REGION 未寫入的情況下被調用，則需要保留
-    # 鑑於 setup_aws_config 會寫入 AWS_REGION=$aws_region 到 $main_config_file
-    # 且 create_vpn_endpoint_lib 開頭會 source $main_config_file，所以 AWS_REGION 應該已經存在。
-    # 如果 $main_config_file 是新創建的，setup_aws_config 會被調用並寫入 AWS_REGION。
-    # 因此，這裡的 `echo "AWS_REGION=$AWS_REGION" >> "$main_config_file"` 可能是多餘的，
-    # 除非 $AWS_REGION 變數在 source 之後可能被更改。為保持一致性，暫時保留，但可考慮移除。
-    echo "AWS_REGION=$AWS_REGION" >> "$main_config_file" # 確保 AWS_REGION 在配置中
+    echo "AWS_REGION=$aws_region" >> "$main_config_file" # 使用傳入的 aws_region 參數
     echo "VPN_CIDR=$vpn_cidr" >> "$main_config_file"
     echo "VPN_NAME=$vpn_name" >> "$main_config_file"
     echo "SERVER_CERT_ARN=$arg_server_cert_arn" >> "$main_config_file" # 使用傳入的 ARN
@@ -585,590 +662,6 @@ disassociate_vpc_lib() {
     fi
     
     log_message_core "VPC 關聯 \"$association_id_to_remove\" 已從端點 \"$arg_endpoint_id\" 解除並更新配置文件 (lib)。" # Quoted variables
-    echo -e "${GREEN}VPC 關聯解除操作完成。${NC}"
-    return 0
-}
-
-# 函式：管理 VPN 端點的路由 (跨 VPC)
-# 參數: main_config_file (not strictly needed if AWS_REGION and ENDPOINT_ID are passed), aws_region, endpoint_id
-manage_routes_lib() {
-    # local main_config_file="$1" # Not directly used, but kept for consistency if needed later
-    local arg_aws_region="$1" # Shifted parameters as main_config_file is not used
-    local arg_endpoint_id="$2"
-
-    echo -e "\\n${CYAN}=== 跨 VPC 路由管理 (來自 lib) ===${NC}"
-
-    if [ -z "$arg_aws_region" ] || [ -z "$arg_endpoint_id" ]; then
-        echo -e "${RED}錯誤: manage_routes_lib 需要 aws_region 和 endpoint_id。${NC}"
-        return 1
-    fi
-
-    echo -e "${BLUE}當前端點 ID: \"$arg_endpoint_id\"${NC}" # Quoted variable
-    echo -e "${BLUE}當前 AWS 區域: \"$arg_aws_region\"${NC}" # Quoted variable
-    echo -e ""
-    echo -e "路由管理選項："
-    echo -e "  ${GREEN}1.${NC} 列出所有路由 (顯示目標 VPC)"
-    echo -e "  ${GREEN}2.${NC} 為特定 VPC 添加路由"
-    echo -e "  ${GREEN}3.${NC} 刪除路由"
-    echo -e "  ${GREEN}4.${NC} 返回"
-
-    local route_choice_lib
-    read -p "請選擇操作 (1-4): " route_choice_lib
-
-    case $route_choice_lib in
-        1)
-            echo -e "\\n${BLUE}VPN 端點 \"$arg_endpoint_id\" 的路由表:${NC}" # Quoted variable
-            local routes_json_lib
-            routes_json_lib=$(aws ec2 describe-client-vpn-routes \
-              --client-vpn-endpoint-id "$arg_endpoint_id" \
-              --region "$arg_aws_region" 2>/dev/null)
-            
-            if [ $? -ne 0 ] || [ -z "$routes_json_lib" ] || [ "$(echo "$routes_json_lib" | jq '.Routes | length')" -eq 0 ]; then
-                echo -e "${YELLOW}此端點沒有配置路由。${NC}"
-            else
-                echo "$routes_json_lib" | jq -c '.Routes[]' | while IFS= read -r route; do
-                    local dest_cidr_lib target_subnet_lib status_lib origin_lib type_lib target_vpc_id_lib subnet_info_lib
-                    dest_cidr_lib=$(echo "$route" | jq -r '.DestinationCidr')
-                    target_subnet_lib=$(echo "$route" | jq -r '.TargetSubnet // .TargetVpcSubnetId') 
-                    status_lib=$(echo "$route" | jq -r '.Status.Code')
-                    origin_lib=$(echo "$route" | jq -r '.Origin')
-                    type_lib=$(echo "$route" | jq -r '.Type')
-
-                    target_vpc_id_lib="N/A"
-                    if [ "$target_subnet_lib" != "null" ] && [ ! -z "$target_subnet_lib" ]; then
-                        subnet_info_lib=$(aws ec2 describe-subnets --subnet-ids "$target_subnet_lib" --region "$arg_aws_region" 2>/dev/null)
-                        if [ $? -eq 0 ] && [ ! -z "$subnet_info_lib" ] && [ "$(echo "$subnet_info_lib" | jq '.Subnets | length')" -gt 0 ]; then
-                           target_vpc_id_lib=$(echo "$subnet_info_lib" | jq -r '.Subnets[0].VpcId')
-                        else
-                           target_vpc_id_lib="無法獲取 (子網路 $target_subnet_lib)" # target_subnet_lib is a variable
-                        fi
-                    fi
-                    
-                    echo -e "  目標 CIDR: ${YELLOW}$dest_cidr_lib${NC}" # dest_cidr_lib is a variable
-                    echo -e "    目標子網路: $target_subnet_lib" # target_subnet_lib is a variable
-                    echo -e "    目標 VPC ID: $target_vpc_id_lib" # target_vpc_id_lib is a variable
-                    echo -e "    狀態: $status_lib" # status_lib is a variable
-                    echo -e "    來源: $origin_lib" # origin_lib is a variable
-                    echo -e "    類型: $type_lib" # type_lib is a variable
-                    echo -e "    ------------------------------------"
-                done
-            fi
-            ;;
-        2)
-            echo -e "\\n${BLUE}為特定 VPC 添加路由...${NC}"
-            discover_available_vpcs_core "$arg_aws_region" # Uses core function
-            
-            local target_vpc_id_for_route_lib vpc_info_for_route_lib target_vpc_cidr_for_route_lib
-            read -p "請輸入目標 VPC ID (路由將指向此 VPC 中的一個已關聯子網路): " target_vpc_id_for_route_lib
-            
-            vpc_info_for_route_lib=$(aws ec2 describe-vpcs --vpc-ids "$target_vpc_id_for_route_lib" --region "$arg_aws_region" 2>/dev/null)
-            if [ $? -ne 0 ]; then
-                echo -e "${RED}無法找到 VPC: \"$target_vpc_id_for_route_lib\"${NC}" # Quoted variable
-            else
-                target_vpc_cidr_for_route_lib=$(echo "$vpc_info_for_route_lib" | jq -r '.Vpcs[0].CidrBlock')
-                echo -e "${BLUE}目標 VPC (\"$target_vpc_id_for_route_lib\") 的 CIDR: \"$target_vpc_cidr_for_route_lib\"${NC}" # Quoted variables
-
-                echo -e "\\n${YELLOW}VPC \"$target_vpc_id_for_route_lib\" 中已關聯到 VPN 端點 \"$arg_endpoint_id\" 的子網路:${NC}" # Quoted variables
-                
-                local associated_subnets_in_vpc_json_lib
-                associated_subnets_in_vpc_json_lib=$(aws ec2 describe-client-vpn-target-networks \
-                    --client-vpn-endpoint-id "$arg_endpoint_id" \
-                    --filters "Name=vpc-id,Values=$target_vpc_id_for_route_lib" \
-                    --region "$arg_aws_region" 2>/dev/null)
-
-                if [ $? -ne 0 ] || [ -z "$associated_subnets_in_vpc_json_lib" ] || [ "$(echo "$associated_subnets_in_vpc_json_lib" | jq '.ClientVpnTargetNetworks | length')" -eq 0 ]; then
-                    echo -e "${RED}VPC \"$target_vpc_id_for_route_lib\" 中沒有已關聯到此 VPN 端點的子網路。請先關聯子網路。${NC}" # Quoted variable
-                else
-                    echo "$associated_subnets_in_vpc_json_lib" | jq -r '.ClientVpnTargetNetworks[] | .TargetNetworkId' | while IFS= read -r assoc_subnet_id_lib; do
-                        local subnet_details_lib
-                        subnet_details_lib=$(aws ec2 describe-subnets --subnet-ids "$assoc_subnet_id_lib" --region "$arg_aws_region" | jq -r '.Subnets[0] | "  - 子網路 ID: \\(.SubnetId), CIDR: \\(.CidrBlock), 可用區: \\(.AvailabilityZone)"')
-                        echo "$subnet_details_lib"
-                    done
-                    
-                    local route_target_subnet_id_lib is_valid_subnet_lib route_dest_cidr_lib
-                    read -p "請輸入目標子網路 ID (用於此路由，必須是上面列出的子網路之一): " route_target_subnet_id_lib
-                    
-                    is_valid_subnet_lib=$(echo "$associated_subnets_in_vpc_json_lib" | jq -e --arg sn "$route_target_subnet_id_lib" '.ClientVpnTargetNetworks[] | select(.TargetNetworkId == $sn)')
-                    if [ -z "$is_valid_subnet_lib" ]; then
-                        echo -e "${RED}選擇的子網路 \"$route_target_subnet_id_lib\" 無效或未關聯到此 VPC/端點。${NC}" # Quoted variable
-                    else
-                        read -p "請輸入目標 CIDR (預設為 VPC CIDR \"$target_vpc_cidr_for_route_lib\", 或輸入 0.0.0.0/0 以路由所有流量): " route_dest_cidr_lib
-                        route_dest_cidr_lib=${route_dest_cidr_lib:-$target_vpc_cidr_for_route_lib}
-
-                        echo -e "${BLUE}正在添加路由: \"$route_dest_cidr_lib\" -> \"$route_target_subnet_id_lib\"...${NC}" # Quoted variables
-                        if aws ec2 create-client-vpn-route \
-                          --client-vpn-endpoint-id "$arg_endpoint_id" \
-                          --destination-cidr-block "$route_dest_cidr_lib" \
-                          --target-vpc-subnet-id "$route_target_subnet_id_lib" \
-                          --description "Route to $target_vpc_id_for_route_lib via $route_target_subnet_id_lib" \
-                          --region "$arg_aws_region"; then
-                            echo -e "${GREEN}路由已添加。${NC}"
-                            log_message_core "路由已添加 (lib): \"$route_dest_cidr_lib\" -> \"$route_target_subnet_id_lib\" for endpoint \"$arg_endpoint_id\"" # Quoted variables
-                        else
-                            echo -e "${RED}添加路由失敗。${NC}"
-                            log_message_core "錯誤: 添加路由失敗 (lib): \"$route_dest_cidr_lib\" -> \"$route_target_subnet_id_lib\" for endpoint \"$arg_endpoint_id\"" # Quoted variables
-                        fi
-                    fi
-                fi
-            fi
-            ;;
-        3)
-            echo -e "\\n${BLUE}刪除路由...${NC}"
-            local routes_json_del_lib
-            routes_json_del_lib=$(aws ec2 describe-client-vpn-routes \
-              --client-vpn-endpoint-id "$arg_endpoint_id" \
-              --region "$arg_aws_region" 2>/dev/null)
-            
-            if [ $? -ne 0 ] || [ -z "$routes_json_del_lib" ] || [ "$(echo "$routes_json_del_lib" | jq '.Routes | length')" -eq 0 ]; then
-                echo -e "${YELLOW}此端點沒有配置路由可供刪除。${NC}"
-            else
-                echo -e "${YELLOW}現有路由:${NC}"
-                echo "$routes_json_del_lib" | jq -r '.Routes[] | "  目標 CIDR: \\(.DestinationCidr), 目標子網路: \\(.TargetSubnet // .TargetVpcSubnetId), 狀態: \\(.Status.Code), 來源: \\(.Origin)"'
-                
-                local del_dest_cidr_lib del_target_subnet_id_lib
-                read -p "請輸入要刪除路由的目標 CIDR: " del_dest_cidr_lib
-                read -p "請輸入要刪除路由的目標子網路 ID: " del_target_subnet_id_lib
-
-                if [ -z "$del_dest_cidr_lib" ]; then
-                    echo -e "${RED}目標 CIDR 不能为空。${NC}"
-                elif [ -z "$del_target_subnet_id_lib" ]; then
-                    echo -e "${RED}刪除 Client VPN 路由需要目標子網路 ID。${NC}"
-                else
-                    echo -e "${BLUE}正在刪除路由: \"$del_dest_cidr_lib\" (目標子網路: \"$del_target_subnet_id_lib\")...${NC}" # Quoted variables
-                    local route_to_delete_info_lib origin_of_route_to_delete_lib
-                    route_to_delete_info_lib=$(echo "$routes_json_del_lib" | jq -r --arg dc "$del_dest_cidr_lib" --arg ts "$del_target_subnet_id_lib" '.Routes[] | select(.DestinationCidr == $dc and (.TargetSubnet // .TargetVpcSubnetId) == $ts)')
-                    
-                    if [ -z "$route_to_delete_info_lib" ]; then
-                        echo -e "${RED}找不到匹配的路由: CIDR \"$del_dest_cidr_lib\", 子網路 \"$del_target_subnet_id_lib\" ${NC}" # Quoted variables
-                    else
-                        origin_of_route_to_delete_lib=$(echo "$route_to_delete_info_lib" | jq -r '.Origin')
-                        # Routes with origin 'associate' (from subnet association) or 'add-route' (manually added) can be deleted.
-                        # 'local' routes (VPN client CIDR) cannot be deleted.
-                        if [ "$origin_of_route_to_delete_lib" == "associate" ] || [ "$origin_of_route_to_delete_lib" == "add-route" ]; then
-                             if aws ec2 delete-client-vpn-route \
-                                --client-vpn-endpoint-id "$arg_endpoint_id" \
-                                --destination-cidr-block "$del_dest_cidr_lib" \
-                                --target-vpc-subnet-id "$del_target_subnet_id_lib" \
-                                --region "$arg_aws_region"; then
-                                echo -e "${GREEN}路由已刪除。${NC}"
-                                log_message_core "路由已刪除 (lib): \"$del_dest_cidr_lib\" (目標子網路: \"$del_target_subnet_id_lib\") from endpoint \"$arg_endpoint_id\"" # Quoted variables
-                             else
-                                echo -e "${RED}刪除路由失敗。${NC}"
-                                log_message_core "錯誤: 刪除路由失敗 (lib): \"$del_dest_cidr_lib\" (目標子網路: \"$del_target_subnet_id_lib\") from endpoint \"$arg_endpoint_id\"" # Quoted variables
-                             fi
-                        else
-                             echo -e "${RED}無法刪除此路由。來源為 '$origin_of_route_to_delete_lib'。通常只有手動添加的路由 ('add-route') 或因子網路關聯而創建的路由 ('associate') 可以刪除。${NC}" # origin_of_route_to_delete_lib is a variable
-                             echo -e "${YELLOW}提示: 'local' 路由 (VPN Client CIDR) 不能被刪除。${NC}"
-                        fi
-                    fi
-                fi
-            fi
-            ;;
-        4)
-            return 0 # Success, returning to caller
-            ;;
-        *)
-            echo -e "${RED}無效選擇${NC}"
-            ;;
-    esac
-    
-    # For options 1, 2, 3, after execution, they will fall through here.
-    # The main script's manage_cross_vpc_routes will handle the "press any key"
-    return 0 # Indicate successful execution of a menu item or return from menu
-}
-
-# 函式：顯示多 VPC 網路拓撲
-# 參數: main_config_file, aws_region, endpoint_id, vpn_cidr (from config), 
-#       primary_vpc_id (from config), primary_vpc_cidr (from config), primary_subnet_id (from config)
-show_multi_vpc_topology_lib() {
-    local main_config_file="$1"
-    local arg_aws_region="$2"
-    local arg_endpoint_id="$3"
-    local arg_vpn_cidr="$4"
-    local arg_primary_vpc_id="$5"
-    local arg_primary_vpc_cidr="$6"
-    local arg_primary_subnet_id="$7"
-
-    echo -e "\\n${CYAN}=== 多 VPC 網路拓撲 (來自 lib) ===${NC}"
-
-    if [ -z "$main_config_file" ] || [ -z "$arg_aws_region" ] || [ -z "$arg_endpoint_id" ] || \
-       [ -z "$arg_vpn_cidr" ] || [ -z "$arg_primary_vpc_id" ] || [ -z "$arg_primary_vpc_cidr" ] || \
-       [ -z "$arg_primary_subnet_id" ]; then
-        echo -e "${RED}錯誤: show_multi_vpc_topology_lib 需要所有配置參數。${NC}"
-        return 1
-    fi
-    if [ ! -f "$main_config_file" ]; then
-        echo -e "${RED}錯誤: 配置文件 \"$main_config_file\" 未找到。${NC}" # Quoted variable
-        return 1
-    fi
-
-    echo -e "${BLUE}VPN 端點: \"$arg_endpoint_id\"${NC}" # Quoted variable
-    echo -e "${BLUE}VPN CIDR: \"$arg_vpn_cidr\"${NC}" # Quoted variable
-    echo -e ""
-    
-    # 顯示主要 VPC
-    echo -e "${YELLOW}主要 VPC:${NC}"
-    echo -e "  VPC ID: \"$arg_primary_vpc_id\"" # Quoted variable
-    echo -e "  CIDR: \"$arg_primary_vpc_cidr\"" # Quoted variable
-    echo -e "  子網路: \"$arg_primary_subnet_id\"" # Quoted variable
-    echo -e ""
-    
-    # 顯示額外的 VPCs
-    local multi_vpc_count_line
-    multi_vpc_count_line=$(grep "MULTI_VPC_COUNT=" "$main_config_file")
-    local multi_vpc_count=0
-    if [ -n "$multi_vpc_count_line" ]; then
-        multi_vpc_count=$(echo "$multi_vpc_count_line" | cut -d'=' -f2)
-        if ! [[ "$multi_vpc_count" =~ ^[0-9]+$ ]]; then
-            log_message_core "警告: 配置文件中的 MULTI_VPC_COUNT 無效 ('$multi_vpc_count')。視為 0." # multi_vpc_count is a variable
-            multi_vpc_count=0
-        fi
-    fi
-        
-    if [ "$multi_vpc_count" -gt 0 ]; then
-        echo -e "${YELLOW}額外的 VPCs ($multi_vpc_count):${NC}" # multi_vpc_count is a number
-        
-        for ((i=1; i<=$multi_vpc_count; i++)); do
-            local vpc_info_line vpc_info vpc_id vpc_cidr subnet_id association_id
-            vpc_info_line=$(grep "MULTI_VPC_$i=" "$main_config_file")
-            if [ -n "$vpc_info_line" ]; then
-                vpc_info=$(echo "$vpc_info_line" | cut -d'"' -f2)
-                if [ -n "$vpc_info" ]; then
-                    vpc_id=$(echo "$vpc_info" | cut -d':' -f1)
-                    vpc_cidr=$(echo "$vpc_info" | cut -d':' -f2)
-                    subnet_id=$(echo "$vpc_info" | cut -d':' -f3)
-                    association_id=$(echo "$vpc_info" | cut -d':' -f4)
-                    
-                    echo -e "  VPC $i:" # i is a number
-                    echo -e "    VPC ID: \"$vpc_id\"" # Quoted variable
-                    echo -e "    CIDR: \"$vpc_cidr\"" # Quoted variable
-                    echo -e "    子網路: \"$subnet_id\"" # Quoted variable
-                    echo -e "    關聯 ID: \"$association_id\"" # Quoted variable
-                    echo -e ""
-                fi
-            fi
-        done
-    else
-        echo -e "${YELLOW}目前僅關聯主要 VPC${NC}"
-    fi
-    
-    # 顯示當前連接統計
-    echo -e "${BLUE}關聯網路統計:${NC}"
-    local network_count_lib
-    network_count_lib=$(aws ec2 describe-client-vpn-target-networks \
-      --client-vpn-endpoint-id "$arg_endpoint_id" \
-      --region "$arg_aws_region" | jq '.ClientVpnTargetNetworks | length')
-    if [ $? -eq 0 ]; then
-        echo -e "  總關聯網路數: $network_count_lib" # network_count_lib is a number
-    else
-        echo -e "  ${RED}無法獲取關聯網路統計。${NC}"
-    fi
-    
-    # 顯示授權規則
-    echo -e "\\n${BLUE}授權規則:${NC}"
-    if ! aws ec2 describe-client-vpn-authorization-rules \
-      --client-vpn-endpoint-id "$arg_endpoint_id" \
-      --region "$arg_aws_region" | jq -r '.AuthorizationRules[] | "  CIDR: \\(.DestinationCidr), 狀態: \\(.Status.Code)"'; then
-        echo -e "  ${RED}無法獲取授權規則。${NC}"
-    fi
-    
-    log_message_core "已顯示端點 \"$arg_endpoint_id\" 的多 VPC 拓撲 (lib)" # Quoted variable
-    return 0
-}
-
-# 函式：批量管理 VPC 授權規則
-# 參數: aws_region, endpoint_id
-manage_batch_vpc_auth_lib() {
-    local arg_aws_region="$1"
-    local arg_endpoint_id="$2"
-
-    echo -e "\\n${CYAN}=== 批量管理 VPC 授權規則 (來自 lib) ===${NC}"
-
-    if [ -z "$arg_aws_region" ] || [ -z "$arg_endpoint_id" ]; then
-        echo -e "${RED}錯誤: manage_batch_vpc_auth_lib 需要 aws_region 和 endpoint_id。${NC}"
-        return 1
-    fi
-
-    echo -e "${BLUE}當前端點 ID: \"$arg_endpoint_id\"${NC}" # Quoted variable
-    echo -e "${BLUE}當前 AWS 區域: \"$arg_aws_region\"${NC}" # Quoted variable
-    echo -e ""
-    echo -e "批量操作選項："
-    echo -e "  ${GREEN}1.${NC} 為所有關聯 VPC 添加相同授權規則 (通常指授權訪問目標網路 CIDR)"
-    echo -e "  ${GREEN}2.${NC} 移除特定 CIDR 的所有授權規則"
-    echo -e "  ${GREEN}3.${NC} 查看所有授權規則總覽"
-    echo -e "  ${GREEN}4.${NC} 返回"
-    
-    local choice_lib
-    read -p "請選擇操作 (1-4): " choice_lib
-    
-    case $choice_lib in
-        1)
-            local auth_cidr_lib
-            read -p "請輸入要添加的授權規則的目標網路 CIDR (例如，一個 VPC 的 CIDR 或 0.0.0.0/0): " auth_cidr_lib
-            if [ -z "$auth_cidr_lib" ]; then
-                echo -e "${RED}目標網路 CIDR 不可為空。${NC}"
-                return 1 # Indicate failure or loop back
-            fi
-            
-            # Client VPN 授權規則是針對整個端點的，而不是針對特定關聯的 VPC。
-            # "為所有關聯 VPC 添加相同授權規則" 通常意味著授權客戶端訪問某個目標網路。
-            # 如果目標是授權訪問 *每個* 關聯 VPC 的 CIDR，則需要遍歷每個 VPC 並單獨添加。
-            # 目前 AWS CLI `authorize-client-vpn-ingress` 的 `--target-network-cidr` 是指目標網路，
-            # `--authorize-all-groups` 允許所有客戶端組訪問該目標。
-            # 這裡我們假設用戶想要為端點添加一個通用的授權規則。
-
-            echo -e "${BLUE}正在為端點 \"$arg_endpoint_id\" 添加授權規則以訪問目標網路 \"$auth_cidr_lib\"...${NC}" # Quoted variables
-            read -p "確認添加? (y/n): " confirm_lib
-            if [[ "$confirm_lib" == "y" ]]; then
-                if aws ec2 authorize-client-vpn-ingress \
-                  --client-vpn-endpoint-id "$arg_endpoint_id" \
-                  --target-network-cidr "$auth_cidr_lib" \
-                  --authorize-all-groups \
-                  --description "Batch auth rule added via script lib" \
-                  --region "$arg_aws_region"; then
-                    echo -e "${GREEN}授權規則已添加: \"$auth_cidr_lib\" ${NC}" # Quoted variable
-                    log_message_core "授權規則已添加 (lib): \"$auth_cidr_lib\" for endpoint \"$arg_endpoint_id\"" # Quoted variables
-                else
-                    echo -e "${RED}添加授權規則 \"$auth_cidr_lib\" 失敗。${NC}" # Quoted variable
-                    log_message_core "錯誤: 添加授權規則失敗 (lib): \"$auth_cidr_lib\" for endpoint \"$arg_endpoint_id\"" # Quoted variables
-                fi
-            else
-                echo -e "${BLUE}操作已取消。${NC}"
-            fi
-            ;;
-        2)
-            echo -e "\\n${BLUE}現有的授權規則 (端點: \"$arg_endpoint_id\"):${NC}" # Quoted variable
-            local auth_rules_json_lib
-            auth_rules_json_lib=$(aws ec2 describe-client-vpn-authorization-rules \
-              --client-vpn-endpoint-id "$arg_endpoint_id" \
-              --region "$arg_aws_region" 2>/dev/null)
-
-            if [ $? -ne 0 ] || [ -z "$auth_rules_json_lib" ] || [ "$(echo "$auth_rules_json_lib" | jq '.AuthorizationRules | length')" -eq 0 ]; then
-                echo -e "${YELLOW}端點 \"$arg_endpoint_id\" 沒有配置授權規則。${NC}" # Quoted variable
-            else
-                echo "$auth_rules_json_lib" | jq -r '.AuthorizationRules[] | "  目標 CIDR: \\(.DestinationCidr), 狀態: \\(.Status.Code), 描述: \\(.Description // "N/A")"'
-                
-                local revoke_cidr_lib
-                read -p "請輸入要移除授權規則的目標網路 CIDR: " revoke_cidr_lib
-                if [ -z "$revoke_cidr_lib" ]; then
-                    echo -e "${RED}目標網路 CIDR 不可為空。${NC}"
-                    return 1 # Indicate failure or loop back
-                fi
-
-                # 驗證該規則是否存在
-                local rule_exists_lib
-                rule_exists_lib=$(echo "$auth_rules_json_lib" | jq -e --arg rc "$revoke_cidr_lib" '.AuthorizationRules[] | select(.DestinationCidr == $rc)')
-                if [ -z "$rule_exists_lib" ]; then
-                    echo -e "${RED}找不到目標 CIDR 為 '$revoke_cidr_lib' 的授權規則。${NC}" # revoke_cidr_lib is a variable
-                else
-                    echo -e "${YELLOW}警告: 您即將移除目標 CIDR 為 '$revoke_cidr_lib' 的授權規則。${NC}" # revoke_cidr_lib is a variable
-                    read -p "確認移除? (y/n): " confirm_revoke_lib
-                    if [[ "$confirm_revoke_lib" == "y" ]]; then
-                        if aws ec2 revoke-client-vpn-ingress \
-                          --client-vpn-endpoint-id "$arg_endpoint_id" \
-                          --target-network-cidr "$revoke_cidr_lib" \
-                          --revoke-all-groups \
-                          --region "$arg_aws_region"; then
-                            echo -e "${GREEN}授權規則 \"$revoke_cidr_lib\" 已移除。${NC}" # Quoted variable
-                            log_message_core "授權規則已移除 (lib): \"$revoke_cidr_lib\" from endpoint \"$arg_endpoint_id\"" # Quoted variables
-                        else
-                            echo -e "${RED}移除授權規則 \"$revoke_cidr_lib\" 失敗。${NC}" # Quoted variable
-                            log_message_core "錯誤: 移除授權規則失敗 (lib): \"$revoke_cidr_lib\" from endpoint \"$arg_endpoint_id\"" # Quoted variables
-                        fi
-                    else
-                        echo -e "${BLUE}操作已取消。${NC}"
-                    fi
-                fi
-            fi
-            ;;
-        3)
-            echo -e "\\n${BLUE}所有授權規則總覽 (端點: \"$arg_endpoint_id\"):${NC}" # Quoted variable
-            local auth_rules_overview_lib
-            auth_rules_overview_lib=$(aws ec2 describe-client-vpn-authorization-rules \
-              --client-vpn-endpoint-id "$arg_endpoint_id" \
-              --region "$arg_aws_region" 2>/dev/null)
-
-            if [ $? -ne 0 ] || [ -z "$auth_rules_overview_lib" ] || [ "$(echo "$auth_rules_overview_lib" | jq '.AuthorizationRules | length')" -eq 0 ]; then
-                echo -e "${YELLOW}端點 \"$arg_endpoint_id\" 沒有配置授權規則。${NC}" # Quoted variable
-            else
-                echo "$auth_rules_overview_lib" | jq -r '.AuthorizationRules[] | 
-                "  目標 CIDR: \\(.DestinationCidr)
-    狀態: \\(.Status.Code)
-    描述: \\(.Description // "無描述")
-    群組 ID: \\(.GroupId // "所有群組")
-    ----------------------------------------"'
-            fi
-            ;;
-        4)
-            return 0 # Success, returning to caller
-            ;;
-        *)
-            echo -e "${RED}無效選擇${NC}"
-            ;;
-    esac
-    return 0 # Indicate successful execution of a menu item
-}
-
-# 函式：添加授權規則到 VPN 端點
-# 參數: aws_region, endpoint_id
-add_authorization_rule_lib() {
-    local arg_aws_region="$1"
-    local arg_endpoint_id="$2"
-
-    echo -e "\n${CYAN}=== 添加授權規則 (來自 lib) ===${NC}"
-
-    if [ -z "$arg_aws_region" ] || [ -z "$arg_endpoint_id" ]; then
-        echo -e "${RED}錯誤: add_authorization_rule_lib 需要 aws_region 和 endpoint_id。${NC}"
-        return 1
-    fi
-
-    echo -e "${BLUE}當前端點 ID: $arg_endpoint_id${NC}"
-    echo -e "${BLUE}當前 AWS 區域: $arg_aws_region${NC}"
-    
-    local auth_cidr_lib
-    read -p "請輸入要授權的目標網路 CIDR 範圍 (例如 10.0.0.0/16 或 0.0.0.0/0): " auth_cidr_lib
-    if [ -z "$auth_cidr_lib" ]; then
-        echo -e "${RED}目標網路 CIDR 不可為空。${NC}"
-        return 1
-    fi
-
-    local auth_desc_lib
-    read -p "請輸入此授權規則的描述 (可選): " auth_desc_lib
-
-    echo -e "${BLUE}正在為端點 $arg_endpoint_id 添加授權規則以訪問目標網路 $auth_cidr_lib...${NC}"
-    if aws ec2 authorize-client-vpn-ingress \
-      --client-vpn-endpoint-id "$arg_endpoint_id" \
-      --target-network-cidr "$auth_cidr_lib" \
-      --authorize-all-groups \
-      ${auth_desc_lib:+"--description"} ${auth_desc_lib:+"$auth_desc_lib"} \
-      --region "$arg_aws_region"; then
-        echo -e "${GREEN}授權規則已成功添加: $auth_cidr_lib ${NC}"
-        log_message_core "授權規則已添加 (lib): $auth_cidr_lib for endpoint $arg_endpoint_id"
-        return 0
-    else
-        echo -e "${RED}添加授權規則 $auth_cidr_lib 失敗。${NC}"
-        log_message_core "錯誤: 添加授權規則失敗 (lib): $auth_cidr_lib for endpoint $arg_endpoint_id"
-        return 1
-    fi
-}
-
-# 函式：移除 VPN 端點的授權規則
-# 參數: aws_region, endpoint_id
-remove_authorization_rule_lib() {
-    local arg_aws_region="$1"
-    local arg_endpoint_id="$2"
-
-    echo -e "\n${CYAN}=== 移除授權規則 (來自 lib) ===${NC}"
-
-    if [ -z "$arg_aws_region" ] || [ -z "$arg_endpoint_id" ]; then
-        echo -e "${RED}錯誤: remove_authorization_rule_lib 需要 aws_region 和 endpoint_id。${NC}"
-        return 1
-    fi
-
-    echo -e "${BLUE}當前端點 ID: $arg_endpoint_id${NC}"
-    echo -e "${BLUE}當前 AWS 區域: $arg_aws_region${NC}"
-
-    echo -e "\n${BLUE}現有的授權規則:${NC}"
-    local auth_rules_json_lib
-    auth_rules_json_lib=$(aws ec2 describe-client-vpn-authorization-rules \
-        --client-vpn-endpoint-id "$arg_endpoint_id" \
-        --region "$arg_aws_region" 2>/dev/null)
-
-    if [ $? -ne 0 ] || [ -z "$auth_rules_json_lib" ] || [ "$(echo "$auth_rules_json_lib" | jq '.AuthorizationRules | length')" -eq 0 ]; then
-        echo -e "${YELLOW}端點 $arg_endpoint_id 沒有配置授權規則。${NC}"
-        return 0 # Not an error, just nothing to do.
-    fi
-
-    echo "$auth_rules_json_lib" | jq -r '.AuthorizationRules[] | "  目標 CIDR: \\(.DestinationCidr), 狀態: \\(.Status.Code), 描述: \\(.Description // "N/A")"'
-    
-    local revoke_cidr_lib
-    read -p "請輸入要移除授權規則的目標網路 CIDR: " revoke_cidr_lib
-    if [ -z "$revoke_cidr_lib" ]; then
-        echo -e "${RED}目標網路 CIDR 不可為空。${NC}"
-        return 1
-    fi
-
-    # 驗證該規則是否存在
-    local rule_exists_lib
-    rule_exists_lib=$(echo "$auth_rules_json_lib" | jq -e --arg rc "$revoke_cidr_lib" '.AuthorizationRules[] | select(.DestinationCidr == $rc)')
-    if [ -z "$rule_exists_lib" ]; then
-        echo -e "${RED}找不到目標 CIDR 為 '$revoke_cidr_lib' 的授權規則。${NC}" # revoke_cidr_lib is a variable
-    else
-        echo -e "${YELLOW}警告: 您即將移除目標 CIDR 為 '$revoke_cidr_lib' 的授權規則。${NC}" # revoke_cidr_lib is a variable
-        read -p "確認移除? (y/n): " confirm_revoke_lib
-        if [[ "$confirm_revoke_lib" == "y" ]]; then
-            if aws ec2 revoke-client-vpn-ingress \
-              --client-vpn-endpoint-id "$arg_endpoint_id" \
-              --target-network-cidr "$revoke_cidr_lib" \
-              --revoke-all-groups \
-              --region "$arg_aws_region"; then
-                echo -e "${GREEN}授權規則 $revoke_cidr_lib 已移除。${NC}" # Quoted variable
-                log_message_core "授權規則已移除 (lib): $revoke_cidr_lib from endpoint $arg_endpoint_id" # Quoted variables
-            else
-                echo -e "${RED}移除授權規則 $revoke_cidr_lib 失敗。${NC}" # Quoted variable
-                log_message_core "錯誤: 移除授權規則失敗 (lib): $revoke_cidr_lib from endpoint $arg_endpoint_id" # Quoted variables
-            fi
-        else
-            echo -e "${BLUE}操作已取消。${NC}"
-        fi
-    fi
-    
-    echo -e "${BLUE}正在更新配置文件 \"$main_config_file\"...${NC}" # Quoted variable
-    local current_multi_vpc_count_line
-    current_multi_vpc_count_line=$(grep "MULTI_VPC_COUNT=" "$main_config_file")
-    local current_multi_vpc_count
-    if [ -z "$current_multi_vpc_count_line" ]; then
-        current_multi_vpc_count=0
-    else
-        current_multi_vpc_count=$(echo "$current_multi_vpc_count_line" | cut -d'=' -f2)
-        if ! [[ "$current_multi_vpc_count" =~ ^[0-9]+$ ]]; then
-             log_message_core "警告: 配置文件中的 MULTI_VPC_COUNT 無效 ('$current_multi_vpc_count')。視為 0." # current_multi_vpc_count is a variable
-             current_multi_vpc_count=0
-        fi
-    fi
-
-    if [ "$current_multi_vpc_count" -eq 0 ]; then
-        echo -e "${YELLOW}配置文件中沒有 MULTI_VPC 條目，無需更新。${NC}"
-        log_message_core "VPC 關聯 \"$association_id_to_revoke\" 已從端點 \"$arg_endpoint_id\" 解除 (lib)。配置文件無需更新。" # Quoted variables
-        return 0
-    fi
-
-    local temp_config_file_disassoc="${main_config_file}.tmp_disassoc.$$"
-    # Copy lines that are NOT MULTI_VPC_COUNT and NOT MULTI_VPC_i
-    grep -v "^MULTI_VPC_COUNT=" "$main_config_file" | grep -v "^MULTI_VPC_[0-9]\+=" > "$temp_config_file_disassoc"
-
-    local new_vpc_idx=0
-    local found_and_removed_from_config=false
-
-    for (( i=1; i<=$current_multi_vpc_count; i++ )); do
-        local vpc_entry_line
-        vpc_entry_line=$(grep "^MULTI_VPC_${i}=" "$main_config_file")
-        if [ -n "$vpc_entry_line" ]; then
-            local vpc_entry_value
-            vpc_entry_value=$(echo "$vpc_entry_line" | cut -d'"' -f2)
-            local entry_association_id
-            entry_association_id=$(echo "$vpc_entry_value" | cut -d':' -f4)
-
-            if [ "$entry_association_id" == "$association_id_to_revoke" ]; then
-                found_and_removed_from_config=true
-                log_message_core "從配置文件中移除與關聯 ID \"$association_id_to_revoke\" 匹配的條目: $vpc_entry_line" # Quoted variable, vpc_entry_line is a variable
-            else
-                new_vpc_idx=$((new_vpc_idx + 1))
-                echo "MULTI_VPC_${new_vpc_idx}=\"$vpc_entry_value\"" >> "$temp_config_file_disassoc"
-            fi
-        fi
-    done
-
-    echo "MULTI_VPC_COUNT=$new_vpc_idx" >> "$temp_config_file_disassoc"
-    mv "$temp_config_file_disassoc" "$main_config_file"
-
-    if $found_and_removed_from_config; then
-        echo -e "${GREEN}配置文件已更新。新的 MULTI_VPC_COUNT 為 $new_vpc_idx。${NC}" # new_vpc_idx is a number
-    else
-        echo -e "${YELLOW}未在配置文件中找到與關聯 ID \"$association_id_to_revoke\" 匹配的條目。配置文件可能已手動更改或條目不存在。${NC}" # Quoted variable
-    fi
-    
-    log_message_core "VPC 關聯 \"$association_id_to_revoke\" 已從端點 \"$arg_endpoint_id\" 解除並更新配置文件 (lib)。" # Quoted variables
     echo -e "${GREEN}VPC 關聯解除操作完成。${NC}"
     return 0
 }

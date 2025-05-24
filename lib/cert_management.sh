@@ -397,3 +397,225 @@ import_crl_to_vpn_endpoint_lib() {
 
     return 0
 }
+
+# 匯入多個憑證到 ACM 並返回 JSON 格式的 ARN (庫函式版本)
+# 參數: $1 = SCRIPT_DIR, $2 = AWS_REGION
+# 返回: JSON 格式 {"server_cert_arn": "arn1", "client_cert_arn": "arn2"}
+import_certificates_to_acm_lib() {
+    local script_dir="$1"
+    local aws_region="$2"
+    local easyrsa_dir="$script_dir/certificates"
+
+    # 參數驗證
+    if [ -z "$script_dir" ] || [ ! -d "$script_dir" ]; then
+        echo -e "${RED}錯誤: 腳本目錄參數無效${NC}" >&2
+        log_message_core "錯誤: import_certificates_to_acm_lib - 腳本目錄無效: $script_dir"
+        return 1
+    fi
+    if ! validate_aws_region "$aws_region"; then
+        return 1
+    fi
+    if [ ! -d "$easyrsa_dir/pki" ]; then
+        echo -e "${RED}錯誤: EasyRSA PKI 目錄不存在於 $easyrsa_dir${NC}" >&2
+        log_message_core "錯誤: import_certificates_to_acm_lib - PKI 目錄不存在: $easyrsa_dir/pki"
+        return 1
+    fi
+
+    log_message_core "開始匯入憑證到 AWS ACM (lib) - Region: $aws_region"
+
+    local server_cert_file="$easyrsa_dir/pki/issued/server.crt"
+    local server_key_file="$easyrsa_dir/pki/private/server.key"
+    local ca_cert_file="$easyrsa_dir/pki/ca.crt"
+    local ca_key_file="$easyrsa_dir/pki/private/ca.key"
+
+    # 檢查必要的憑證檔案
+    if [ ! -f "$server_cert_file" ]; then
+        echo -e "${RED}錯誤: 伺服器憑證檔案不存在: $server_cert_file${NC}" >&2
+        log_message_core "錯誤: 伺服器憑證檔案不存在: $server_cert_file"
+        return 1
+    fi
+    if [ ! -f "$server_key_file" ]; then
+        echo -e "${RED}錯誤: 伺服器私鑰檔案不存在: $server_key_file${NC}" >&2
+        log_message_core "錯誤: 伺服器私鑰檔案不存在: $server_key_file"
+        return 1
+    fi
+    if [ ! -f "$ca_cert_file" ]; then
+        echo -e "${RED}錯誤: CA 憑證檔案不存在: $ca_cert_file${NC}" >&2
+        log_message_core "錯誤: CA 憑證檔案不存在: $ca_cert_file"
+        return 1
+    fi
+    if [ ! -f "$ca_key_file" ]; then
+        echo -e "${RED}錯誤: CA 私鑰檔案不存在: $ca_key_file${NC}" >&2
+        log_message_core "錯誤: CA 私鑰檔案不存在: $ca_key_file"
+        return 1
+    fi
+
+    echo -e "${BLUE}正在匯入伺服器憑證到 ACM...${NC}"
+    local server_import_output
+    server_import_output=$(aws acm import-certificate \
+      --certificate "fileb://$server_cert_file" \
+      --private-key "fileb://$server_key_file" \
+      --certificate-chain "fileb://$ca_cert_file" \
+      --region "$aws_region" \
+      --tags Key=Name,Value="VPN-Server-Cert" Key=Purpose,Value="ClientVPN" Key=ManagedBy,Value="nlInc-vpnMgmtTools" 2>&1)
+
+    local server_import_status=$?
+    local server_cert_arn=""
+
+    if [ $server_import_status -ne 0 ] || ! server_cert_arn=$(echo "$server_import_output" | jq -r '.CertificateArn' 2>/dev/null); then
+        echo -e "${RED}錯誤: 匯入伺服器憑證到 ACM 失敗${NC}" >&2
+        log_message_core "錯誤: 匯入伺服器憑證失敗. AWS CLI 輸出: $server_import_output"
+        return 1
+    fi
+
+    echo -e "${BLUE}正在匯入客戶端 CA 憑證到 ACM...${NC}"
+    local client_import_output
+    client_import_output=$(aws acm import-certificate \
+      --certificate "fileb://$ca_cert_file" \
+      --private-key "fileb://$ca_key_file" \
+      --region "$aws_region" \
+      --tags Key=Name,Value="VPN-Client-CA" Key=Purpose,Value="ClientVPN" Key=ManagedBy,Value="nlInc-vpnMgmtTools" 2>&1)
+
+    local client_import_status=$?
+    local client_cert_arn=""
+
+    if [ $client_import_status -ne 0 ] || ! client_cert_arn=$(echo "$client_import_output" | jq -r '.CertificateArn' 2>/dev/null); then
+        echo -e "${RED}錯誤: 匯入客戶端 CA 憑證到 ACM 失敗${NC}" >&2
+        log_message_core "錯誤: 匯入客戶端 CA 憑證失敗. AWS CLI 輸出: $client_import_output"
+        return 1
+    fi
+
+    # 驗證 ARN 格式
+    if [ -z "$server_cert_arn" ] || [ "$server_cert_arn" == "null" ]; then
+        echo -e "${RED}錯誤: 無效的伺服器憑證 ARN${NC}" >&2
+        log_message_core "錯誤: 無效的伺服器憑證 ARN: $server_cert_arn"
+        return 1
+    fi
+    if [ -z "$client_cert_arn" ] || [ "$client_cert_arn" == "null" ]; then
+        echo -e "${RED}錯誤: 無效的客戶端 CA 憑證 ARN${NC}" >&2
+        log_message_core "錯誤: 無效的客戶端 CA 憑證 ARN: $client_cert_arn"
+        return 1
+    fi
+
+    echo -e "${GREEN}憑證匯入成功！${NC}"
+    echo -e "${GREEN}伺服器憑證 ARN: $server_cert_arn${NC}"
+    echo -e "${GREEN}客戶端 CA 憑證 ARN: $client_cert_arn${NC}"
+
+    log_message_core "伺服器憑證 ARN: $server_cert_arn"
+    log_message_core "客戶端 CA 憑證 ARN: $client_cert_arn"
+
+    # 返回 JSON 格式的結果
+    local result_json
+    result_json=$(jq -n \
+        --arg server_arn "$server_cert_arn" \
+        --arg client_arn "$client_cert_arn" \
+        '{server_cert_arn: $server_arn, client_cert_arn: $client_arn}')
+
+    echo "$result_json"
+    return 0
+}
+
+# 生成完整的證書集合 (庫函式版本)
+# 參數: $1 = SCRIPT_DIR
+# 功能: 初始化 EasyRSA、生成 CA、伺服器和客戶端證書
+generate_certificates_lib() {
+    local script_dir="$1"
+    local easyrsa_dir="$script_dir/certificates"
+
+    # 參數驗證
+    if [ -z "$script_dir" ] || [ ! -d "$script_dir" ]; then
+        echo -e "${RED}錯誤: 腳本目錄參數無效${NC}" >&2
+        log_message_core "錯誤: generate_certificates_lib - 腳本目錄無效: $script_dir"
+        return 1
+    fi
+
+    log_message_core "開始生成完整證書集合 (lib) - 目標目錄: $easyrsa_dir"
+
+    # 檢查是否已經存在證書
+    if [ -f "$easyrsa_dir/pki/ca.crt" ] && [ -f "$easyrsa_dir/pki/issued/server.crt" ]; then
+        echo -e "${YELLOW}證書已存在，跳過生成步驟。${NC}"
+        log_message_core "證書已存在，跳過生成步驟"
+        return 0
+    fi
+
+    # 1. 初始化 EasyRSA 環境
+    echo -e "${BLUE}初始化 EasyRSA 環境...${NC}"
+    if ! initialize_easyrsa_lib "$script_dir" "$easyrsa_dir"; then
+        echo -e "${RED}錯誤: EasyRSA 環境初始化失敗${NC}" >&2
+        return 1
+    fi
+
+    # 檢查 EasyRSA 是否正確初始化
+    if [ ! -f "$easyrsa_dir/easyrsa" ]; then
+        echo -e "${RED}錯誤: EasyRSA 腳本未正確複製${NC}" >&2
+        log_message_core "錯誤: EasyRSA 腳本未在 $easyrsa_dir 中找到"
+        return 1
+    fi
+
+    # 2. 初始化 PKI
+    echo -e "${BLUE}初始化 PKI...${NC}"
+    cd "$easyrsa_dir" || {
+        echo -e "${RED}錯誤: 無法切換到 EasyRSA 目錄${NC}" >&2
+        log_message_core "錯誤: 無法切換到目錄 $easyrsa_dir"
+        return 1
+    }
+
+    if ! ./easyrsa init-pki; then
+        echo -e "${RED}錯誤: PKI 初始化失敗${NC}" >&2
+        log_message_core "錯誤: PKI 初始化失敗"
+        cd - >/dev/null
+        return 1
+    fi
+
+    # 3. 生成 CA 證書
+    echo -e "${BLUE}生成 CA 證書...${NC}"
+    if ! generate_ca_certificate_lib "$easyrsa_dir" "NL-VPN-CA"; then
+        echo -e "${RED}錯誤: CA 證書生成失敗${NC}" >&2
+        cd - >/dev/null
+        return 1
+    fi
+
+    # 4. 生成伺服器證書
+    echo -e "${BLUE}生成伺服器證書...${NC}"
+    if ! generate_server_certificate_lib "$easyrsa_dir" "server"; then
+        echo -e "${RED}錯誤: 伺服器證書生成失敗${NC}" >&2
+        cd - >/dev/null
+        return 1
+    fi
+
+    # 5. 生成預設管理員客戶端證書
+    echo -e "${BLUE}生成管理員客戶端證書...${NC}"
+    if ! generate_client_certificate_lib "$easyrsa_dir" "admin"; then
+        echo -e "${RED}錯誤: 管理員客戶端證書生成失敗${NC}" >&2
+        cd - >/dev/null
+        return 1
+    fi
+
+    cd - >/dev/null
+
+    # 驗證所有必要的證書檔案都已生成
+    local required_files=(
+        "$easyrsa_dir/pki/ca.crt"
+        "$easyrsa_dir/pki/private/ca.key"
+        "$easyrsa_dir/pki/issued/server.crt"
+        "$easyrsa_dir/pki/private/server.key"
+        "$easyrsa_dir/pki/issued/admin.crt"
+        "$easyrsa_dir/pki/private/admin.key"
+    )
+
+    for file in "${required_files[@]}"; do
+        if [ ! -f "$file" ]; then
+            echo -e "${RED}錯誤: 必要的證書檔案未生成: $file${NC}" >&2
+            log_message_core "錯誤: 證書檔案未生成: $file"
+            return 1
+        fi
+    done
+
+    echo -e "${GREEN}所有證書生成成功！${NC}"
+    echo -e "${GREEN}CA 證書: $easyrsa_dir/pki/ca.crt${NC}"
+    echo -e "${GREEN}伺服器證書: $easyrsa_dir/pki/issued/server.crt${NC}"
+    echo -e "${GREEN}管理員證書: $easyrsa_dir/pki/issued/admin.crt${NC}"
+
+    log_message_core "完整證書集合生成完成"
+    return 0
+}
