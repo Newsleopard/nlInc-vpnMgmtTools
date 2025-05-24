@@ -823,6 +823,45 @@ CIDR: \\(.CidrBlock)
     return 0
 }
 
+# 統一的配置更新函式
+update_config() {
+    local config_file="$1"
+    local param_name="$2"
+    local param_value="$3"
+    
+    if [ -z "$config_file" ] || [ -z "$param_name" ]; then
+        echo -e "${RED}錯誤：update_config 缺少必要參數${NC}" >&2
+        log_message_core "錯誤：update_config 調用缺少必要參數"
+        return 1
+    fi
+    
+    # 如果配置文件不存在，創建一個新的
+    if [ ! -f "$config_file" ]; then
+        echo "# VPN 管理配置文件" > "$config_file"
+        log_message_core "創建新的配置文件: $config_file"
+    fi
+    
+    # 使用 sed 更新或添加參數
+    if grep -q "^${param_name}=" "$config_file"; then
+        # 參數已存在，更新值
+        if [ "$(uname)" = "Darwin" ]; then
+            # macOS 版本的 sed
+            sed -i '' "s|^${param_name}=.*|${param_name}=\"${param_value}\"|" "$config_file"
+        else
+            # Linux 版本的 sed
+            sed -i "s|^${param_name}=.*|${param_name}=\"${param_value}\"|" "$config_file"
+        fi
+        log_message_core "更新配置參數: ${param_name}=${param_value}"
+    else
+        # 參數不存在，添加到文件末尾
+        echo "${param_name}=\"${param_value}\"" >> "$config_file"
+        log_message_core "添加新配置參數: ${param_name}=${param_value}"
+    fi
+    
+    echo -e "${GREEN}已更新配置：${param_name}=${param_value}${NC}"
+    return 0
+}
+
 # 安全輸入函數
 # 參數:
 # $1: 提示信息
