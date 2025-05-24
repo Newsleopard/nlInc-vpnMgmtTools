@@ -44,3 +44,5 @@ Thumbs.db
 # 執行時生成的文件
 pki/
 *.ovpn
+
+.current_env

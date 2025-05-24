@@ -41,7 +41,7 @@ env_current() {
     load_current_env
     
     # 載入環境配置以獲取顯示資訊
-    local env_file="$PROJECT_ROOT/${CURRENT_ENVIRONMENT}.env"
+    local env_file="$PROJECT_ROOT/configs/${CURRENT_ENVIRONMENT}/${CURRENT_ENVIRONMENT}.env"
     if [[ -f "$env_file" ]]; then
         source "$env_file"
         local icon="${ENV_ICON:-⚪}"
@@ -76,7 +76,7 @@ env_switch() {
     fi
     
     # 驗證目標環境是否存在
-    local target_env_file="$PROJECT_ROOT/${target_env}.env"
+    local target_env_file="$PROJECT_ROOT/configs/${target_env}/${target_env}.env"
     if [[ ! -f "$target_env_file" ]]; then
         echo -e "${RED}錯誤: 環境 '$target_env' 不存在${NC}"
         echo "可用環境: staging, production"
@@ -133,7 +133,7 @@ env_load_config() {
         env_name="$CURRENT_ENVIRONMENT"
     fi
     
-    local env_file="$PROJECT_ROOT/${env_name}.env"
+    local env_file="$PROJECT_ROOT/configs/${env_name}/${env_name}.env"
     if [[ -f "$env_file" ]]; then
         source "$env_file"
         
@@ -179,7 +179,7 @@ EOF
 # 獲取環境顯示資訊
 get_env_display_info() {
     local env_name="$1"
-    local env_file="$PROJECT_ROOT/${env_name}.env"
+    local env_file="$PROJECT_ROOT/configs/${env_name}/${env_name}.env"
     
     if [[ -f "$env_file" ]]; then
         local ENV_ICON ENV_DISPLAY_NAME
@@ -193,7 +193,7 @@ get_env_display_info() {
 # 環境健康檢查
 env_health_check() {
     local env_name="$1"
-    local env_file="$PROJECT_ROOT/${env_name}.env"
+    local env_file="$PROJECT_ROOT/configs/${env_name}/${env_name}.env"
     
     # 基本檢查：配置檔案存在
     if [[ ! -f "$env_file" ]]; then
@@ -225,20 +225,23 @@ env_list() {
     load_current_env
     current_env="$CURRENT_ENVIRONMENT"
     
-    for env_file in "$PROJECT_ROOT"/*.env; do
-        if [[ -f "$env_file" ]]; then
-            local env_name=$(basename "$env_file" .env)
-            source "$env_file"
-            
-            local icon="${ENV_ICON:-⚪}"
-            local display_name="${ENV_DISPLAY_NAME:-$env_name}"
-            local status=""
-            
-            if [[ "$env_name" == "$current_env" ]]; then
-                status="${GREEN}(當前)${NC}"
+    for env_dir in "$PROJECT_ROOT/configs"/*; do
+        if [[ -d "$env_dir" ]]; then
+            local env_name=$(basename "$env_dir")
+            local env_file="$env_dir/${env_name}.env"
+            if [[ -f "$env_file" ]]; then
+                source "$env_file"
+                
+                local icon="${ENV_ICON:-⚪}"
+                local display_name="${ENV_DISPLAY_NAME:-$env_name}"
+                local status=""
+                
+                if [[ "$env_name" == "$current_env" ]]; then
+                    status="${GREEN}(當前)${NC}"
+                fi
+                
+                echo -e "  ${icon} ${display_name} ${status}"
             fi
-            
-            echo -e "  ${icon} ${display_name} ${status}"
         fi
     done
     echo "========================"
@@ -260,26 +263,29 @@ env_selector() {
         # 顯示可用環境
         echo "可用環境:"
         local counter=1
-        for env_file in "$PROJECT_ROOT"/*.env; do
-            if [[ -f "$env_file" ]]; then
-                local env_name=$(basename "$env_file" .env)
-                source "$env_file"
-                
-                local icon="${ENV_ICON:-⚪}"
-                local display_name="${ENV_DISPLAY_NAME:-$env_name}"
-                local description=""
-                
-                case "$env_name" in
-                    staging)
-                        description="開發測試環境"
-                        ;;
-                    production)
-                        description="生產營運環境"
-                        ;;
-                esac
-                
-                echo "  ${counter}. ${icon} ${env_name} - ${description}"
-                counter=$((counter + 1))
+        for env_dir in "$PROJECT_ROOT/configs"/*; do
+            if [[ -d "$env_dir" ]]; then
+                local env_name=$(basename "$env_dir")
+                local env_file="$env_dir/${env_name}.env"
+                if [[ -f "$env_file" ]]; then
+                    source "$env_file"
+                    
+                    local icon="${ENV_ICON:-⚪}"
+                    local display_name="${ENV_DISPLAY_NAME:-$env_name}"
+                    local description=""
+                    
+                    case "$env_name" in
+                        staging)
+                            description="開發測試環境"
+                            ;;
+                        production)
+                            description="生產營運環境"
+                            ;;
+                    esac
+                    
+                    echo "  ${counter}. ${icon} ${env_name} - ${description}"
+                    counter=$((counter + 1))
+                fi
             fi
         done
         
@@ -304,17 +310,20 @@ env_selector() {
                 read -p "按 Enter 繼續..."
                 ;;
             [Hh])
-                echo "檢查環境健康狀態..."
-                for env_file in "$PROJECT_ROOT"/*.env; do
-                    if [[ -f "$env_file" ]]; then
-                        local env_name=$(basename "$env_file" .env)
-                        if env_health_check "$env_name"; then
-                            echo -e "${env_name}: ${GREEN}🟢 健康${NC}"
-                        else
-                            echo -e "${env_name}: ${YELLOW}🟡 警告${NC}"
-                        fi
+        echo "檢查環境健康狀態..."
+        for env_dir in "$PROJECT_ROOT/configs"/*; do
+            if [[ -d "$env_dir" ]]; then
+                local env_name=$(basename "$env_dir")
+                local env_file="$env_dir/${env_name}.env"
+                if [[ -f "$env_file" ]]; then
+                    if env_health_check "$env_name"; then
+                        echo -e "${env_name}: ${GREEN}🟢 健康${NC}"
+                    else
+                        echo -e "${env_name}: ${YELLOW}🟡 警告${NC}"
                     fi
-                done
+                fi
+            fi
+        done
                 read -p "按 Enter 繼續..."
                 ;;
             [Qq])
@@ -385,7 +394,7 @@ env_validate_operation() {
     local env_name="${2:-$CURRENT_ENVIRONMENT}"
     
     # 載入環境配置
-    local env_file="$PROJECT_ROOT/${env_name}.env"
+    local env_file="$PROJECT_ROOT/configs/${env_name}/${env_name}.env"
     if [[ ! -f "$env_file" ]]; then
         echo -e "${RED}錯誤: 環境 $env_name 不存在${NC}" >&2
         return 1
@@ -427,7 +436,7 @@ env_get_config() {
     local env_name="${2:-$CURRENT_ENVIRONMENT}"
     
     # 載入環境配置
-    local env_file="$PROJECT_ROOT/${env_name}.env"
+    local env_file="$PROJECT_ROOT/configs/${env_name}/${env_name}.env"
     if [[ -f "$env_file" ]]; then
         source "$env_file"
         # 使用間接變數引用獲取配置值

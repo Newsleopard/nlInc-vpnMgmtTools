@@ -86,13 +86,16 @@ main() {
                 fi
             else
                 echo "Checking all environment health status..."
-                for env_file in "$SCRIPT_DIR"/*.env; do
-                    if [[ -f "$env_file" ]]; then
-                        local env_name=$(basename "$env_file" .env)
-                        if env_health_check "$env_name"; then
-                            echo -e "${env_name}: ${GREEN}🟢 Healthy${NC}"
-                        else
-                            echo -e "${env_name}: ${YELLOW}🟡 Warning${NC}"
+                for env_dir in "$PROJECT_ROOT/configs"/*; do
+                    if [[ -d "$env_dir" ]]; then
+                        local env_name=$(basename "$env_dir")
+                        local env_file="$env_dir/${env_name}.env"
+                        if [[ -f "$env_file" ]]; then
+                            if env_health_check "$env_name"; then
+                                echo -e "${env_name}: ${GREEN}🟢 Healthy${NC}"
+                            else
+                                echo -e "${env_name}: ${YELLOW}🟡 Warning${NC}"
+                            fi
                         fi
                     fi
                 done

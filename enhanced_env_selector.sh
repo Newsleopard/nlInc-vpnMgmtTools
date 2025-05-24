@@ -82,7 +82,7 @@ get_env_resource_usage() {
 # 檢查證書有效性
 check_certificate_validity() {
     local env_name="$1"
-    local env_file="$PROJECT_ROOT/${env_name}.env"
+    local env_file="$PROJECT_ROOT/configs/${env_name}/${env_name}.env"
     
     if [[ ! -f "$env_file" ]]; then
         return 1
@@ -105,7 +105,7 @@ check_certificate_validity() {
 # 檢查 VPN 端點狀態
 check_vpn_endpoint_status() {
     local env_name="$1"
-    local env_file="$PROJECT_ROOT/${env_name}.env"
+    local env_file="$PROJECT_ROOT/configs/${env_name}/${env_name}.env"
     
     if [[ ! -f "$env_file" ]]; then
         return 1
@@ -148,7 +148,7 @@ enhanced_env_health_check() {
     fi
     
     # 配置完整性檢查
-    local env_file="$PROJECT_ROOT/${env_name}.env"
+    local env_file="$PROJECT_ROOT/configs/${env_name}/${env_name}.env"
     if [[ -f "$env_file" ]]; then
         source "$env_file"
         if [[ -n "$AWS_REGION" && -n "$VPN_CIDR" && -n "$PRIMARY_VPC_ID" ]]; then
@@ -177,7 +177,7 @@ enhanced_env_health_check() {
 # 顯示環境詳細資訊
 show_env_details() {
     local env_name="$1"
-    local env_file="$PROJECT_ROOT/${env_name}.env"
+    local env_file="$PROJECT_ROOT/configs/${env_name}/${env_name}.env"
     
     if [[ ! -f "$env_file" ]]; then
         echo -e "${RED}環境配置檔案不存在${NC}"
@@ -229,10 +229,13 @@ compare_environments() {
     
     # 獲取所有環境
     local envs=()
-    for env_file in "$PROJECT_ROOT"/*.env; do
-        if [[ -f "$env_file" ]]; then
-            local env_name=$(basename "$env_file" .env)
-            envs+=("$env_name")
+    for env_dir in "$PROJECT_ROOT/configs"/*; do
+        if [[ -d "$env_dir" ]]; then
+            local env_name=$(basename "$env_dir")
+            local env_file="$env_dir/${env_name}.env"
+            if [[ -f "$env_file" ]]; then
+                envs+=("$env_name")
+            fi
         fi
     done
     
@@ -247,7 +250,7 @@ compare_environments() {
     
     # 顯示每個環境的資訊
     for env_name in "${envs[@]}"; do
-        local env_file="$PROJECT_ROOT/${env_name}.env"
+        local env_file="$PROJECT_ROOT/configs/${env_name}/${env_name}.env"
         source "$env_file"
         
         local display_name="${ENV_DISPLAY_NAME:-$env_name}"
@@ -298,39 +301,42 @@ enhanced_env_selector() {
         # 顯示所有可用環境
         echo -e "${BLUE}${BOLD}可用環境:${NC}"
         local counter=1
-        for env_file in "$PROJECT_ROOT"/*.env; do
-            if [[ -f "$env_file" ]]; then
-                local env_name=$(basename "$env_file" .env)
-                source "$env_file"
-                
-                local icon="${ENV_ICON:-⚪}"
-                local display_name="${ENV_DISPLAY_NAME:-$env_name}"
-                local description=""
-                local connection_count=$(get_env_connection_count "$env_name")
-                local health_status=$(enhanced_env_health_check "$env_name")
-                
-                case "$env_name" in
-                    staging)
-                        description="開發測試環境"
-                        ;;
-                    production)
-                        description="生產營運環境"
-                        ;;
-                    *)
-                        description="自訂環境"
-                        ;;
-                esac
-                
-                # 標示當前環境
-                local current_marker=""
-                if [[ "$env_name" == "$CURRENT_ENVIRONMENT" ]]; then
-                    current_marker="${GREEN} ← 當前${NC}"
+        for env_dir in "$PROJECT_ROOT/configs"/*; do
+            if [[ -d "$env_dir" ]]; then
+                local env_name=$(basename "$env_dir")
+                local env_file="$env_dir/${env_name}.env"
+                if [[ -f "$env_file" ]]; then
+                    source "$env_file"
+                    
+                    local icon="${ENV_ICON:-⚪}"
+                    local display_name="${ENV_DISPLAY_NAME:-$env_name}"
+                    local description=""
+                    local connection_count=$(get_env_connection_count "$env_name")
+                    local health_status=$(enhanced_env_health_check "$env_name")
+                    
+                    case "$env_name" in
+                        staging)
+                            description="開發測試環境"
+                            ;;
+                        production)
+                            description="生產營運環境"
+                            ;;
+                        *)
+                            description="自訂環境"
+                            ;;
+                    esac
+                    
+                    # 標示當前環境
+                    local current_marker=""
+                    if [[ "$env_name" == "$CURRENT_ENVIRONMENT" ]]; then
+                        current_marker="${GREEN} ← 當前${NC}"
+                    fi
+                    
+                    echo -e "  ${BOLD}${counter}.${NC} ${icon} ${BOLD}${display_name}${NC} - ${description}${current_marker}"
+                    echo -e "      連線: ${connection_count} 個 | 狀態: ${health_status}"
+                    echo ""
+                    counter=$((counter + 1))
                 fi
-                
-                echo -e "  ${BOLD}${counter}.${NC} ${icon} ${BOLD}${display_name}${NC} - ${description}${current_marker}"
-                echo -e "      連線: ${connection_count} 個 | 狀態: ${health_status}"
-                echo ""
-                counter=$((counter + 1))
             fi
         done
         
@@ -372,9 +378,9 @@ enhanced_env_selector() {
                 echo -e "${YELLOW}${STATUS_CHECKING} 正在檢查所有環境健康狀態...${NC}"
                 echo ""
                 
-                for env_file in "$PROJECT_ROOT"/*.env; do
-                    if [[ -f "$env_file" ]]; then
-                        local env_name=$(basename "$env_file" .env)
+                for env_dir in "$PROJECT_ROOT/configs"/*; do
+                    if [[ -d "$env_dir" ]]; then
+                        local env_name=$(basename "$env_dir")
                         local health_result=$(enhanced_env_health_check "$env_name")
                         echo -e "${env_name}: ${health_result}"
                     fi
@@ -468,9 +474,9 @@ main() {
         health)
             echo -e "${YELLOW}${STATUS_CHECKING} 檢查所有環境健康狀態...${NC}"
             echo ""
-            for env_file in "$PROJECT_ROOT"/*.env; do
-                if [[ -f "$env_file" ]]; then
-                    local env_name=$(basename "$env_file" .env)
+            for env_dir in "$PROJECT_ROOT/configs"/*; do
+                if [[ -d "$env_dir" ]]; then
+                    local env_name=$(basename "$env_dir")
                     local health_result=$(enhanced_env_health_check "$env_name")
                     echo -e "${env_name}: ${health_result}"
                 fi
