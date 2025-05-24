@@ -100,7 +100,36 @@ check_prerequisites() {
 setup_aws_config() {
     echo -e "\\\\n${YELLOW}[2/6] 設定 AWS 配置...${NC}"
     
-    if [ ! -f ~/.aws/credentials ] || [ ! -f ~/.aws/config ]; then
+    # 檢查現有配置
+    local existing_config=false
+    local use_existing_config=false
+    
+    if [ -f ~/.aws/credentials ] && [ -f ~/.aws/config ]; then
+        existing_config=true
+        echo -e "${BLUE}檢測到現有的 AWS 配置檔案${NC}"
+        
+        # 檢查是否可以使用現有配置
+        if aws sts get-caller-identity > /dev/null 2>&1; then
+            echo -e "${GREEN}✓ 現有 AWS 配置可正常使用${NC}"
+            current_region=$(aws configure get region 2>/dev/null)
+            if [ -n "$current_region" ]; then
+                echo -e "${BLUE}當前 AWS 區域: $current_region${NC}"
+                if ! read_secure_input "是否使用現有的 AWS 配置？(y/n): " use_existing "validate_yes_no"; then
+                    handle_error "確認輸入驗證失敗"
+                    exit 1
+                fi
+                
+                if [[ "$use_existing" == "y" || "$use_existing" == "Y" ]]; then
+                    use_existing_config=true
+                    aws_region="$current_region"
+                fi
+            fi
+        else
+            echo -e "${YELLOW}⚠ 現有 AWS 配置無法正常使用，需要重新設定${NC}"
+        fi
+    fi
+    
+    if [ "$use_existing_config" = false ]; then
         echo -e "${YELLOW}請提供您的 AWS 帳戶資訊：${NC}"
         
         if ! read_secure_input "請輸入 AWS Access Key ID: " aws_access_key "validate_aws_access_key_id"; then
@@ -118,27 +147,36 @@ setup_aws_config() {
             exit 1
         fi
         
-        # 創建配置目錄和文件
+        # 備份現有配置檔案
+        if [ "$existing_config" = true ]; then
+            local backup_timestamp=$(date +%Y%m%d_%H%M%S)
+            echo -e "${BLUE}備份現有 AWS 配置檔案...${NC}"
+            
+            if [ -f ~/.aws/credentials ]; then
+                cp ~/.aws/credentials ~/.aws/credentials.backup_$backup_timestamp
+                echo -e "${GREEN}✓ 已備份 ~/.aws/credentials 到 ~/.aws/credentials.backup_$backup_timestamp${NC}"
+            fi
+            
+            if [ -f ~/.aws/config ]; then
+                cp ~/.aws/config ~/.aws/config.backup_$backup_timestamp
+                echo -e "${GREEN}✓ 已備份 ~/.aws/config 到 ~/.aws/config.backup_$backup_timestamp${NC}"
+            fi
+        fi
+        
+        # 創建配置目錄
         mkdir -p ~/.aws
         
-        # 寫入認證
-        cat > ~/.aws/credentials << EOF
-[default]
-aws_access_key_id = $aws_access_key
-aws_secret_access_key = $aws_secret_key
-EOF
-        
-        # 寫入配置
-        cat > ~/.aws/config << EOF
-[default]
-region = $aws_region
-output = json
-EOF
+        # 使用 AWS CLI 命令安全地設定配置，這會保留其他設定檔
+        echo -e "${BLUE}設定 AWS CLI 配置...${NC}"
+        aws configure set aws_access_key_id "$aws_access_key"
+        aws configure set aws_secret_access_key "$aws_secret_key"
+        aws configure set default.region "$aws_region"
+        aws configure set default.output json
         
         echo -e "${GREEN}AWS 配置已完成！${NC}"
     else
-        echo -e "${GREEN}✓ AWS 已配置${NC}"
-        aws_region=$(aws configure get region)
+        echo -e "${GREEN}✓ 使用現有 AWS 配置${NC}"
+    fi
     fi
     
     # 測試 AWS 連接
