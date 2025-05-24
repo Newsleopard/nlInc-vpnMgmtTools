@@ -651,6 +651,53 @@ validate_endpoint_operation() {
     return 0
 }
 
+# 驗證文件路徑
+validate_file_path() {
+    local file_path="$1"
+    
+    if [ -z "$file_path" ]; then
+        echo -e "${RED}錯誤: 文件路徑不能為空${NC}"
+        log_message_core "錯誤: 文件路徑為空"
+        return 1
+    fi
+    
+    # 檢查路徑格式（基本檢查，避免明顯的惡意輸入）
+    if [[ "$file_path" =~ \.\./\.\. ]] || [[ "$file_path" =~ [[:cntrl:]] ]]; then
+        echo -e "${RED}錯誤: 文件路徑包含不安全的字符${NC}"
+        log_message_core "錯誤: 文件路徑包含不安全的字符: $file_path"
+        return 1
+    fi
+    
+    # 檢查文件是否存在
+    if [ ! -f "$file_path" ]; then
+        echo -e "${RED}錯誤: 文件不存在: $file_path${NC}"
+        log_message_core "錯誤: 文件不存在: $file_path"
+        return 1
+    fi
+    
+    # 檢查文件是否可讀
+    if [ ! -r "$file_path" ]; then
+        echo -e "${RED}錯誤: 文件無法讀取: $file_path${NC}"
+        log_message_core "錯誤: 文件無法讀取: $file_path"
+        return 1
+    fi
+    
+    return 0
+}
+
+# 驗證文件路徑（允許空值）
+validate_file_path_allow_empty() {
+    local file_path="$1"
+    
+    # 允許空值
+    if [ -z "$file_path" ]; then
+        return 0
+    fi
+    
+    # 如果不為空，則使用標準文件路徑驗證
+    validate_file_path "$file_path"
+}
+
 # 通用錯誤處理函數
 # 參數:
 # $1: 錯誤訊息
@@ -682,7 +729,7 @@ validate_endpoint_operation_config_file_arg() { # 重新命名以避免與上面
     # 這裡的邏輯與 validate_endpoint_operation 類似，但它接收 config_file 作為參數
     # 實際上，validate_endpoint_operation 應該在 config_file 已被 source 後調用
     # 所以這個函數可能多餘，或者需要重新思考其用途
-    # 暫時保留結構，但標記為待檢視
+    # 暫時保留結構，但標记為待檢視
     # TODO: Review if this function is still needed or how it should integrate with validate_endpoint_operation
     if ! validate_main_config "$config_file"; then # 確保主設定檔有效
         return 1
@@ -774,4 +821,138 @@ CIDR: \\(.CidrBlock)
 ----------------------------------------"'
     
     return 0
+}
+
+# 安全輸入函數
+# 參數:
+# $1: 提示信息
+# $2: 變數名稱 (會設置到這個變數中)
+# $3: 驗證函數名稱
+# $4-$6: (可選) 驗證函數的額外參數
+read_secure_input() {
+    local prompt="$1"
+    local var_name="$2"
+    local validation_func="$3"
+    local validation_arg1="$4"
+    local validation_arg2="$5"
+    local validation_arg3="$6"
+    
+    if [ -z "$prompt" ] || [ -z "$var_name" ]; then
+        log_message_core "錯誤: read_secure_input 調用缺少必要參數"
+        return 1
+    fi
+    
+    local input_value
+    local attempts=0
+    local max_attempts=3
+    
+    while [ $attempts -lt $max_attempts ]; do
+        echo -n -e "${prompt}"
+        read -r input_value
+        
+        # 基本清理：去除前後空白
+        input_value=$(echo "$input_value" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        
+        # 如果提供了驗證函數，則執行驗證
+        if [ -n "$validation_func" ] && command -v "$validation_func" >/dev/null 2>&1; then
+            # 根據參數數量調用驗證函數
+            if [ -n "$validation_arg3" ]; then
+                if $validation_func "$input_value" "$validation_arg1" "$validation_arg2" "$validation_arg3"; then
+                    # 設置變數到指定的變數名
+                    eval "$var_name=\"$input_value\""
+                    log_message_core "安全輸入驗證成功: $var_name"
+                    return 0
+                fi
+            elif [ -n "$validation_arg2" ]; then
+                if $validation_func "$input_value" "$validation_arg1" "$validation_arg2"; then
+                    eval "$var_name=\"$input_value\""
+                    log_message_core "安全輸入驗證成功: $var_name"
+                    return 0
+                fi
+            elif [ -n "$validation_arg1" ]; then
+                if $validation_func "$input_value" "$validation_arg1"; then
+                    eval "$var_name=\"$input_value\""
+                    log_message_core "安全輸入驗證成功: $var_name"
+                    return 0
+                fi
+            else
+                if $validation_func "$input_value"; then
+                    eval "$var_name=\"$input_value\""
+                    log_message_core "安全輸入驗證成功: $var_name"
+                    return 0
+                fi
+            fi
+            
+            # 驗證失敗
+            attempts=$((attempts + 1))
+            if [ $attempts -lt $max_attempts ]; then
+                echo -e "${YELLOW}輸入驗證失敗，請重試 ($attempts/$max_attempts)${NC}"
+            fi
+        else
+            # 沒有驗證函數，直接接受輸入
+            eval "$var_name=\"$input_value\""
+            log_message_core "安全輸入接受（無驗證）: $var_name"
+            return 0
+        fi
+    done
+    
+    # 達到最大嘗試次數
+    echo -e "${RED}錯誤: 達到最大輸入嘗試次數 ($max_attempts)${NC}"
+    log_message_core "錯誤: read_secure_input 達到最大嘗試次數: $var_name"
+    return 1
+}
+
+# 安全隱藏輸入函數（用於密碼等敏感信息）
+# 參數:
+# $1: 提示信息
+# $2: 變數名稱 (會設置到這個變數中)
+# $3: 驗證函數名稱
+read_secure_hidden_input() {
+    local prompt="$1"
+    local var_name="$2"
+    local validation_func="$3"
+    
+    if [ -z "$prompt" ] || [ -z "$var_name" ]; then
+        log_message_core "錯誤: read_secure_hidden_input 調用缺少必要參數"
+        return 1
+    fi
+    
+    local input_value
+    local attempts=0
+    local max_attempts=3
+    
+    while [ $attempts -lt $max_attempts ]; do
+        echo -n -e "${prompt}"
+        read -s -r input_value
+        echo  # 換行，因為 -s 選項不會自動換行
+        
+        # 基本清理：去除前後空白
+        input_value=$(echo "$input_value" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        
+        # 如果提供了驗證函數，則執行驗證
+        if [ -n "$validation_func" ] && command -v "$validation_func" >/dev/null 2>&1; then
+            if $validation_func "$input_value"; then
+                # 設置變數到指定的變數名
+                eval "$var_name=\"$input_value\""
+                log_message_core "安全隱藏輸入驗證成功: $var_name"
+                return 0
+            fi
+            
+            # 驗證失敗
+            attempts=$((attempts + 1))
+            if [ $attempts -lt $max_attempts ]; then
+                echo -e "${YELLOW}輸入驗證失敗，請重試 ($attempts/$max_attempts)${NC}"
+            fi
+        else
+            # 沒有驗證函數，直接接受輸入
+            eval "$var_name=\"$input_value\""
+            log_message_core "安全隱藏輸入接受（無驗證）: $var_name"
+            return 0
+        fi
+    done
+    
+    # 達到最大嘗試次數
+    echo -e "${RED}錯誤: 達到最大輸入嘗試次數 ($max_attempts)${NC}"
+    log_message_core "錯誤: read_secure_hidden_input 達到最大嘗試次數: $var_name"
+    return 1
 }

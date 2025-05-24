@@ -103,10 +103,20 @@ setup_aws_config() {
     if [ ! -f ~/.aws/credentials ] || [ ! -f ~/.aws/config ]; then
         echo -e "${YELLOW}請提供您的 AWS 帳戶資訊：${NC}"
         
-        read -p "請輸入 AWS Access Key ID: " aws_access_key
-        read -s -p "請輸入 AWS Secret Access Key: " aws_secret_key
-        echo
-        read -p "請輸入 AWS 區域 (與 VPN 端點相同的區域): " aws_region
+        if ! read_secure_input "請輸入 AWS Access Key ID: " aws_access_key "validate_aws_access_key_id"; then
+            handle_error "AWS Access Key ID 驗證失敗"
+            exit 1
+        fi
+        
+        if ! read_secure_hidden_input "請輸入 AWS Secret Access Key: " aws_secret_key "validate_aws_secret_access_key"; then
+            handle_error "AWS Secret Access Key 驗證失敗"
+            exit 1
+        fi
+        
+        if ! read_secure_input "請輸入 AWS 區域 (與 VPN 端點相同的區域): " aws_region "validate_aws_region"; then
+            handle_error "AWS 區域驗證失敗"
+            exit 1
+        fi
         
         # 創建配置目錄和文件
         mkdir -p ~/.aws
@@ -138,7 +148,10 @@ EOF
     
     # 獲取 VPN 端點資訊
     echo -e "\\\\n${YELLOW}請向管理員獲取以下資訊：${NC}"
-    read -p "請輸入 Client VPN 端點 ID: " endpoint_id
+    if ! read_secure_input "請輸入 Client VPN 端點 ID: " endpoint_id "validate_endpoint_id"; then
+        handle_error "VPN 端點 ID 驗證失敗"
+        exit 1
+    fi
     
     # 驗證端點 ID
     echo -e "${BLUE}驗證 VPN 端點...${NC}"
@@ -166,20 +179,20 @@ EOF
 setup_user_info() {
     echo -e "\\\\n${YELLOW}[3/6] 設定用戶資訊...${NC}"
     
-    # 獲取用戶名
-    read -p "請輸入您的用戶名或姓名 (僅使用英文字母和數字，不含空格): " username
-    username=$(echo "$username" | tr -cd '[:alnum:]')
-    
-    if [ -z "$username" ]; then
-        echo -e "${RED}用戶名不能為空${NC}"
+    # 使用安全輸入驗證獲取用戶名
+    if ! read_secure_input "請輸入您的用戶名或姓名: " username "validate_username"; then
+        handle_error "用戶名驗證失敗"
         exit 1
     fi
     
     # 確認用戶名
     echo -e "${BLUE}您的用戶名: $username${NC}"
-    read -p "確認使用此用戶名？(y/n): " confirm
+    if ! read_secure_input "確認使用此用戶名？(y/n): " confirm "validate_yes_no"; then
+        handle_error "確認輸入驗證失敗"
+        exit 1
+    fi
     
-    if [[ "$confirm" != "y" ]]; then
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
         echo -e "${YELLOW}請重新執行腳本並設定正確的用戶名${NC}"
         exit 0
     fi
@@ -209,10 +222,8 @@ generate_client_certificate() {
         ca_cert_path="$SCRIPT_DIR/certificates/ca.crt"
     else
         echo -e "${YELLOW}未找到 CA 證書文件。${NC}"
-        read -p "請輸入 CA 證書文件的完整路徑: " ca_cert_path
-        
-        if [ ! -f "$ca_cert_path" ]; then
-            echo -e "${RED}無法找到 CA 證書文件: $ca_cert_path${NC}"
+        if ! read_secure_input "請輸入 CA 證書文件的完整路徑: " ca_cert_path "validate_file_path"; then
+            handle_error "CA 證書文件路徑驗證失敗"
             exit 1
         fi
     fi
@@ -228,10 +239,8 @@ generate_client_certificate() {
     else
         echo -e "${YELLOW}未找到 CA 私鑰文件。${NC}"
         echo -e "${YELLOW}如果您沒有 CA 私鑰，請聯繫管理員生成您的證書。${NC}"
-        read -p "請輸入 CA 私鑰文件的完整路徑 (或按 Enter 跳過自動生成): " ca_key_path
-        
-        if [ ! -z "$ca_key_path" ] && [ ! -f "$ca_key_path" ]; then
-            echo -e "${RED}無法找到 CA 私鑰文件: $ca_key_path${NC}"
+        if ! read_secure_input "請輸入 CA 私鑰文件的完整路徑 (或按 Enter 跳過自動生成): " ca_key_path "validate_file_path_allow_empty"; then
+            handle_error "CA 私鑰文件路徑驗證失敗"
             exit 1
         fi
     fi
@@ -250,8 +259,11 @@ generate_client_certificate() {
         
         # 產生使用者私鑰和 CSR
         if [ -f "${USER_NAME}.key" ] || [ -f "${USER_NAME}.csr" ]; then
-            read -p "金鑰檔案 ${USER_NAME}.key 或 ${USER_NAME}.csr 已存在。是否覆蓋? (y/n): " overwrite_key
-            if [[ "$overwrite_key" == "y" ]]; then
+            if ! read_secure_input "金鑰檔案 ${USER_NAME}.key 或 ${USER_NAME}.csr 已存在。是否覆蓋? (y/n): " overwrite_key "validate_yes_no"; then
+                handle_error "覆蓋確認驗證失敗"
+                return 1
+            fi
+            if [[ "$overwrite_key" == "y" || "$overwrite_key" == "Y" ]]; then
                 rm -f "${USER_NAME}.key" "${USER_NAME}.csr"
             else
                 echo -e "${YELLOW}保留現有金鑰檔案。如果您想重新產生，請先刪除它們。${NC}"
@@ -292,9 +304,12 @@ generate_client_certificate() {
         echo -e "  證書文件: $cert_dir/${USER_NAME}.crt"
         echo -e "  私鑰文件: $cert_dir/${USER_NAME}.key"
         
-        read -p "證書文件已準備好？(y/n): " cert_ready
+        if ! read_secure_input "證書文件已準備好？(y/n): " cert_ready "validate_yes_no"; then
+            handle_error "證書準備確認驗證失敗"
+            return 1
+        fi
         
-        if [[ "$cert_ready" != "y" ]]; then
+        if [[ "$cert_ready" != "y" && "$cert_ready" != "Y" ]]; then
             echo -e "${YELLOW}請準備好證書文件後重新執行腳本${NC}"
             exit 0
         fi
