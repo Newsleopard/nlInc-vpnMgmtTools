@@ -456,7 +456,7 @@ generate_client_certificate() {
         if read_secure_input "證書文件已準備好？(y/n): " cert_ready "validate_yes_no"; then
             if [[ ! "$cert_ready" =~ ^[Yy]$ ]]; then
                 echo -e "${YELLOW}請準備好證書文件後重新執行腳本${NC}"
-                exit 0
+                return 1
             fi
         else
             echo -e "${YELLOW}請準備好證書文件後重新執行腳本${NC}"
@@ -514,16 +514,13 @@ import_certificate() {
     # 導入客戶端證書
     echo -e "${BLUE}導入客戶端證書到 ACM...${NC}"
     local client_cert
-    client_cert=$(aws acm import-certificate \
-      --certificate "fileb://$cert_dir/${USERNAME}.crt" \
-      --private-key "fileb://$cert_dir/${USERNAME}.key" \
-      --certificate-chain "fileb://$cert_dir/ca.crt" \
-      --region "$AWS_REGION" \
-      --tags Key=Name,Value="VPN-Client-${USERNAME}" Key=Purpose,Value="ClientVPN" Key=User,Value="$USERNAME" 2>&1)
-    
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}導入證書失敗: $client_cert${NC}"
-        log_team_setup_message "導入證書失敗: $client_cert"
+    if ! client_cert=$(aws acm import-certificate \
+    --certificate "fileb://$cert_dir/${USERNAME}.crt" \
+    --private-key "fileb://$cert_dir/${USERNAME}.key" \
+    --certificate-chain "fileb://$cert_dir/ca.crt" \
+    --region "$AWS_REGION" \
+    --tags Key=Name,Value="VPN-Client-${USERNAME}" Key=Purpose,Value="ClientVPN" Key=User,Value="$USERNAME"); then
+        echo -e "${RED}導入證書失敗${NC}"
         return 1
     fi
     
@@ -611,16 +608,19 @@ setup_vpn_client() {
         echo -e "${BLUE}下載 AWS VPN 客戶端...${NC}"
         local vpn_client_url="https://d20adtppz83p9s.cloudfront.net/OSX/latest/AWS_VPN_Client.pkg"
         
+        # 確保 Downloads 目錄存在
+        mkdir -p ~/Downloads
+
         if ! curl -L -o ~/Downloads/AWS_VPN_Client.pkg "$vpn_client_url"; then
             echo -e "${RED}下載 AWS VPN 客戶端失敗${NC}"
             log_team_setup_message "下載 AWS VPN 客戶端失敗"
             return 1
         fi
         
-        echo -e "${BLUE}安裝 AWS VPN 客戶端...${NC}"
+        echo -e "${YELLOW}安裝 AWS VPN 客戶端需要管理員權限，請輸入密碼...${NC}"
         if ! sudo installer -pkg ~/Downloads/AWS_VPN_Client.pkg -target /; then
-            echo -e "${RED}安裝 AWS VPN 客戶端失敗${NC}"
-            log_team_setup_message "安裝 AWS VPN 客戶端失敗"
+            echo -e "${RED}安裝失敗。請檢查權限或手動安裝。${NC}"
+            echo -e "${BLUE}您也可以從以下位置手動安裝：~/Downloads/AWS_VPN_Client.pkg${NC}"
             return 1
         fi
         
