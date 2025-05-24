@@ -278,18 +278,25 @@ setup_user_info() {
 
 # 生成個人客戶端證書
 generate_client_certificate() {
+    local original_dir="$PWD"  # 記錄原始目錄
     echo -e "\\n${YELLOW}[4/6] 生成個人 VPN 客戶端證書...${NC}"
     
     # 載入配置
     if ! source "$USER_CONFIG_FILE"; then
         echo -e "${RED}載入配置文件失敗${NC}"
         log_team_setup_message "載入配置文件失敗"
+        cd "$original_dir" || {
+            echo -e "${RED}警告: 無法恢復到原始目錄${NC}"
+        }
         return 1
     fi
     
     # 檢查 USERNAME 是否已設定
     if [ -z "$USERNAME" ]; then
         echo -e "${RED}用戶名未設定，請先完成用戶資訊設定${NC}"
+        cd "$original_dir" || {
+            echo -e "${RED}警告: 無法恢復到原始目錄${NC}"
+        }
         return 1
     fi
     
@@ -308,10 +315,16 @@ generate_client_certificate() {
         if read_secure_input "請輸入 CA 證書文件的完整路徑: " ca_cert_path "validate_file_path"; then
             if [ ! -f "$ca_cert_path" ]; then
                 echo -e "${RED}指定的 CA 證書文件不存在${NC}"
+                cd "$original_dir" || {
+                    echo -e "${RED}警告: 無法恢復到原始目錄${NC}"
+                }
                 return 1
             fi
         else
             echo -e "${RED}必須提供有效的 CA 證書文件路徑${NC}"
+            cd "$original_dir" || {
+                echo -e "${RED}警告: 無法恢復到原始目錄${NC}"
+            }
             return 1
         fi
     fi
@@ -331,6 +344,9 @@ generate_client_certificate() {
         if read_secure_input "請輸入 CA 私鑰文件的完整路徑 (或按 Enter 跳過自動生成): " ca_key_path "validate_file_path_allow_empty"; then
             if [ -n "$ca_key_path" ] && [ ! -f "$ca_key_path" ]; then
                 echo -e "${RED}指定的 CA 私鑰文件不存在${NC}"
+                cd "$original_dir" || {
+                    echo -e "${RED}警告: 無法恢復到原始目錄${NC}"
+                }
                 return 1
             fi
         fi
@@ -344,12 +360,18 @@ generate_client_certificate() {
     # 安全地切換到證書目錄
     if ! cd "$cert_dir"; then
         echo -e "${RED}無法切換到證書目錄: $cert_dir${NC}"
+        cd "$original_dir" || {
+            echo -e "${RED}警告: 無法恢復到原始目錄${NC}"
+        }
         return 1
     fi
     
     # 複製 CA 證書
     if ! cp "$ca_cert_path" ./ca.crt; then
         echo -e "${RED}複製 CA 證書失敗${NC}"
+        cd "$original_dir" || {
+            echo -e "${RED}警告: 無法恢復到原始目錄${NC}"
+        }
         return 1
     fi
     
@@ -385,6 +407,9 @@ generate_client_certificate() {
         # 生成私鑰
         if ! openssl genrsa -out "${USERNAME}.key" 2048; then
             echo -e "${RED}生成私鑰失敗${NC}"
+            cd "$original_dir" || {
+                echo -e "${RED}警告: 無法恢復到原始目錄${NC}"
+            }
             return 1
         fi
         chmod 600 "${USERNAME}.key"
@@ -393,6 +418,9 @@ generate_client_certificate() {
         if ! openssl req -new -key "${USERNAME}.key" -out "${USERNAME}.csr" \
           -subj "/CN=${USERNAME}/O=Client/C=TW"; then
             echo -e "${RED}生成 CSR 失敗${NC}"
+            cd "$original_dir" || {
+                echo -e "${RED}警告: 無法恢復到原始目錄${NC}"
+            }
             return 1
         fi
         
@@ -400,6 +428,9 @@ generate_client_certificate() {
         if ! openssl x509 -req -in "${USERNAME}.csr" -CA ./ca.crt -CAkey "$ca_key_path" \
           -CAcreateserial -out "${USERNAME}.crt" -days 365; then
             echo -e "${RED}簽署證書失敗${NC}"
+            cd "$original_dir" || {
+                echo -e "${RED}警告: 無法恢復到原始目錄${NC}"
+            }
             return 1
         fi
         
@@ -435,6 +466,9 @@ generate_client_certificate() {
         # 檢查證書文件是否存在
         if [ ! -f "$cert_dir/${USERNAME}.crt" ] || [ ! -f "$cert_dir/${USERNAME}.key" ]; then
             echo -e "${RED}找不到證書文件。請確認文件位置正確。${NC}"
+            cd "$original_dir" || {
+                echo -e "${RED}警告: 無法恢復到原始目錄${NC}"
+            }
             return 1
         fi
         
@@ -444,6 +478,11 @@ generate_client_certificate() {
     fi
     
     log_team_setup_message "客戶端證書已準備完成"
+    
+    # 在函數結束前恢復目錄
+    cd "$original_dir" || {
+        echo -e "${RED}警告: 無法恢復到原始目錄${NC}"
+    }
 }
 
 # 導入證書到 ACM

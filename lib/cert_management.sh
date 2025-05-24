@@ -521,6 +521,7 @@ import_certificates_to_acm_lib() {
 generate_certificates_lib() {
     local script_dir="$1"
     local easyrsa_dir="$script_dir/certificates"
+    local original_dir="$PWD"  # 記錄原始目錄
 
     # 參數驗證
     if [ -z "$script_dir" ] || [ ! -d "$script_dir" ]; then
@@ -563,7 +564,9 @@ generate_certificates_lib() {
     if ! ./easyrsa init-pki; then
         echo -e "${RED}錯誤: PKI 初始化失敗${NC}" >&2
         log_message_core "錯誤: PKI 初始化失敗"
-        cd - >/dev/null
+        cd "$original_dir" || {
+            echo -e "${RED}警告: 無法恢復到原始目錄${NC}"
+        }
         return 1
     fi
 
@@ -571,7 +574,9 @@ generate_certificates_lib() {
     echo -e "${BLUE}生成 CA 證書...${NC}"
     if ! generate_ca_certificate_lib "$easyrsa_dir" "NL-VPN-CA"; then
         echo -e "${RED}錯誤: CA 證書生成失敗${NC}" >&2
-        cd - >/dev/null
+        cd "$original_dir" || {
+            echo -e "${RED}警告: 無法恢復到原始目錄${NC}"
+        }
         return 1
     fi
 
@@ -579,7 +584,9 @@ generate_certificates_lib() {
     echo -e "${BLUE}生成伺服器證書...${NC}"
     if ! generate_server_certificate_lib "$easyrsa_dir" "server"; then
         echo -e "${RED}錯誤: 伺服器證書生成失敗${NC}" >&2
-        cd - >/dev/null
+        cd "$original_dir" || {
+            echo -e "${RED}警告: 無法恢復到原始目錄${NC}"
+        }
         return 1
     fi
 
@@ -587,11 +594,15 @@ generate_certificates_lib() {
     echo -e "${BLUE}生成管理員客戶端證書...${NC}"
     if ! generate_client_certificate_lib "$easyrsa_dir" "admin"; then
         echo -e "${RED}錯誤: 管理員客戶端證書生成失敗${NC}" >&2
-        cd - >/dev/null
+        cd "$original_dir" || {
+            echo -e "${RED}警告: 無法恢復到原始目錄${NC}"
+        }
         return 1
     fi
 
-    cd - >/dev/null
+    cd "$original_dir" || {
+        echo -e "${RED}警告: 無法恢復到原始目錄${NC}"
+    }
 
     # 驗證所有必要的證書檔案都已生成
     local required_files=(
