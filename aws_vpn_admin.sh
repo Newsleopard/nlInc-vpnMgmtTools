@@ -103,8 +103,12 @@ create_vpn_endpoint() {
         main_server_cert_arn=$(echo "$acm_arns_result" | grep -o '"server_cert_arn":"[^"]*"' | sed 's/"server_cert_arn":"\([^"]*\)"/\1/')
         main_client_cert_arn=$(echo "$acm_arns_result" | grep -o '"client_cert_arn":"[^"]*"' | sed 's/"client_cert_arn":"\([^"]*\)"/\1/')
         
-        if [ -z "$main_server_cert_arn" ] || [ -z "$main_client_cert_arn" ]; then
-            handle_error "無法解析 ACM 導入結果。請安裝 jq 工具以獲得更好的 JSON 解析支援。"
+        # 使用通用驗證函數進行錯誤檢查
+        if ! validate_json_parse_result "$main_server_cert_arn" "伺服器證書 ARN" "validate_certificate_arn"; then
+            return 1
+        fi
+        
+        if ! validate_json_parse_result "$main_client_cert_arn" "客戶端證書 ARN" "validate_certificate_arn"; then
             return 1
         fi
     fi
@@ -161,8 +165,21 @@ create_vpn_endpoint() {
         vpn_cidr=$(echo "$vpn_details_json" | grep -o '"vpn_cidr":"[^"]*"' | sed 's/"vpn_cidr":"\([^"]*\)"/\1/')
         vpn_name=$(echo "$vpn_details_json" | grep -o '"vpn_name":"[^"]*"' | sed 's/"vpn_name":"\([^"]*\)"/\1/')
         
-        if [ -z "$vpc_id" ] || [ -z "$subnet_id" ] || [ -z "$vpn_cidr" ] || [ -z "$vpn_name" ]; then
-            handle_error "無法解析 VPC 詳細資訊。請安裝 jq 工具以獲得更好的 JSON 解析支援。"
+        # 使用通用驗證函數進行錯誤檢查，並提供適當的驗證函數
+        if ! validate_json_parse_result "$vpc_id" "VPC ID" "validate_vpc_id"; then
+            return 1
+        fi
+        
+        if ! validate_json_parse_result "$subnet_id" "子網路 ID" "validate_subnet_id"; then
+            return 1
+        fi
+        
+        if ! validate_json_parse_result "$vpn_cidr" "VPN CIDR" "validate_cidr_block"; then
+            return 1
+        fi
+        
+        # VPN 名稱允許包含空白字符，所以不使用額外驗證函數
+        if ! validate_json_parse_result "$vpn_name" "VPN 名稱"; then
             return 1
         fi
     fi
@@ -489,7 +506,10 @@ system_health_check() {
       --client-vpn-endpoint-id "$ENDPOINT_ID" \\
       --region "$AWS_REGION")
     
-    network_count=$(echo "$target_networks_json" | jq '.ClientVpnTargetNetworks | length')
+    if ! network_count=$(echo "$target_networks_json" | jq '.ClientVpnTargetNetworks | length' 2>/dev/null); then
+        # 備用解析方法：使用 grep 統計網絡數量
+        network_count=$(echo "$target_networks_json" | grep -c '"TargetNetworkId"' || echo "0")
+    fi
     echo -e "${GREEN}✓ 總關聯的網絡數量: $network_count${NC}"
 
     if [ "$network_count" -gt 0 ]; then
@@ -500,16 +520,36 @@ system_health_check() {
     fi
     
     echo -e "\\n${BLUE}檢查授權規則...${NC}"
-    auth_count=$(aws ec2 describe-client-vpn-authorization-rules \\
+    auth_rules_json=$(aws ec2 describe-client-vpn-authorization-rules \\
       --client-vpn-endpoint-id "$ENDPOINT_ID" \\
-      --region "$AWS_REGION" | jq '.AuthorizationRules | length')
+      --region "$AWS_REGION")
+    
+    if ! auth_count=$(echo "$auth_rules_json" | jq '.AuthorizationRules | length' 2>/dev/null); then
+        # 備用解析方法：使用 grep 統計授權規則數量
+        auth_count=$(echo "$auth_rules_json" | grep -c '"DestinationCidr"' || echo "0")
+    fi
+    
+    # 驗證解析結果
+    if ! validate_json_parse_result "$auth_count" "授權規則數量"; then
+        auth_count="未知"
+    fi
     
     echo -e "${GREEN}✓ 授權規則數量: $auth_count${NC}"
     
     echo -e "${BLUE}檢查連接統計...${NC}"
-    connections=$(aws ec2 describe-client-vpn-connections \\
+    connections_json=$(aws ec2 describe-client-vpn-connections \\
       --client-vpn-endpoint-id "$ENDPOINT_ID" \\
-      --region "$AWS_REGION" | jq '.Connections | length')
+      --region "$AWS_REGION")
+    
+    if ! connections=$(echo "$connections_json" | jq '.Connections | length' 2>/dev/null); then
+        # 備用解析方法：使用 grep 統計連接數量
+        connections=$(echo "$connections_json" | grep -c '"ConnectionId"' || echo "0")
+    fi
+    
+    # 驗證解析結果
+    if ! validate_json_parse_result "$connections" "連接數量"; then
+        connections="未知"
+    fi
     
     echo -e "${GREEN}✓ 目前連接數: $connections${NC}"
     

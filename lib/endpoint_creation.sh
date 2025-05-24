@@ -700,7 +700,13 @@ manage_routes_lib() {
               --client-vpn-endpoint-id "$arg_endpoint_id" \
               --region "$arg_aws_region" 2>/dev/null)
             
-            if [ $? -ne 0 ] || [ -z "$routes_json_lib" ] || [ "$(echo "$routes_json_lib" | jq '.Routes | length')" -eq 0 ]; then
+            local routes_count_lib
+            if ! routes_count_lib=$(echo "$routes_json_lib" | jq '.Routes | length' 2>/dev/null); then
+                # 備用解析方法：使用 grep 統計路由數量
+                routes_count_lib=$(echo "$routes_json_lib" | grep -c '"DestinationCidr"' || echo "0")
+            fi
+            
+            if [ $? -ne 0 ] || [ -z "$routes_json_lib" ] || [ "$routes_count_lib" -eq 0 ]; then
                 echo -e "${YELLOW}此端點沒有配置路由。${NC}"
             else
                 echo "$routes_json_lib" | jq -c '.Routes[]' | while IFS= read -r route; do
@@ -765,7 +771,16 @@ manage_routes_lib() {
                     local route_target_subnet_id_lib is_valid_subnet_lib route_dest_cidr_lib
                     read -p "請輸入目標子網路 ID (用於此路由，必須是上面列出的子網路之一): " route_target_subnet_id_lib
                     
-                    is_valid_subnet_lib=$(echo "$associated_subnets_in_vpc_json_lib" | jq -e --arg sn "$route_target_subnet_id_lib" '.ClientVpnTargetNetworks[] | select(.TargetNetworkId == $sn)')
+                    # 驗證子網路 ID 是否存在於關聯列表中，含備用方法
+                    if ! is_valid_subnet_lib=$(echo "$associated_subnets_in_vpc_json_lib" | jq -e --arg sn "$route_target_subnet_id_lib" '.ClientVpnTargetNetworks[] | select(.TargetNetworkId == $sn)' 2>/dev/null); then
+                        # 備用驗證方法：使用 grep 檢查子網路 ID 是否存在
+                        if echo "$associated_subnets_in_vpc_json_lib" | grep -q "\"TargetNetworkId\":\"$route_target_subnet_id_lib\""; then
+                            is_valid_subnet_lib="found" # 非空值表示找到
+                        else
+                            is_valid_subnet_lib=""
+                        fi
+                    fi
+                    
                     if [ -z "$is_valid_subnet_lib" ]; then
                         echo -e "${RED}選擇的子網路 \"$route_target_subnet_id_lib\" 無效或未關聯到此 VPC/端點。${NC}" # Quoted variable
                     else
@@ -796,7 +811,13 @@ manage_routes_lib() {
               --client-vpn-endpoint-id "$arg_endpoint_id" \
               --region "$arg_aws_region" 2>/dev/null)
             
-            if [ $? -ne 0 ] || [ -z "$routes_json_del_lib" ] || [ "$(echo "$routes_json_del_lib" | jq '.Routes | length')" -eq 0 ]; then
+            local routes_del_count_lib
+            if ! routes_del_count_lib=$(echo "$routes_json_del_lib" | jq '.Routes | length' 2>/dev/null); then
+                # 備用解析方法：使用 grep 統計路由數量
+                routes_del_count_lib=$(echo "$routes_json_del_lib" | grep -c '"DestinationCidr"' || echo "0")
+            fi
+            
+            if [ $? -ne 0 ] || [ -z "$routes_json_del_lib" ] || [ "$routes_del_count_lib" -eq 0 ]; then
                 echo -e "${YELLOW}此端點沒有配置路由可供刪除。${NC}"
             else
                 echo -e "${YELLOW}現有路由:${NC}"
@@ -932,11 +953,19 @@ show_multi_vpc_topology_lib() {
     # 顯示當前連接統計
     echo -e "${BLUE}關聯網路統計:${NC}"
     local network_count_lib
-    network_count_lib=$(aws ec2 describe-client-vpn-target-networks \
+    local network_count_json_lib
+    network_count_json_lib=$(aws ec2 describe-client-vpn-target-networks \
       --client-vpn-endpoint-id "$arg_endpoint_id" \
-      --region "$arg_aws_region" | jq '.ClientVpnTargetNetworks | length')
-    if [ $? -eq 0 ]; then
-        echo -e "  總關聯網路數: $network_count_lib" # network_count_lib is a number
+      --region "$arg_aws_region")
+    
+    if ! network_count_lib=$(echo "$network_count_json_lib" | jq '.ClientVpnTargetNetworks | length' 2>/dev/null); then
+        # 備用解析方法：使用 grep 統計網絡數量
+        network_count_lib=$(echo "$network_count_json_lib" | grep -c '"TargetNetworkId"' || echo "0")
+    fi
+    
+    # 驗證解析結果
+    if validate_json_parse_result "$network_count_lib" "網絡數量"; then
+        echo -e "  總關聯網路數: $network_count_lib"
     else
         echo -e "  ${RED}無法獲取關聯網路統計。${NC}"
     fi
@@ -1020,7 +1049,13 @@ manage_batch_vpc_auth_lib() {
               --client-vpn-endpoint-id "$arg_endpoint_id" \
               --region "$arg_aws_region" 2>/dev/null)
 
-            if [ $? -ne 0 ] || [ -z "$auth_rules_json_lib" ] || [ "$(echo "$auth_rules_json_lib" | jq '.AuthorizationRules | length')" -eq 0 ]; then
+            local auth_rules_count_lib
+            if ! auth_rules_count_lib=$(echo "$auth_rules_json_lib" | jq '.AuthorizationRules | length' 2>/dev/null); then
+                # 備用解析方法：使用 grep 統計授權規則數量
+                auth_rules_count_lib=$(echo "$auth_rules_json_lib" | grep -c '"DestinationCidr"' || echo "0")
+            fi
+
+            if [ $? -ne 0 ] || [ -z "$auth_rules_json_lib" ] || [ "$auth_rules_count_lib" -eq 0 ]; then
                 echo -e "${YELLOW}端點 \"$arg_endpoint_id\" 沒有配置授權規則。${NC}" # Quoted variable
             else
                 echo "$auth_rules_json_lib" | jq -r '.AuthorizationRules[] | "  目標 CIDR: \\(.DestinationCidr), 狀態: \\(.Status.Code), 描述: \\(.Description // "N/A")"'
@@ -1032,9 +1067,16 @@ manage_batch_vpc_auth_lib() {
                     return 1 # Indicate failure or loop back
                 fi
 
-                # 驗證該規則是否存在
+                # 驗證該規則是否存在，含備用方法
                 local rule_exists_lib
-                rule_exists_lib=$(echo "$auth_rules_json_lib" | jq -e --arg rc "$revoke_cidr_lib" '.AuthorizationRules[] | select(.DestinationCidr == $rc)')
+                if ! rule_exists_lib=$(echo "$auth_rules_json_lib" | jq -e --arg rc "$revoke_cidr_lib" '.AuthorizationRules[] | select(.DestinationCidr == $rc)' 2>/dev/null); then
+                    # 備用驗證方法：使用 grep 檢查 CIDR 是否存在
+                    if echo "$auth_rules_json_lib" | grep -q "\"DestinationCidr\":\"$revoke_cidr_lib\""; then
+                        rule_exists_lib="found" # 非空值表示找到
+                    else
+                        rule_exists_lib=""
+                    fi
+                fi
                 if [ -z "$rule_exists_lib" ]; then
                     echo -e "${RED}找不到目標 CIDR 為 '$revoke_cidr_lib' 的授權規則。${NC}" # revoke_cidr_lib is a variable
                 else
@@ -1065,7 +1107,13 @@ manage_batch_vpc_auth_lib() {
               --client-vpn-endpoint-id "$arg_endpoint_id" \
               --region "$arg_aws_region" 2>/dev/null)
 
-            if [ $? -ne 0 ] || [ -z "$auth_rules_overview_lib" ] || [ "$(echo "$auth_rules_overview_lib" | jq '.AuthorizationRules | length')" -eq 0 ]; then
+            local auth_overview_count_lib
+            if ! auth_overview_count_lib=$(echo "$auth_rules_overview_lib" | jq '.AuthorizationRules | length' 2>/dev/null); then
+                # 備用解析方法：使用 grep 統計授權規則數量
+                auth_overview_count_lib=$(echo "$auth_rules_overview_lib" | grep -c '"DestinationCidr"' || echo "0")
+            fi
+
+            if [ $? -ne 0 ] || [ -z "$auth_rules_overview_lib" ] || [ "$auth_overview_count_lib" -eq 0 ]; then
                 echo -e "${YELLOW}端點 \"$arg_endpoint_id\" 沒有配置授權規則。${NC}" # Quoted variable
             else
                 echo "$auth_rules_overview_lib" | jq -r '.AuthorizationRules[] | 
@@ -1151,7 +1199,13 @@ remove_authorization_rule_lib() {
         --client-vpn-endpoint-id "$arg_endpoint_id" \
         --region "$arg_aws_region" 2>/dev/null)
 
-    if [ $? -ne 0 ] || [ -z "$auth_rules_json_lib" ] || [ "$(echo "$auth_rules_json_lib" | jq '.AuthorizationRules | length')" -eq 0 ]; then
+    local auth_rules_lib_count
+    if ! auth_rules_lib_count=$(echo "$auth_rules_json_lib" | jq '.AuthorizationRules | length' 2>/dev/null); then
+        # 備用解析方法：使用 grep 統計授權規則數量
+        auth_rules_lib_count=$(echo "$auth_rules_json_lib" | grep -c '"DestinationCidr"' || echo "0")
+    fi
+
+    if [ $? -ne 0 ] || [ -z "$auth_rules_json_lib" ] || [ "$auth_rules_lib_count" -eq 0 ]; then
         echo -e "${YELLOW}端點 $arg_endpoint_id 沒有配置授權規則。${NC}"
         return 0 # Not an error, just nothing to do.
     fi
@@ -1165,9 +1219,16 @@ remove_authorization_rule_lib() {
         return 1
     fi
 
-    # 驗證該規則是否存在
+    # 驗證該規則是否存在，含備用方法
     local rule_exists_lib
-    rule_exists_lib=$(echo "$auth_rules_json_lib" | jq -e --arg rc "$revoke_cidr_lib" '.AuthorizationRules[] | select(.DestinationCidr == $rc)')
+    if ! rule_exists_lib=$(echo "$auth_rules_json_lib" | jq -e --arg rc "$revoke_cidr_lib" '.AuthorizationRules[] | select(.DestinationCidr == $rc)' 2>/dev/null); then
+        # 備用驗證方法：使用 grep 檢查 CIDR 是否存在
+        if echo "$auth_rules_json_lib" | grep -q "\"DestinationCidr\":\"$revoke_cidr_lib\""; then
+            rule_exists_lib="found" # 非空值表示找到
+        else
+            rule_exists_lib=""
+        fi
+    fi
     if [ -z "$rule_exists_lib" ]; then
         echo -e "${RED}找不到目標 CIDR 為 '$revoke_cidr_lib' 的授權規則。${NC}" # revoke_cidr_lib is a variable
     else
@@ -1277,9 +1338,17 @@ add_route_lib() {
         return 1
     fi
 
-    # 驗證選擇的子網路是否已關聯
+    # 驗證選擇的子網路是否已關聯，含備用方法
     local is_valid_subnet_lib
-    is_valid_subnet_lib=$(echo "$associated_subnets_json_lib" | jq -e --arg sn "$target_subnet_lib" '.ClientVpnTargetNetworks[] | select(.TargetNetworkId == $sn)')
+    if ! is_valid_subnet_lib=$(echo "$associated_subnets_json_lib" | jq -e --arg sn "$target_subnet_lib" '.ClientVpnTargetNetworks[] | select(.TargetNetworkId == $sn)' 2>/dev/null); then
+        # 備用驗證方法：使用 grep 檢查子網路 ID 是否存在
+        if echo "$associated_subnets_json_lib" | grep -q "\"TargetNetworkId\":\"$target_subnet_lib\""; then
+            is_valid_subnet_lib="found" # 非空值表示找到
+        else
+            is_valid_subnet_lib=""
+        fi
+    fi
+    
     if [ -z "$is_valid_subnet_lib" ]; then
         echo -e "${RED}選擇的子網路 $target_subnet_lib 無效或未關聯到此端點。${NC}"
         return 1
@@ -1525,21 +1594,51 @@ terminate_vpn_endpoint_lib() {
         --client-vpn-endpoint-id "$arg_endpoint_id" \
         --region "$arg_aws_region" 2>/dev/null)
 
-    if [ $? -eq 0 ] && [ -n "$auth_rules_json" ] && [ "$(echo "$auth_rules_json" | jq '.AuthorizationRules | length')" -gt 0 ]; then
-        echo "$auth_rules_json" | jq -r '.AuthorizationRules[].DestinationCidr' | while IFS= read -r cidr; do
-            echo -e "${BLUE}  正在撤銷對 CIDR $cidr 的授權...${NC}"
-            if aws ec2 revoke-client-vpn-ingress \
-                --client-vpn-endpoint-id "$arg_endpoint_id" \
-                --target-network-cidr "$cidr" \
-                --revoke-all-groups \
-                --region "$arg_aws_region"; then
-                echo -e "${GREEN}    已成功撤銷對 CIDR $cidr 的授權。${NC}"
-                log_message_core "已撤銷對 CIDR $cidr 的授權 for endpoint $arg_endpoint_id (lib)"
-            else
-                echo -e "${RED}    撤銷對 CIDR $cidr 的授權失敗。${NC}"
-                log_message_core "錯誤: 撤銷對 CIDR $cidr 的授權失敗 for endpoint $arg_endpoint_id (lib)"
-            fi
-        done
+    local auth_rules_count
+    if ! auth_rules_count=$(echo "$auth_rules_json" | jq '.AuthorizationRules | length' 2>/dev/null); then
+        # 備用解析方法：使用 grep 統計授權規則數量
+        auth_rules_count=$(echo "$auth_rules_json" | grep -c '"DestinationCidr"' || echo "0")
+    fi
+
+    if [ $? -eq 0 ] && [ -n "$auth_rules_json" ] && [ "$auth_rules_count" -gt 0 ]; then
+        # 提取所有CIDR並處理
+        if command -v jq >/dev/null 2>&1; then
+            echo "$auth_rules_json" | jq -r '.AuthorizationRules[].DestinationCidr' | while IFS= read -r cidr; do
+        # 提取所有CIDR並處理
+        if command -v jq >/dev/null 2>&1; then
+            echo "$auth_rules_json" | jq -r '.AuthorizationRules[].DestinationCidr' | while IFS= read -r cidr; do
+                echo -e "${BLUE}  正在撤銷對 CIDR $cidr 的授權...${NC}"
+                if aws ec2 revoke-client-vpn-ingress \
+                    --client-vpn-endpoint-id "$arg_endpoint_id" \
+                    --target-network-cidr "$cidr" \
+                    --revoke-all-groups \
+                    --region "$arg_aws_region"; then
+                    echo -e "${GREEN}    已成功撤銷對 CIDR $cidr 的授權。${NC}"
+                    log_message_core "已撤銷對 CIDR $cidr 的授權 for endpoint $arg_endpoint_id (lib)"
+                else
+                    echo -e "${RED}    撤銷對 CIDR $cidr 的授權失敗。${NC}"
+                    log_message_core "錯誤: 撤銷對 CIDR $cidr 的授權失敗 for endpoint $arg_endpoint_id (lib)"
+                fi
+            done
+        else
+            # 備用解析方法：使用 grep 和 sed 提取 CIDR
+            echo "$auth_rules_json" | grep -o '"DestinationCidr":"[^"]*"' | sed 's/"DestinationCidr":"//g' | sed 's/"//g' | while IFS= read -r cidr; do
+                if [ -n "$cidr" ]; then
+                    echo -e "${BLUE}  正在撤銷對 CIDR $cidr 的授權...${NC}"
+                    if aws ec2 revoke-client-vpn-ingress \
+                        --client-vpn-endpoint-id "$arg_endpoint_id" \
+                        --target-network-cidr "$cidr" \
+                        --revoke-all-groups \
+                        --region "$arg_aws_region"; then
+                        echo -e "${GREEN}    已成功撤銷對 CIDR $cidr 的授權。${NC}"
+                        log_message_core "已撤銷對 CIDR $cidr 的授權 for endpoint $arg_endpoint_id (lib)"
+                    else
+                        echo -e "${RED}    撤銷對 CIDR $cidr 的授權失敗。${NC}"
+                        log_message_core "錯誤: 撤銷對 CIDR $cidr 的授權失敗 for endpoint $arg_endpoint_id (lib)"
+                    fi
+                fi
+            done
+        fi
     else
         echo -e "${YELLOW}沒有找到與端點 $arg_endpoint_id 相關的授權規則，或無法獲取資訊。${NC}"
     fi
@@ -1551,30 +1650,101 @@ terminate_vpn_endpoint_lib() {
         --client-vpn-endpoint-id "$arg_endpoint_id" \
         --region "$arg_aws_region" 2>/dev/null)
 
-    if [ $? -eq 0 ] && [ -n "$routes_json" ] && [ "$(echo "$routes_json" | jq '.Routes | length')" -gt 0 ]; then
-        echo "$routes_json" | jq -c '.Routes[]' | while IFS= read -r route_entry; do
-            local dest_cidr target_subnet origin
-            dest_cidr=$(echo "$route_entry" | jq -r '.DestinationCidr')
-            target_subnet=$(echo "$route_entry" | jq -r '.TargetSubnet // .TargetVpcSubnetId') # AWS CLI uses TargetSubnet, API might use TargetVpcSubnetId
-            origin=$(echo "$route_entry" | jq -r '.Origin')
+    local routes_count
+    if ! routes_count=$(echo "$routes_json" | jq '.Routes | length' 2>/dev/null); then
+        # 備用解析方法：使用 grep 統計路由數量
+        routes_count=$(echo "$routes_json" | grep -c '"DestinationCidr"' || echo "0")
+    fi
 
-            if [ "$origin" == "add-route" ] || [ "$origin" == "associate" ]; then
-                echo -e "${BLUE}  正在刪除路由: $dest_cidr -> $target_subnet (來源: $origin)...${NC}"
-                if aws ec2 delete-client-vpn-route \
-                    --client-vpn-endpoint-id "$arg_endpoint_id" \
-                    --destination-cidr-block "$dest_cidr" \
-                    --target-vpc-subnet-id "$target_subnet" \
-                    --region "$arg_aws_region"; then
-                    echo -e "${GREEN}    路由 $dest_cidr -> $target_subnet 已成功刪除。${NC}"
-                    log_message_core "路由 $dest_cidr -> $target_subnet 已刪除 for endpoint $arg_endpoint_id (lib)"
-                else
-                    echo -e "${RED}    刪除路由 $dest_cidr -> $target_subnet 失敗。${NC}"
-                    log_message_core "錯誤: 刪除路由 $dest_cidr -> $target_subnet 失敗 for endpoint $arg_endpoint_id (lib)"
-                fi
+    if [ $? -eq 0 ] && [ -n "$routes_json" ] && [ "$routes_count" -gt 0 ]; then
+        # 驗證路由數量解析結果
+        if validate_json_parse_result "$routes_count" "路由數量"; then
+            # 嘗試使用 jq 處理路由條目
+            if command -v jq >/dev/null 2>&1 && echo "$routes_json" | jq -c '.Routes[]' >/dev/null 2>&1; then
+                echo "$routes_json" | jq -c '.Routes[]' | while IFS= read -r route_entry; do
+                    local dest_cidr target_subnet origin
+                    
+                    # 提取路由欄位，含備用方法
+                    if ! dest_cidr=$(echo "$route_entry" | jq -r '.DestinationCidr' 2>/dev/null); then
+                        dest_cidr=$(echo "$route_entry" | grep -o '"DestinationCidr":"[^"]*"' | sed 's/"DestinationCidr":"//g' | sed 's/"//g')
+                    fi
+                    
+                    if ! target_subnet=$(echo "$route_entry" | jq -r '.TargetSubnet // .TargetVpcSubnetId' 2>/dev/null); then
+                        # 備用解析：先嘗試 TargetSubnet，再嘗試 TargetVpcSubnetId
+                        target_subnet=$(echo "$route_entry" | grep -o '"TargetSubnet":"[^"]*"' | sed 's/"TargetSubnet":"//g' | sed 's/"//g')
+                        if [ -z "$target_subnet" ] || [ "$target_subnet" == "null" ]; then
+                            target_subnet=$(echo "$route_entry" | grep -o '"TargetVpcSubnetId":"[^"]*"' | sed 's/"TargetVpcSubnetId":"//g' | sed 's/"//g')
+                        fi
+                    fi
+                    
+                    if ! origin=$(echo "$route_entry" | jq -r '.Origin' 2>/dev/null); then
+                        origin=$(echo "$route_entry" | grep -o '"Origin":"[^"]*"' | sed 's/"Origin":"//g' | sed 's/"//g')
+                    fi
+
+                    # 驗證提取的欄位
+                    if [ -n "$dest_cidr" ] && [ -n "$target_subnet" ] && [ -n "$origin" ] && \
+                       [ "$dest_cidr" != "null" ] && [ "$target_subnet" != "null" ] && [ "$origin" != "null" ]; then
+                        if [ "$origin" == "add-route" ] || [ "$origin" == "associate" ]; then
+                            echo -e "${BLUE}  正在刪除路由: $dest_cidr -> $target_subnet (來源: $origin)...${NC}"
+                            if aws ec2 delete-client-vpn-route \
+                                --client-vpn-endpoint-id "$arg_endpoint_id" \
+                                --destination-cidr-block "$dest_cidr" \
+                                --target-vpc-subnet-id "$target_subnet" \
+                                --region "$arg_aws_region"; then
+                                echo -e "${GREEN}    路由 $dest_cidr -> $target_subnet 已成功刪除。${NC}"
+                                log_message_core "路由 $dest_cidr -> $target_subnet 已刪除 for endpoint $arg_endpoint_id (lib)"
+                            else
+                                echo -e "${RED}    刪除路由 $dest_cidr -> $target_subnet 失敗。${NC}"
+                                log_message_core "錯誤: 刪除路由 $dest_cidr -> $target_subnet 失敗 for endpoint $arg_endpoint_id (lib)"
+                            fi
+                        else
+                            echo -e "${YELLOW}  跳過路由: $dest_cidr -> $target_subnet (來源: $origin, 不可刪除)。${NC}"
+                        fi
+                    else
+                        echo -e "${YELLOW}  跳過路由條目：無法解析必要欄位 (CIDR: $dest_cidr, 子網路: $target_subnet, 來源: $origin)。${NC}"
+                        log_message_core "警告: 跳過路由條目，無法解析必要欄位 for endpoint $arg_endpoint_id (lib)"
+                    fi
+                done
             else
-                echo -e "${YELLOW}  跳過路由: $dest_cidr -> $target_subnet (來源: $origin, 不可刪除)。${NC}"
+                # 完全備用方法：使用 grep 和 sed 逐一處理路由
+                echo -e "${YELLOW}  使用備用方法處理路由...${NC}"
+                echo "$routes_json" | grep -o '{[^}]*"DestinationCidr"[^}]*}' | while IFS= read -r route_line; do
+                    local dest_cidr target_subnet origin
+                    
+                    dest_cidr=$(echo "$route_line" | grep -o '"DestinationCidr":"[^"]*"' | sed 's/"DestinationCidr":"//g' | sed 's/"//g')
+                    target_subnet=$(echo "$route_line" | grep -o '"TargetSubnet":"[^"]*"' | sed 's/"TargetSubnet":"//g' | sed 's/"//g')
+                    if [ -z "$target_subnet" ] || [ "$target_subnet" == "null" ]; then
+                        target_subnet=$(echo "$route_line" | grep -o '"TargetVpcSubnetId":"[^"]*"' | sed 's/"TargetVpcSubnetId":"//g' | sed 's/"//g')
+                    fi
+                    origin=$(echo "$route_line" | grep -o '"Origin":"[^"]*"' | sed 's/"Origin":"//g' | sed 's/"//g')
+                    
+                    if [ -n "$dest_cidr" ] && [ -n "$target_subnet" ] && [ -n "$origin" ] && \
+                       [ "$dest_cidr" != "null" ] && [ "$target_subnet" != "null" ] && [ "$origin" != "null" ]; then
+                        if [ "$origin" == "add-route" ] || [ "$origin" == "associate" ]; then
+                            echo -e "${BLUE}  正在刪除路由 (備用): $dest_cidr -> $target_subnet (來源: $origin)...${NC}"
+                            if aws ec2 delete-client-vpn-route \
+                                --client-vpn-endpoint-id "$arg_endpoint_id" \
+                                --destination-cidr-block "$dest_cidr" \
+                                --target-vpc-subnet-id "$target_subnet" \
+                                --region "$arg_aws_region"; then
+                                echo -e "${GREEN}    路由 $dest_cidr -> $target_subnet 已成功刪除。${NC}"
+                                log_message_core "路由 $dest_cidr -> $target_subnet 已刪除 (備用方法) for endpoint $arg_endpoint_id (lib)"
+                            else
+                                echo -e "${RED}    刪除路由 $dest_cidr -> $target_subnet 失敗。${NC}"
+                                log_message_core "錯誤: 刪除路由 $dest_cidr -> $target_subnet 失敗 (備用方法) for endpoint $arg_endpoint_id (lib)"
+                            fi
+                        else
+                            echo -e "${YELLOW}  跳過路由 (備用): $dest_cidr -> $target_subnet (來源: $origin, 不可刪除)。${NC}"
+                        fi
+                    else
+                        echo -e "${YELLOW}  跳過路由條目 (備用)：無法解析必要欄位。${NC}"
+                    fi
+                done
             fi
-        done
+        else
+            echo -e "${RED}無法驗證路由數量，跳過路由刪除步驟。${NC}"
+            log_message_core "錯誤: 無法驗證路由數量 for endpoint $arg_endpoint_id (lib)"
+        fi
     else
         echo -e "${YELLOW}沒有找到與端點 $arg_endpoint_id 相關的路由，或無法獲取資訊。${NC}"
     fi

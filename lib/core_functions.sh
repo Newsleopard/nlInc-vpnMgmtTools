@@ -130,9 +130,10 @@ validate_aws_secret_access_key() {
         return 1
     fi
     
-    # AWS Secret Access Key 格式：40個字元，base64編碼格式
-    if [[ ! "$secret_key" =~ ^[A-Za-z0-9+/]{40}$ ]]; then
-        echo -e "${RED}錯誤: AWS Secret Access Key 格式無效 (應為 40 個字元的 base64 格式)${NC}"
+    # AWS Secret Access Key 格式：40個字元的base64編碼格式，可能包含填充字符
+    # 支援標準格式（40字符）和包含填充字符的格式（最多44字符）
+    if [[ ! "$secret_key" =~ ^[A-Za-z0-9+/]{40}={0,4}$ ]]; then
+        echo -e "${RED}錯誤: AWS Secret Access Key 格式無效 (應為 40 個字元的 base64 格式，可包含填充字符)${NC}"
         log_message_core "錯誤: AWS Secret Access Key 格式無效"
         return 1
     fi
@@ -231,95 +232,302 @@ validate_username_allow_empty() {
     validate_username "$username"
 }
 
-# 驗證檔案是否存在且可讀
-validate_file_exists_readable() {
-    local file_path="$1"
-    
-    if [ -z "$file_path" ]; then
-        echo -e "${RED}錯誤: 檔案路徑不能為空${NC}"
-        log_message_core "錯誤: 檔案路徑為空"
-        return 1
-    fi
-    
-    if [ ! -f "$file_path" ]; then
-        echo -e "${RED}錯誤: 檔案不存在: $file_path${NC}"
-        log_message_core "錯誤: 檔案不存在: $file_path"
-        return 1
-    fi
-    
-    if [ ! -r "$file_path" ]; then
-        echo -e "${RED}錯誤: 檔案無法讀取: $file_path${NC}"
-        log_message_core "錯誤: 檔案無法讀取: $file_path"
-        return 1
-    fi
-    
-    return 0
-}
-
-# 驗證路徑是否可寫（允許空值）
-validate_path_writable_allow_empty() {
-    local path="$1"
-    
-    # 允許空值
-    if [ -z "$path" ]; then
-        return 0
-    fi
-    
-    local dir_path
-    dir_path=$(dirname "$path")
-    
-    if [ ! -d "$dir_path" ]; then
-        echo -e "${RED}錯誤: 目錄不存在: $dir_path${NC}"
-        log_message_core "錯誤: 目錄不存在: $dir_path"
-        return 1
-    fi
-    
-    if [ ! -w "$dir_path" ]; then
-        echo -e "${RED}錯誤: 目錄無法寫入: $dir_path${NC}"
-        log_message_core "錯誤: 目錄無法寫入: $dir_path"
-        return 1
-    fi
-    
-    return 0
-}
-
-# 安全輸入讀取函數
-read_secure_input() {
-    local prompt="$1"
-    local var_name="$2"
+# 驗證 JSON 解析結果的通用函數
+# 參數:
+# $1: 解析結果值
+# $2: 欄位名稱 (用於錯誤訊息)
+# $3: (可選) 額外的驗證函數名稱
+validate_json_parse_result() {
+    local value="$1"
+    local field_name="$2"
     local validation_func="$3"
-    local max_attempts="${4:-3}"
     
-    local attempt=1
-    while [ $attempt -le $max_attempts ]; do
-        echo -n "$prompt"
-        read -r input_value
-        
-        # 檢查輸入是否為空
-        if [ -z "$input_value" ]; then
-            echo -e "${RED}錯誤: 輸入不能為空${NC}"
-            ((attempt++))
-            continue
-        fi
-        
-        # 如果提供了驗證函數，則進行驗證
-        if [ -n "$validation_func" ]; then
-            if $validation_func "$input_value"; then
-                printf -v "$var_name" '%s' "$input_value"
-                return 0
-            else
-                echo -e "${RED}錯誤: 輸入格式無效${NC}"
-                ((attempt++))
-                continue
-            fi
-        else
-            printf -v "$var_name" '%s' "$input_value"
-            return 0
-        fi
-    done
+    if [ -z "$value" ]; then
+        echo -e "${RED}錯誤: ${field_name}解析失敗 - 結果為空${NC}"
+        log_message_core "錯誤: ${field_name}解析失敗 - 結果為空"
+        return 1
+    fi
     
-    echo -e "${RED}錯誤: 達到最大嘗試次數，退出${NC}"
-    return 1
+    # 檢查是否包含意外的空白字符（可能表示解析錯誤）
+    if [[ "$value" =~ [[:space:]] ]] && [[ "$field_name" != *"名稱"* ]]; then
+        echo -e "${RED}錯誤: ${field_name}包含意外的空白字符，可能解析失敗: '$value'${NC}"
+        log_message_core "錯誤: ${field_name}包含意外的空白字符: '$value'"
+        return 1
+    fi
+    
+    # 檢查是否為 "null"（JSON null 值被錯誤解析為字符串）
+    if [ "$value" == "null" ]; then
+        echo -e "${RED}錯誤: ${field_name}解析結果為 null${NC}"
+        log_message_core "錯誤: ${field_name}解析結果為 null"
+        return 1
+    fi
+    
+    # 如果提供了額外的驗證函數，則調用它
+    if [ -n "$validation_func" ] && command -v "$validation_func" >/dev/null 2>&1; then
+        if ! $validation_func "$value"; then
+            echo -e "${RED}錯誤: ${field_name}格式驗證失敗: $value${NC}"
+            log_message_core "錯誤: ${field_name}格式驗證失敗: $value"
+            return 1
+        fi
+    fi
+    
+    return 0
+}
+
+# 驗證 AWS 設定檔
+validate_aws_profile() {
+    local profile_name="$1"
+    
+    if [ -z "$profile_name" ]; then
+        echo -e "${RED}錯誤: AWS 設定檔名稱不能為空${NC}"
+        log_message_core "錯誤: AWS 設定檔名稱為空"
+        return 1
+    fi
+    
+    # 檢查設定檔是否存在
+    if ! aws configure list-profiles | grep -qw "$profile_name"; then
+        echo -e "${RED}錯誤: 找不到指定的 AWS 設定檔: $profile_name${NC}"
+        log_message_core "錯誤: 找不到指定的 AWS 設定檔: $profile_name"
+        return 1
+    fi
+    
+    return 0
+}
+
+# 驗證 EC2 實例 ID
+validate_instance_id() {
+    local instance_id="$1"
+    
+    if [[ ! "$instance_id" =~ ^i-[0-9a-f]{17}$ ]]; then
+        echo -e "${RED}錯誤: 無效的 EC2 實例 ID 格式: $instance_id${NC}"
+        log_message_core "錯誤: 無效的 EC2 實例 ID 格式: $instance_id"
+        return 1
+    fi
+    
+    return 0
+}
+
+# 驗證安全組 ID
+validate_security_group_id() {
+    local sg_id="$1"
+    
+    if [[ ! "$sg_id" =~ ^sg-[0-9a-f]{8,17}$ ]]; then
+        echo -e "${RED}錯誤: 無效的安全組 ID 格式: $sg_id${NC}"
+        log_message_core "錯誤: 無效的安全組 ID 格式: $sg_id"
+        return 1
+    fi
+    
+    return 0
+}
+
+# 驗證子網路的可用性
+validate_subnet_availability() {
+    local subnet_id="$1"
+    
+    # 檢查子網路是否存在
+    local subnet_exists
+    subnet_exists=$(aws ec2 describe-subnets --subnet-ids "$subnet_id" --query "Subnets[0].SubnetId" --output text 2>/dev/null)
+    
+    if [ "$subnet_exists" == "None" ]; then
+        echo -e "${RED}錯誤: 找不到指定的子網路: $subnet_id${NC}"
+        log_message_core "錯誤: 找不到指定的子網路: $subnet_id"
+        return 1
+    fi
+    
+    # 檢查子網路是否可用
+    local subnet_state
+    subnet_state=$(aws ec2 describe-subnets --subnet-ids "$subnet_id" --query "Subnets[0].State" --output text 2>/dev/null)
+    
+    if [ "$subnet_state" != "available" ]; then
+        echo -e "${RED}錯誤: 子網路 $subnet_id 當前狀態為 $subnet_state，無法使用${NC}"
+        log_message_core "錯誤: 子網路 $subnet_id 當前狀態為 $subnet_state"
+        return 1
+    fi
+    
+    return 0
+}
+
+# 驗證 VPC 的可用性
+validate_vpc_availability() {
+    local vpc_id="$1"
+    
+    # 檢查 VPC 是否存在
+    local vpc_exists
+    vpc_exists=$(aws ec2 describe-vpcs --vpc-ids "$vpc_id" --query "Vpcs[0].VpcId" --output text 2>/dev/null)
+    
+    if [ "$vpc_exists" == "None" ]; then
+        echo -e "${RED}錯誤: 找不到指定的 VPC: $vpc_id${NC}"
+        log_message_core "錯誤: 找不到指定的 VPC: $vpc_id"
+        return 1
+    fi
+    
+    # 檢查 VPC 是否可用
+    local vpc_state
+    vpc_state=$(aws ec2 describe-vpcs --vpc-ids "$vpc_id" --query "Vpcs[0].State" --output text 2>/dev/null)
+    
+    if [ "$vpc_state" != "available" ]; then
+        echo -e "${RED}錯誤: VPC $vpc_id 當前狀態為 $vpc_state，無法使用${NC}"
+        log_message_core "錯誤: VPC $vpc_id 當前狀態為 $vpc_state"
+        return 1
+    fi
+    
+    return 0
+}
+
+# 驗證端點的可用性
+validate_endpoint_availability() {
+    local endpoint_id="$1"
+    
+    # 檢查端點是否存在
+    local endpoint_exists
+    endpoint_exists=$(aws ec2 describe-vpn-connections --vpn-connection-ids "$endpoint_id" --query "VpnConnections[0].VpnConnectionId" --output text 2>/dev/null)
+    
+    if [ "$endpoint_exists" == "None" ]; then
+        echo -e "${RED}錯誤: 找不到指定的端點: $endpoint_id${NC}"
+        log_message_core "錯誤: 找不到指定的端點: $endpoint_id"
+        return 1
+    fi
+    
+    # 檢查端點是否可用
+    local endpoint_state
+    endpoint_state=$(aws ec2 describe-vpn-connections --vpn-connection-ids "$endpoint_id" --query "VpnConnections[0].State" --output text 2>/dev/null)
+    
+    if [ "$endpoint_state" != "available" ]; then
+        echo -e "${RED}錯誤: 端點 $endpoint_id 當前狀態為 $endpoint_state，無法使用${NC}"
+        log_message_core "錯誤: 端點 $endpoint_id 當前狀態為 $endpoint_state"
+        return 1
+    fi
+    
+    return 0
+}
+
+# 驗證路由表 ID
+validate_route_table_id() {
+    local route_table_id="$1"
+    
+    if [[ ! "$route_table_id" =~ ^rtb-[0-9a-f]{8,17}$ ]]; then
+        echo -e "${RED}錯誤: 無效的路由表 ID 格式: $route_table_id${NC}"
+        log_message_core "錯誤: 無效的路由表 ID 格式: $route_table_id"
+        return 1
+    fi
+    
+    return 0
+}
+
+# 驗證 NAT 網關 ID
+validate_nat_gateway_id() {
+    local nat_gateway_id="$1"
+    
+    if [[ ! "$nat_gateway_id" =~ ^nat-[0-9a-f]{8,17}$ ]]; then
+        echo -e "${RED}錯誤: 無效的 NAT 網關 ID 格式: $nat_gateway_id${NC}"
+        log_message_core "錯誤: 無效的 NAT 網關 ID 格式: $nat_gateway_id"
+        return 1
+    fi
+    
+    return 0
+}
+
+# 驗證 VPC Peering 連接 ID
+validate_vpc_peering_connection_id() {
+    local peering_connection_id="$1"
+    
+    if [[ ! "$peering_connection_id" =~ ^pcx-[0-9a-f]{8,17}$ ]]; then
+        echo -e "${RED}錯誤: 無效的 VPC Peering 連接 ID 格式: $peering_connection_id${NC}"
+        log_message_core "錯誤: 無效的 VPC Peering 連接 ID 格式: $peering_connection_id"
+        return 1
+    fi
+    
+    return 0
+}
+
+# 驗證 Transit Gateway ID
+validate_transit_gateway_id() {
+    local transit_gateway_id="$1"
+    
+    if [[ ! "$transit_gateway_id" =~ ^tgw-[0-9a-f]{8,17}$ ]]; then
+        echo -e "${RED}錯誤: 無效的 Transit Gateway ID 格式: $transit_gateway_id${NC}"
+        log_message_core "錯誤: 無效的 Transit Gateway ID 格式: $transit_gateway_id"
+        return 1
+    fi
+    
+    return 0
+}
+
+# 驗證 VPN 連接 ID
+validate_vpn_connection_id() {
+    local vpn_connection_id="$1"
+    
+    if [[ ! "$vpn_connection_id" =~ ^vpn-[0-9a-f]{8,17}$ ]]; then
+        echo -e "${RED}錯誤: 無效的 VPN 連接 ID 格式: $vpn_connection_id${NC}"
+        log_message_core "錯誤: 無效的 VPN 連接 ID 格式: $vpn_connection_id"
+        return 1
+    fi
+    
+    return 0
+}
+
+# 驗證 VPN 客戶端配置文件
+validate_vpn_client_config() {
+    local config_file="$1"
+    
+    if [ ! -f "$config_file" ]; then
+        echo -e "${RED}錯誤: 找不到 VPN 客戶端配置文件: $config_file${NC}"
+        log_message_core "錯誤: 找不到 VPN 客戶端配置文件: $config_file"
+        return 1
+    fi
+    
+    # 檢查文件內容是否為有效的配置（簡單檢查是否包含 "client" 和 "remote" 行）
+    if ! grep -qE '^(client|remote)' "$config_file"; then
+        echo -e "${RED}錯誤: 無效的 VPN 客戶端配置文件格式: $config_file${NC}"
+        log_message_core "錯誤: 無效的 VPN 客戶端配置文件格式: $config_file"
+        return 1
+    fi
+    
+    return 0
+}
+
+# 驗證 OpenVPN 版本
+validate_openvpn_version() {
+    local required_version="2.4"
+    
+    # 嘗試獲取當前安裝的 OpenVPN 版本
+    local installed_version
+    installed_version=$(openvpn --version | head -n 1 | awk '{print $2}' | sed 's/[^0-9.]*//g')
+    
+    if [ -z "$installed_version" ]; then
+        echo -e "${RED}錯誤: 無法檢測到 OpenVPN 安裝版本${NC}"
+        log_message_core "錯誤: 無法檢測到 OpenVPN 安裝版本"
+        return 1
+    fi
+    
+    # 比較版本號
+    if ! dpkg --compare-versions "$installed_version" ge "$required_version"; then
+        echo -e "${RED}錯誤: OpenVPN 版本過舊，請升級到 $required_version 或更高版本${NC}"
+        log_message_core "錯誤: OpenVPN 版本過舊: $installed_version"
+        return 1
+    fi
+    
+    return 0
+}
+
+# 驗證 AWS CLI 配置
+validate_aws_cli_configuration() {
+    # 檢查 AWS CLI 是否已配置
+    local aws_access_key_id
+    local aws_secret_access_key
+    local aws_region
+    
+    aws_access_key_id=$(aws configure get aws_access_key_id)
+    aws_secret_access_key=$(aws configure get aws_secret_access_key)
+    aws_region=$(aws configure get region)
+    
+    if [ -z "$aws_access_key_id" ] || [ -z "$aws_secret_access_key" ] || [ -z "$aws_region" ]; then
+        echo -e "${RED}錯誤: AWS CLI 尚未正確配置，請運行 'aws configure' 進行配置${NC}"
+        log_message_core "錯誤: AWS CLI 尚未正確配置"
+        return 1
+    fi
+    
+    return 0
 }
 
 # 檢查必要工具
@@ -543,7 +751,10 @@ discover_available_vpcs_core() {
     fi
     
     local vpc_count
-    vpc_count=$(echo "$vpcs_json" | jq '.Vpcs | length')
+    if ! vpc_count=$(echo "$vpcs_json" | jq '.Vpcs | length' 2>/dev/null); then
+        # 備用解析方法：使用 grep 統計 VPC 數量
+        vpc_count=$(echo "$vpcs_json" | grep -c '"VpcId"' || echo "0")
+    fi
     
     if [ "$vpc_count" -eq 0 ]; then
         echo -e "${YELLOW}在 \"$aws_region\" 區域中未找到任何 VPC。${NC}" # Quoted $aws_region

@@ -201,28 +201,44 @@ find_user_certificates() {
         if [ ! -z "$cert_arn" ]; then
             local cert_details domain_name
             cert_details=$(aws acm describe-certificate --certificate-arn "$cert_arn" --region "$aws_region")
-            domain_name=$(echo "$cert_details" | jq -r '.Certificate.DomainName // ""')
+            if ! domain_name=$(echo "$cert_details" | jq -r '.Certificate.DomainName // ""' 2>/dev/null); then
+                # 備用解析方法：使用 grep 和 sed 提取域名
+                domain_name=$(echo "$cert_details" | grep -o '"DomainName":"[^"]*"' | sed 's/"DomainName":"//g' | sed 's/"//g' | head -1)
+            fi
+            
+            # 驗證解析結果
+            if ! validate_json_parse_result "$domain_name" "證書域名" ""; then
+                log_message "警告: 無法解析證書域名，跳過證書 $cert_arn"
+                continue
+            fi
             
             if [[ "$domain_name" == *"$username"* ]]; then
                 user_cert_arns+=("$cert_arn")
                 echo -e "${GREEN}✓ 找到證書 (域名匹配): $cert_arn${NC}"
             fi
         fi
-    done <<< "$(echo "$certificates" | jq -r '.CertificateSummaryList[].CertificateArn')"
+    done <<< "$(echo "$certificates" | jq -r '.CertificateSummaryList[].CertificateArn' 2>/dev/null || echo "$certificates" | grep -o '"CertificateArn":"arn:aws:acm:[^"]*"' | sed 's/"CertificateArn":"//g' | sed 's/"//g')"
     
     # 方法2: 通過標籤搜索
     while IFS= read -r cert_arn; do
         if [ ! -z "$cert_arn" ]; then
             local tags contains_username
             tags=$(aws acm list-tags-for-certificate --certificate-arn "$cert_arn" --region "$aws_region" 2>/dev/null || echo '{"Tags":[]}')
-            contains_username=$(echo "$tags" | jq -r --arg username "$username" 'select(.Tags[] | select(.Key=="Name" or .Key=="User") | .Value | contains($username)) | true')
+            if ! contains_username=$(echo "$tags" | jq -r --arg username "$username" 'select(.Tags[] | select(.Key=="Name" or .Key=="User") | .Value | contains($username)) | true' 2>/dev/null); then
+                # 備用解析方法：使用 grep 檢查標籤
+                if echo "$tags" | grep -q "\"$username\""; then
+                    contains_username="true"
+                else
+                    contains_username=""
+                fi
+            fi
             
             if [[ "$contains_username" == "true" ]] && [[ ! " ${user_cert_arns[@]} " =~ " ${cert_arn} " ]]; then
                 user_cert_arns+=("$cert_arn")
                 echo -e "${GREEN}✓ 找到證書 (標籤匹配): $cert_arn${NC}"
             fi
         fi
-    done <<< "$(echo "$certificates" | jq -r '.CertificateSummaryList[].CertificateArn')"
+    done <<< "$(echo "$certificates" | jq -r '.CertificateSummaryList[].CertificateArn' 2>/dev/null || echo "$certificates" | grep -o '"CertificateArn":"arn:aws:acm:[^"]*"' | sed 's/"CertificateArn":"//g' | sed 's/"//g')"
     
     if [ ${#user_cert_arns[@]} -eq 0 ]; then
         echo -e "${YELLOW}未找到 ${username} 的證書${NC}"
@@ -253,7 +269,20 @@ check_current_connections() {
       --region "$aws_region")
     
     # 搜索用戶的連接
-    user_connections=$(echo "$connections" | jq -r --arg username "$username" '.Connections[] | select(.CommonName | contains($username)) | .ConnectionId')
+    if ! user_connections=$(echo "$connections" | jq -r --arg username "$username" '.Connections[] | select(.CommonName | contains($username)) | .ConnectionId' 2>/dev/null); then
+        # 備用解析方法：使用 grep 和 sed
+        user_connections=$(echo "$connections" | grep -o '"ConnectionId":"[^"]*"' | sed 's/"ConnectionId":"//g' | sed 's/"//g' | while read conn_id; do
+            if echo "$connections" | grep -A 5 -B 5 "$conn_id" | grep -q "\"$username\""; then
+                echo "$conn_id"
+            fi
+        done)
+    fi
+    
+    # 驗證解析結果
+    if ! validate_json_parse_result "$user_connections" "用戶連接ID" ""; then
+        log_message "警告: 無法解析用戶連接信息"
+        user_connections=""
+    fi
     
     if [ ! -z "$user_connections" ]; then
         echo -e "${RED}⚠ 發現用戶的活躍連接:${NC}"

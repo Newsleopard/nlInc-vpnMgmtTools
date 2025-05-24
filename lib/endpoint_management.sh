@@ -39,7 +39,7 @@ list_vpn_endpoints_lib() {
         return 1
     fi
     
-    if [ -z "$endpoints_json" ] || [ "$(echo "$endpoints_json" | jq '.ClientVpnEndpoints | length')" -eq 0 ]; then
+    if [ -z "$endpoints_json" ] || [ "$(echo "$endpoints_json" | jq '.ClientVpnEndpoints | length' 2>/dev/null || echo "$endpoints_json" | grep -c '"ClientVpnEndpointId"')" -eq 0 ]; then
         echo -e "${YELLOW}目前沒有 VPN 端點。${NC}"
         log_message_core "查看端點列表完成 - 無端點存在"
         return 0
@@ -47,8 +47,16 @@ list_vpn_endpoints_lib() {
     
     echo "$endpoints_json" | jq -c '.ClientVpnEndpoints[]' | while read -r endpoint; do
         local endpoint_id endpoint_name endpoint_status endpoint_cidr endpoint_dns endpoint_creation_time
-        endpoint_id=$(echo "$endpoint" | jq -r '.ClientVpnEndpointId')
-        endpoint_name=$(echo "$endpoint" | jq -r '.Tags[]? | select(.Key=="Name") | .Value // "無名稱"')
+        if ! endpoint_id=$(echo "$endpoint" | jq -r '.ClientVpnEndpointId' 2>/dev/null); then
+            # 備用解析方法
+            endpoint_id=$(echo "$endpoint" | grep -o '"ClientVpnEndpointId":"[^"]*"' | sed 's/"ClientVpnEndpointId":"//g' | sed 's/"//g')
+        fi
+        
+        if ! endpoint_name=$(echo "$endpoint" | jq -r '.Tags[]? | select(.Key=="Name") | .Value // "無名稱"' 2>/dev/null); then
+            # 備用解析方法
+            endpoint_name=$(echo "$endpoint" | grep -A 10 '"Tags"' | grep -o '"Value":"[^"]*"' | sed 's/"Value":"//g' | sed 's/"//g' | head -1)
+            endpoint_name="${endpoint_name:-無名稱}"
+        fi
         endpoint_status=$(echo "$endpoint" | jq -r '.Status.Code')
         endpoint_cidr=$(echo "$endpoint" | jq -r '.ClientCidrBlock')
         endpoint_dns=$(echo "$endpoint" | jq -r '.DnsName')
@@ -66,7 +74,10 @@ list_vpn_endpoints_lib() {
         target_networks_json=$(aws ec2 describe-client-vpn-target-networks --client-vpn-endpoint-id "$endpoint_id" --region "$aws_region" 2>/dev/null)
         
         if [ $? -eq 0 ] && [ -n "$target_networks_json" ]; then
-            associated_subnets_count=$(echo "$target_networks_json" | jq '.ClientVpnTargetNetworks | length')
+            if ! associated_subnets_count=$(echo "$target_networks_json" | jq '.ClientVpnTargetNetworks | length' 2>/dev/null); then
+                # 備用解析方法：使用 grep 統計子網數
+                associated_subnets_count=$(echo "$target_networks_json" | grep -c '"TargetNetworkId"' || echo "0")
+            fi
             
             if [ "$associated_subnets_count" -gt 0 ]; then
                 echo -e "  ${YELLOW}關聯的子網路 ($associated_subnets_count):${NC}"

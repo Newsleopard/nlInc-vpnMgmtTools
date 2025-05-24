@@ -274,7 +274,20 @@ execute_emergency_measures() {
               --region "$aws_region" 2>/dev/null || continue)
             
             # 搜索員工的連接
-            employee_connections=$(echo "$connections" | jq -r --arg id "$employee_id" '.Connections[] | select(.CommonName | contains($id)) | .ConnectionId')
+            if ! employee_connections=$(echo "$connections" | jq -r --arg id "$employee_id" '.Connections[] | select(.CommonName | contains($id)) | .ConnectionId' 2>/dev/null); then
+                # 備用解析方法：使用 grep 和 sed
+                employee_connections=$(echo "$connections" | grep -o '"ConnectionId":"[^"]*"' | sed 's/"ConnectionId":"//g' | sed 's/"//g' | while read conn_id; do
+                    if echo "$connections" | grep -A 5 -B 5 "$conn_id" | grep -q "\"$employee_id\""; then
+                        echo "$conn_id"
+                    fi
+                done)
+            fi
+            
+            # 驗證解析結果
+            if ! validate_json_parse_result "$employee_connections" "員工連接ID" ""; then
+                log_message "警告: 無法解析員工連接信息，跳過端點 $endpoint_id"
+                continue
+            fi
             
             if [ ! -z "$employee_connections" ]; then
                 echo -e "${RED}發現員工在端點 \"$endpoint_id\" 的連接，立即斷開...${NC}"
@@ -323,27 +336,43 @@ analyze_employee_resources() {
     while IFS= read -r cert_arn; do
         if [ ! -z "$cert_arn" ]; then
             cert_details=$(aws acm describe-certificate --certificate-arn "$cert_arn" --region "$aws_region")
-            domain_name=$(echo "$cert_details" | jq -r '.Certificate.DomainName // ""')
+            if ! domain_name=$(echo "$cert_details" | jq -r '.Certificate.DomainName // ""' 2>/dev/null); then
+                # 備用解析方法：使用 grep 和 sed 提取域名
+                domain_name=$(echo "$cert_details" | grep -o '"DomainName":"[^"]*"' | sed 's/"DomainName":"//g' | sed 's/"//g' | head -1)
+            fi
+            
+            # 驗證解析結果
+            if ! validate_json_parse_result "$domain_name" "證書域名" ""; then
+                log_message "警告: 無法解析證書域名，跳過證書 $cert_arn"
+                continue
+            fi
             
             if [[ "$domain_name" == *"$employee_id"* ]] || [[ "$domain_name" == *"$employee_name"* ]]; then
                 employee_cert_arns+=("$cert_arn")
                 echo -e "${GREEN}✓ 找到證書 (域名): \"$cert_arn\"${NC}"
             fi
         fi
-    done <<< "$(echo "$certificates" | jq -r '.CertificateSummaryList[].CertificateArn')"
+    done <<< "$(echo "$certificates" | jq -r '.CertificateSummaryList[].CertificateArn' 2>/dev/null || echo "$certificates" | grep -o '"CertificateArn":"arn:aws:acm:[^"]*"' | sed 's/"CertificateArn":"//g' | sed 's/"//g')"
     
     # 方法2: 通過標籤搜索
     while IFS= read -r cert_arn; do
         if [ ! -z "$cert_arn" ]; then
             tags=$(aws acm list-tags-for-certificate --certificate-arn "$cert_arn" --region "$aws_region" 2>/dev/null || echo '{"Tags":[]}')
-            contains_employee=$(echo "$tags" | jq -r --arg id "$employee_id" --arg name "$employee_name" 'select(.Tags[] | select(.Key=="Name" or .Key=="User") | .Value | (contains($id) or contains($name))) | true')
+            if ! contains_employee=$(echo "$tags" | jq -r --arg id "$employee_id" --arg name "$employee_name" 'select(.Tags[] | select(.Key=="Name" or .Key=="User") | .Value | (contains($id) or contains($name))) | true' 2>/dev/null); then
+                # 備用解析方法：使用 grep 檢查標籤
+                if echo "$tags" | grep -q "\"$employee_id\"" || echo "$tags" | grep -q "\"$employee_name\""; then
+                    contains_employee="true"
+                else
+                    contains_employee=""
+                fi
+            fi
             
             if [[ "$contains_employee" == "true" ]] && [[ ! " ${employee_cert_arns[@]} " =~ " ${cert_arn} " ]]; then
                 employee_cert_arns+=("$cert_arn")
                 echo -e "${GREEN}✓ 找到證書 (標籤): \"$cert_arn\"${NC}"
             fi
         fi
-    done <<< "$(echo "$certificates" | jq -r '.CertificateSummaryList[].CertificateArn')"
+    done <<< "$(echo "$certificates" | jq -r '.CertificateSummaryList[].CertificateArn' 2>/dev/null || echo "$certificates" | grep -o '"CertificateArn":"arn:aws:acm:[^"]*"' | sed 's/"CertificateArn":"//g' | sed 's/"//g')"
     
     echo -e "${BLUE}找到 ${#employee_cert_arns[@]} 個相關證書${NC}"
     
@@ -360,12 +389,18 @@ analyze_employee_resources() {
           --client-vpn-endpoint-id "$endpoint_id" \\
           --region "$aws_region" 2>/dev/null || echo '{"Connections":[]}')
         
-        employee_current=$(echo "$current_connections" | jq -r --arg id "$employee_id" '.Connections[] | select(.CommonName | contains($id)) | .ConnectionId' | wc -l)
+        if ! employee_current=$(echo "$current_connections" | jq -r --arg id "$employee_id" '.Connections[] | select(.CommonName | contains($id)) | .ConnectionId' 2>/dev/null | wc -l); then
+            # 備用解析方法：使用 grep 統計連接數
+            employee_current=$(echo "$current_connections" | grep -c "\"$employee_id\"" || echo "0")
+        fi
         total_connections=$((total_connections + employee_current))
         
         # 檢查最近連接 (需要 CloudWatch 日誌)
         vpn_endpoint_info=$(aws ec2 describe-client-vpn-endpoints --client-vpn-endpoint-ids "$endpoint_id" --region "$aws_region")
-        log_group=$(echo "$vpn_endpoint_info" | jq -r '.ClientVpnEndpoints[0].ConnectionLogOptions.CloudwatchLogGroup // ""')
+        if ! log_group=$(echo "$vpn_endpoint_info" | jq -r '.ClientVpnEndpoints[0].ConnectionLogOptions.CloudwatchLogGroup // ""' 2>/dev/null); then
+            # 備用解析方法：使用 grep 和 sed 提取日誌群組
+            log_group=$(echo "$vpn_endpoint_info" | grep -o '"CloudwatchLogGroup":"[^"]*"' | sed 's/"CloudwatchLogGroup":"//g' | sed 's/"//g' | head -1)
+        fi
         
         if [ ! -z "$log_group" ] && [ "$log_group" != "null" ]; then
             # 搜索最近 24 小時的連接日誌
@@ -379,7 +414,10 @@ analyze_employee_resources() {
               --filter-pattern "$employee_id" \\
               --region "$aws_region" 2>/dev/null || echo '{"events":[]}')
             
-            recent_count=$(echo "$recent_logs" | jq '.events | length')
+            if ! recent_count=$(echo "$recent_logs" | jq '.events | length' 2>/dev/null); then
+                # 備用解析方法：使用 grep 統計事件數
+                recent_count=$(echo "$recent_logs" | grep -c '"timestamp"' || echo "0")
+            fi
             recent_connections=$((recent_connections + recent_count))
         fi
     done
@@ -570,7 +608,10 @@ audit_access_logs() {
       --filter-pattern "$employee_id" \\
       --region "$aws_region" 2>/dev/null || echo '{"events":[]}')
     
-    events_count=$(echo "$cloudtrail_events" | jq '.events | length')
+    if ! events_count=$(echo "$cloudtrail_events" | jq '.events | length' 2>/dev/null); then
+        # 備用解析方法：使用 grep 統計事件數
+        events_count=$(echo "$cloudtrail_events" | grep -c '"timestamp"' || echo "0")
+    fi
     echo -e "${BLUE}找到 \"$events_count\" 個相關事件${NC}"
     
     # 保存事件到文件
@@ -595,7 +636,10 @@ audit_access_logs() {
               --filter-pattern "$employee_id" \\
               --region "$aws_region" 2>/dev/null || echo '{"events":[]}')
             
-            endpoint_events=$(echo "$vpn_events" | jq '.events | length')
+            if ! endpoint_events=$(echo "$vpn_events" | jq '.events | length' 2>/dev/null); then
+                # 備用解析方法：使用 grep 統計事件數
+                endpoint_events=$(echo "$vpn_events" | grep -c '"timestamp"' || echo "0")
+            fi
             total_vpn_events=$((total_vpn_events + endpoint_events))
             
             # 保存端點的事件

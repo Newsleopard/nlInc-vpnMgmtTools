@@ -168,7 +168,7 @@ setup_user_info() {
     
     # 獲取用戶名
     read -p "請輸入您的用戶名或姓名 (僅使用英文字母和數字，不含空格): " username
-    username=$(echo "$username" | tr -cd \'[:alnum:]\')
+    username=$(echo "$username" | tr -cd '[:alnum:]')
     
     if [ -z "$username" ]; then
         echo -e "${RED}用戶名不能為空${NC}"
@@ -185,7 +185,7 @@ setup_user_info() {
     fi
     
     # 更新配置文件
-    sed -i \'\' "s/USER_NAME=\\\"\\\"/USER_NAME=\\\"$username\\\"/" "$USER_CONFIG_FILE"
+    sed -i '' "s/USER_NAME=\"\"/USER_NAME=\"$username\"/" "$USER_CONFIG_FILE"
     
     echo -e "${GREEN}用戶資訊設定完成！${NC}"
     log_message "用戶資訊已設定: $username"
@@ -334,13 +334,22 @@ import_certificate() {
       --region "$AWS_REGION" \\
       --tags Key=Name,Value="VPN-Client-${USER_NAME}" Key=Purpose,Value="ClientVPN" Key=User,Value="$USER_NAME")
     
-    client_cert_arn=$(echo "$client_cert" | jq -r \'.CertificateArn\')
+    if ! client_cert_arn=$(echo "$client_cert" | jq -r '.CertificateArn' 2>/dev/null); then
+        # 備用解析方法：使用 grep 和 sed 提取證書 ARN
+        client_cert_arn=$(echo "$client_cert" | grep -o '"CertificateArn":"arn:aws:acm:[^"]*"' | sed 's/"CertificateArn":"//g' | sed 's/"//g' | head -1)
+    fi
+    
+    # 驗證解析結果
+    if ! validate_json_parse_result "$client_cert_arn" "客戶端證書ARN" "validate_certificate_arn"; then
+        handle_error "無法獲取客戶端證書 ARN"
+        return 1
+    fi
     
     echo -e "${GREEN}✓ 證書導入完成${NC}"
     echo -e "證書 ARN: ${BLUE}$client_cert_arn${NC}"
     
     # 更新配置文件
-    sed -i \'\' "s/CLIENT_CERT_ARN=\\\"\\\"/CLIENT_CERT_ARN=\\\"$client_cert_arn\\\"/" "$USER_CONFIG_FILE"
+    sed -i '' "s/CLIENT_CERT_ARN=\"\"/CLIENT_CERT_ARN=\"$client_cert_arn\"/" "$USER_CONFIG_FILE"
     
     log_message "證書已導入到 ACM: $client_cert_arn"
 }
