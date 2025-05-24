@@ -23,8 +23,8 @@ source "$SCRIPT_DIR/lib/core_functions.sh"
 # 阻止腳本在出錯時繼續執行
 set -e
 
-# 記錄函數
-log_message() {
+# 記錄函數 (團隊設置專用)
+log_team_setup_message() {
     echo "$(date '+%Y-%m-%d %H:%M:%S'): $1" >> "$LOG_FILE"
 }
 
@@ -93,7 +93,7 @@ check_team_prerequisites() {
     fi
     
     echo -e "${GREEN}所有必要工具已準備就緒！${NC}"
-    log_message "必要工具檢查完成"
+    log_team_setup_message "必要工具檢查完成"
 }
 
 # 設定 AWS 配置
@@ -224,7 +224,7 @@ EOF
     # 設置配置文件權限
     chmod 600 "$USER_CONFIG_FILE"
     
-    log_message "AWS 配置已完成，端點 ID: $endpoint_id"
+    log_team_setup_message "AWS 配置已完成，端點 ID: $endpoint_id"
 }
 
 # 設定用戶資訊
@@ -255,7 +255,7 @@ setup_user_info() {
     sed -i '' "s/USERNAME=\"\"/USERNAME=\"$username\"/" "$USER_CONFIG_FILE"
     
     echo -e "${GREEN}用戶資訊設定完成！${NC}"
-    log_message "用戶資訊已設定: $username"
+    log_team_setup_message "用戶資訊已設定: $username"
 }
 
 # 生成個人客戶端證書
@@ -387,7 +387,7 @@ generate_client_certificate() {
         chmod 600 "$cert_dir/${USERNAME}.key"
     fi
     
-    log_message "客戶端證書已準備完成"
+    log_team_setup_message "客戶端證書已準備完成"
 }
 
 # 導入證書到 ACM
@@ -435,7 +435,7 @@ import_certificate() {
     # 更新配置文件
     sed -i '' "s/CLIENT_CERT_ARN=\"\"/CLIENT_CERT_ARN=\"$client_cert_arn\"/" "$USER_CONFIG_FILE"
     
-    log_message "證書已導入到 ACM: $client_cert_arn"
+    log_team_setup_message "證書已導入到 ACM: $client_cert_arn"
 }
 
 # 設置 VPN 客戶端
@@ -507,7 +507,7 @@ setup_vpn_client() {
     echo -e "${GREEN}VPN 客戶端設置完成！${NC}"
     echo -e "您的配置文件: ${BLUE}$config_dir/${USERNAME}-config.ovpn${NC}"
     
-    log_message "VPN 客戶端設置完成"
+    log_team_setup_message "VPN 客戶端設置完成"
 }
 
 # 顯示連接指示
@@ -603,11 +603,11 @@ main() {
     # 可選的連接測試
     test_connection
     
-    log_message "團隊成員 VPN 設置完成"
+    log_team_setup_message "團隊成員 VPN 設置完成"
 }
 
 # 記錄腳本啟動
-log_message "團隊成員 VPN 設置腳本已啟動"
+log_team_setup_message "團隊成員 VPN 設置腳本已啟動"
 
 # 執行主程序
 main

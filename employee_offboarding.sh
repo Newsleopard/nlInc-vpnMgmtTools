@@ -63,7 +63,7 @@ validate_employee_info() {
 }
 
 # 記錄函數 (增強版，整合核心日誌)
-log_message() {
+log_offboarding_message() {
     mkdir -p "$OFFBOARDING_LOG_DIR"
     echo "$(date '+%Y-%m-%d %H:%M:%S'): $1" >> "$LOG_FILE"
     log_message_core "Offboarding: $1"  # 同時記錄到核心日誌
@@ -154,7 +154,7 @@ check_system_readiness() {
     fi
     
     echo -e "${GREEN}✓ 系統準備檢查完成${NC}"
-    log_message "系統準備檢查完成，操作者: \"$admin_identity\""
+    log_offboarding_message "系統準備檢查完成，操作者: \"$admin_identity\""
     return 0
 }
 
@@ -249,7 +249,7 @@ collect_employee_info() {
         return 1
     fi
     
-    log_message "收集離職人員資訊: \"$employee_name\" (\"$employee_id\"), 類型: \"$termination_type\", 風險: \"$risk_level\""
+    log_offboarding_message "收集離職人員資訊: \"$employee_name\" (\"$employee_id\"), 類型: \"$termination_type\", 風險: \"$risk_level\""
 }
 
 # 執行緊急安全措施
@@ -285,7 +285,7 @@ execute_emergency_measures() {
             
             # 驗證解析結果
             if ! validate_json_parse_result "$employee_connections" "員工連接ID" ""; then
-                log_message "警告: 無法解析員工連接信息，跳過端點 $endpoint_id"
+                log_offboarding_message "警告: 無法解析員工連接信息，跳過端點 $endpoint_id"
                 continue
             fi
             
@@ -318,7 +318,7 @@ execute_emergency_measures() {
         fi
         
         echo -e "${GREEN}✓ 緊急安全措施執行完成${NC}"
-        log_message "執行緊急安全措施完成"
+        log_offboarding_message "執行緊急安全措施完成"
     fi
 }
 
@@ -343,7 +343,7 @@ analyze_employee_resources() {
             
             # 驗證解析結果
             if ! validate_json_parse_result "$domain_name" "證書域名" ""; then
-                log_message "警告: 無法解析證書域名，跳過證書 $cert_arn"
+                log_offboarding_message "警告: 無法解析證書域名，跳過證書 $cert_arn"
                 continue
             fi
             
@@ -426,7 +426,7 @@ analyze_employee_resources() {
     echo -e "  當前活躍連接: ${YELLOW}\"$total_connections\"${NC}"
     echo -e "  最近 24 小時連接事件: ${YELLOW}\"$recent_connections\"${NC}"
     
-    log_message "資源分析完成 - 證書: ${#employee_cert_arns[@]}, 當前連接: \"$total_connections\", 最近連接: \"$recent_connections\""
+    log_offboarding_message "資源分析完成 - 證書: ${#employee_cert_arns[@]}, 當前連接: \"$total_connections\", 最近連接: \"$recent_connections\""
 }
 
 # 撤銷 VPN 訪問權限
@@ -468,7 +468,7 @@ revoke_vpn_access() {
     echo -e "  成功撤銷: ${GREEN}${#revoked_certs[@]}${NC} 個證書"
     echo -e "  撤銷失敗: ${RED}${#failed_certs[@]}${NC} 個證書"
     
-    log_message "VPN 訪問權限撤銷完成 - 成功: ${#revoked_certs[@]}, 失敗: ${#failed_certs[@]}"
+    log_offboarding_message "VPN 訪問權限撤銷完成 - 成功: ${#revoked_certs[@]}, 失敗: ${#failed_certs[@]}"
 }
 
 # 清理 IAM 權限
@@ -514,7 +514,7 @@ cleanup_iam_permissions() {
         cleanup_single_iam_user "$employee_id"
     fi
     
-    log_message "IAM 權限清理完成"
+    log_offboarding_message "IAM 權限清理完成"
 }
 
 # 清理單個 IAM 用戶
@@ -674,7 +674,7 @@ EOF
     
     echo -e "${GREEN}✓ 審計日誌已保存到: \"$audit_dir\"${NC}"
     
-    log_message "訪問日誌審計完成，事件數: CloudTrail(\"$events_count\"), VPN(\"$total_vpn_events\")"
+    log_offboarding_message "訪問日誌審計完成，事件數: CloudTrail(\"$events_count\"), VPN(\"$total_vpn_events\")"
 }
 
 # 檢查殘留資源
@@ -736,7 +736,7 @@ check_residual_resources() {
         echo -e "${GREEN}✓ 未發現殘留的證書${NC}"
     fi
     
-    log_message "殘留資源檢查完成"
+    log_offboarding_message "殘留資源檢查完成"
 }
 
 # 生成安全事件報告
@@ -841,7 +841,7 @@ EOF
     
     echo -e "${GREEN}✓ 安全事件報告已生成: \"$security_report_file\"${NC}"
     
-    log_message "安全事件報告已生成"
+    log_offboarding_message "安全事件報告已生成"
 }
 
 # 生成離職檢查清單
@@ -936,7 +936,7 @@ EOF
     
     CHECKLIST_FILE="$checklist_file"
     
-    log_message "離職檢查清單已生成"
+    log_offboarding_message "離職檢查清單已生成"
 }
 
 # 最終確認和清理
@@ -1009,7 +1009,7 @@ final_confirmation_and_cleanup() {
     
     echo -e "${GREEN}✓ 最終確認和清理完成${NC}"
     
-    log_message "離職處理程序全部完成"
+    log_offboarding_message "離職處理程序全部完成"
 }
 
 # 顯示完成摘要
@@ -1067,11 +1067,11 @@ main() {
     # 顯示完成摘要
     show_completion_summary
     
-    log_message "員工離職安全處理程序完全完成"
+    log_offboarding_message "員工離職安全處理程序完全完成"
 }
 
 # 記錄腳本啟動
-log_message "員工離職安全處理腳本已啟動"
+log_offboarding_message "員工離職安全處理腳本已啟動"
 
 # 執行主程序
 main

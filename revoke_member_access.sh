@@ -14,8 +14,8 @@ MAIN_SCRIPT_DIR="${MAIN_SCRIPT_DIR:-$(dirname "$SCRIPT_DIR")}"
 CONFIG_FILE="${CONFIG_FILE_PATH:-$MAIN_SCRIPT_DIR/config/vpn_config.conf}"
 EASYRSA_DIR_REVOKE="${EASYRSA_PATH:-$MAIN_SCRIPT_DIR/easy-rsa-env}"
 
-# 載入核心函式庫 (從主腳本的 lib 目錄)
-CORE_FUNCTIONS_LIB="$MAIN_SCRIPT_DIR/lib/core_functions.sh"
+# 載入核心函式庫 (從當前腳本的 lib 目錄)
+CORE_FUNCTIONS_LIB="$SCRIPT_DIR/lib/core_functions.sh"
 if [ -f "$CORE_FUNCTIONS_LIB" ]; then
     # shellcheck source=lib/core_functions.sh
     source "$CORE_FUNCTIONS_LIB"
@@ -25,8 +25,8 @@ else
     exit 1
 fi
 
-# 載入憑證管理函式庫 (從主腳本的 lib 目錄)
-CERT_MANAGEMENT_LIB="$MAIN_SCRIPT_DIR/lib/cert_management.sh"
+# 載入憑證管理函式庫 (從當前腳本的 lib 目錄)
+CERT_MANAGEMENT_LIB="$SCRIPT_DIR/lib/cert_management.sh"
 if [ -f "$CERT_MANAGEMENT_LIB" ]; then
     # shellcheck source=lib/cert_management.sh
     source "$CERT_MANAGEMENT_LIB"
@@ -40,8 +40,8 @@ fi
 # 阻止腳本在出錯時繼續執行
 set -e
 
-# 此腳本專用日誌函式 (如果需要與 core_functions.sh 中的日誌分開)
-log_message() {
+# 此腳本專用日誌函式 (撤銷操作專用，與 core_functions.sh 中的日誌分開)
+log_revocation_message() {
     mkdir -p "$REVOCATION_LOG_DIR"
     echo "$(date '+%Y-%m-%d %H:%M:%S'): $1" >> "$LOG_FILE"
 }
@@ -68,12 +68,12 @@ show_welcome() {
 }
 
 # 檢查必要工具和權限
-check_prerequisites() {
+check_revocation_prerequisites() {
     echo -e "\\n${YELLOW}[1/7] 檢查必要工具和權限...${NC}"
     
     # 使用 core_functions.sh 中的 check_prerequisites
     if ! check_prerequisites; then
-        log_message "先決條件檢查失敗，腳本終止。"
+        log_revocation_message "先決條件檢查失敗，腳本終止。"
         exit 1
     fi
     
@@ -81,7 +81,7 @@ check_prerequisites() {
     if [ ! -f ~/.aws/credentials ] || [ ! -f ~/.aws/config ]; then
         echo -e "${RED}未找到 AWS 配置${NC}"
         echo -e "${YELLOW}請先配置 AWS CLI${NC}"
-        log_message "AWS 配置未找到"
+        log_revocation_message "AWS 配置未找到"
         exit 1
     fi
     
@@ -92,13 +92,13 @@ check_prerequisites() {
     
     if [[ "$aws_user" == "failed" ]]; then
         echo -e "${RED}AWS 連接失敗${NC}"
-        log_message "AWS 連接失敗"
+        log_revocation_message "AWS 連接失敗"
         exit 1
     fi
     
     echo -e "${GREEN}✓ AWS 連接成功${NC}"
     echo -e "${BLUE}當前 AWS 身份: $aws_user${NC}"
-    log_message "AWS 連接成功，身份: $aws_user"
+    log_revocation_message "AWS 連接成功，身份: $aws_user"
     
     # 檢查管理員權限
     local admin_check
@@ -107,12 +107,12 @@ check_prerequisites() {
     if [[ "$admin_check" == "failed" ]]; then
         echo -e "${RED}權限不足：無法訪問 Client VPN 端點${NC}"
         echo -e "${YELLOW}請確認您有足夠的權限執行此操作${NC}"
-        log_message "權限檢查失敗：無法訪問 Client VPN 端點"
+        log_revocation_message "權限檢查失敗：無法訪問 Client VPN 端點"
         exit 1
     fi
     
     echo -e "${GREEN}✓ 權限檢查通過${NC}"
-    log_message "權限檢查完成，操作者: $aws_user"
+    log_revocation_message "權限檢查完成，操作者: $aws_user"
 }
 
 # 獲取撤銷資訊
@@ -143,7 +143,7 @@ get_revocation_info() {
     
     if [[ "$endpoint_check" == "not_found" ]]; then
         echo -e "${RED}無法找到指定的 VPN 端點${NC}"
-        log_message "無法找到指定的 VPN 端點: $endpoint_id"
+        log_revocation_message "無法找到指定的 VPN 端點: $endpoint_id"
         exit 1
     fi
     
@@ -180,7 +180,7 @@ get_revocation_info() {
     echo -e "  AWS 區域: ${YELLOW}$aws_region${NC}"
     echo -e "  撤銷原因: ${YELLOW}$revocation_reason${NC}"
     
-    log_message "準備撤銷用戶 $username 的訪問權限，原因: $revocation_reason"
+    log_revocation_message "準備撤銷用戶 $username 的訪問權限，原因: $revocation_reason"
 }
 
 # 搜尋用戶證書
@@ -208,7 +208,7 @@ find_user_certificates() {
             
             # 驗證解析結果
             if ! validate_json_parse_result "$domain_name" "證書域名" ""; then
-                log_message "警告: 無法解析證書域名，跳過證書 $cert_arn"
+                log_revocation_message "警告: 無法解析證書域名，跳過證書 $cert_arn"
                 continue
             fi
             
@@ -253,7 +253,7 @@ find_user_certificates() {
         echo -e "${GREEN}找到 ${#user_cert_arns[@]} 個用戶證書${NC}"
     fi
     
-    log_message "找到 ${#user_cert_arns[@]} 個 $username 的證書"
+    log_revocation_message "找到 ${#user_cert_arns[@]} 個 $username 的證書"
 }
 
 # 檢查當前連接
@@ -280,7 +280,7 @@ check_current_connections() {
     
     # 驗證解析結果
     if ! validate_json_parse_result "$user_connections" "用戶連接ID" ""; then
-        log_message "警告: 無法解析用戶連接信息"
+        log_revocation_message "警告: 無法解析用戶連接信息"
         user_connections=""
     fi
     
@@ -307,7 +307,7 @@ check_current_connections() {
         echo -e "${GREEN}✓ 未發現用戶的活躍連接${NC}"
     fi
     
-    log_message "檢查並處理了 $username 的活躍連接"
+    log_revocation_message "檢查並處理了 $username 的活躍連接"
 }
 
 # 撤銷證書和權限
@@ -363,7 +363,7 @@ revoke_certificates() {
         done
     fi
     
-    log_message "證書撤銷完成，成功: ${#revoked_certs[@]}, 失敗: ${#failed_certs[@]}"
+    log_revocation_message "證書撤銷完成，成功: ${#revoked_certs[@]}, 失敗: ${#failed_certs[@]}"
 }
 
 # 檢查和移除 IAM 權限
@@ -440,7 +440,7 @@ check_iam_permissions() {
         echo -e "${GREEN}✓ 未找到同名的 IAM 用戶${NC}"
     fi
     
-    log_message "IAM 權限檢查和處理完成"
+    log_revocation_message "IAM 權限檢查和處理完成"
 }
 
 # 生成撤銷報告
@@ -508,7 +508,7 @@ EOF
     echo -e "  IAM 用戶: $([ "$iam_user_exists" != "not_found" ] && echo "${YELLOW}已處理${NC}" || echo "${GREEN}未涉及${NC}")"
     echo -e "  報告文件: ${BLUE}$report_file${NC}"
     
-    log_message "撤銷報告已生成: $report_file"
+    log_revocation_message "撤銷報告已生成: $report_file"
 }
 
 # 顯示最終指示
@@ -559,11 +559,11 @@ confirm_revocation() {
     
     if [ "$final_confirm" != "REVOKE" ]; then
         echo -e "${BLUE}撤銷操作已取消${NC}"
-        log_message "用戶取消了 $username 的撤銷操作"
+        log_revocation_message "用戶取消了 $username 的撤銷操作"
         exit 0
     fi
     
-    log_message "用戶確認撤銷 $username 的訪問權限"
+    log_revocation_message "用戶確認撤銷 $username 的訪問權限"
 }
 
 # 主函數
@@ -572,7 +572,7 @@ main() {
     show_welcome
     
     # 執行撤銷步驟
-    check_prerequisites
+    check_revocation_prerequisites
     get_revocation_info
     find_user_certificates
     
@@ -588,11 +588,11 @@ main() {
     # 顯示最終指示
     show_final_instructions
     
-    log_message "訪問權限撤銷操作完成"
+    log_revocation_message "訪問權限撤銷操作完成"
 }
 
 # 記錄腳本啟動
-log_message "訪問權限撤銷腳本已啟動"
+log_revocation_message "訪問權限撤銷腳本已啟動"
 
 # 執行主程序
 main
