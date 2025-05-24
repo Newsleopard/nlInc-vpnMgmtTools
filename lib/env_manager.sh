@@ -349,6 +349,144 @@ env_init() {
     echo -e "${GREEN}✅ 環境管理器初始化完成${NC}"
 }
 
+# 腳本整合相關函數
+# ===================
+
+# 為其他腳本提供環境初始化
+env_init_for_script() {
+    local script_name="$1"
+    
+    # 載入當前環境
+    load_current_env
+    
+    # 載入環境配置
+    if ! env_load_config "$CURRENT_ENVIRONMENT"; then
+        echo -e "${RED}錯誤: 無法載入環境配置${NC}" >&2
+        return 1
+    fi
+    
+    # 設定環境變數供其他腳本使用
+    export CURRENT_VPN_ENV="$CURRENT_ENVIRONMENT"
+    export VPN_ENV_DISPLAY_NAME="$ENV_DISPLAY_NAME"
+    export VPN_ENV_ICON="$ENV_ICON"
+    export VPN_ENV_COLOR="$ENV_COLOR"
+    
+    # 記錄腳本啟動
+    if [[ -n "$script_name" ]]; then
+        log_env_action "SCRIPT_START" "$script_name started in $CURRENT_ENVIRONMENT environment"
+    fi
+    
+    return 0
+}
+
+# 驗證環境是否適合執行特定操作
+env_validate_operation() {
+    local operation="$1"
+    local env_name="${2:-$CURRENT_ENVIRONMENT}"
+    
+    # 載入環境配置
+    local env_file="$PROJECT_ROOT/${env_name}.env"
+    if [[ ! -f "$env_file" ]]; then
+        echo -e "${RED}錯誤: 環境 $env_name 不存在${NC}" >&2
+        return 1
+    fi
+    
+    source "$env_file"
+    
+    # Production 環境的特殊驗證
+    if [[ "$env_name" == "production" ]]; then
+        case "$operation" in
+            "CREATE_ENDPOINT"|"DELETE_ENDPOINT"|"MANAGE_ENDPOINT"|"TEAM_MEMBER_SETUP"|"REVOKE_ACCESS"|"EMPLOYEE_OFFBOARDING")
+                if [[ "$REQUIRE_OPERATION_CONFIRMATION" == "true" ]]; then
+                    echo -e "${RED}⚠️  Production 環境操作確認${NC}"
+                    echo -e "操作: $operation"
+                    echo -e "環境: ${ENV_ICON} ${ENV_DISPLAY_NAME}"
+                    echo ""
+                    read -p "確認在 Production 環境執行此操作？ [yes/NO]: " confirm
+                    if [[ ! "$confirm" =~ ^[Yy][Ee][Ss]$ ]]; then
+                        echo -e "${YELLOW}操作已取消${NC}"
+                        return 1
+                    fi
+                fi
+                ;;
+        esac
+    fi
+    
+    return 0
+}
+
+# 環境操作日誌記錄
+log_env_action() {
+    local action="$1"
+    local message="$2"
+    local timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    local user="${USER:-unknown}"
+    
+    # 確保日誌目錄存在
+    load_current_env
+    env_load_config "$CURRENT_ENVIRONMENT"
+    mkdir -p "$VPN_LOG_DIR"
+    
+    # 寫入環境操作日誌
+    local log_file="$VPN_LOG_DIR/env_operations.log"
+    echo "[$timestamp] [$user] [$action] $message" >> "$log_file"
+}
+
+# 獲取環境特定配置值
+env_get_config() {
+    local config_key="$1"
+    local env_name="${2:-$CURRENT_ENVIRONMENT}"
+    
+    # 載入環境配置
+    local env_file="$PROJECT_ROOT/${env_name}.env"
+    if [[ -f "$env_file" ]]; then
+        source "$env_file"
+        # 使用間接變數引用獲取配置值
+        echo "${!config_key}"
+    else
+        return 1
+    fi
+}
+
+# 設定環境特定的檔案路徑
+env_setup_paths() {
+    local env_name="${1:-$CURRENT_ENVIRONMENT}"
+    
+    env_load_config "$env_name"
+    
+    # 設定路徑環境變數
+    export VPN_ENDPOINT_CONFIG_FILE="$VPN_CONFIG_DIR/vpn_endpoint.conf"
+    export VPN_USER_CONFIG_FILE="$VPN_CONFIG_DIR/user_vpn.conf"
+    export VPN_CA_CERT_FILE="$VPN_CERT_DIR/ca.crt"
+    export VPN_SERVER_CERT_FILE="$VPN_CERT_DIR/server.crt"
+    export VPN_SERVER_KEY_FILE="$VPN_CERT_DIR/server.key"
+    export VPN_ADMIN_LOG_FILE="$VPN_LOG_DIR/vpn_admin.log"
+    export VPN_USER_LOG_FILE="$VPN_LOG_DIR/user_vpn_setup.log"
+    
+    # 確保目錄存在
+    mkdir -p "$VPN_CERT_DIR" "$VPN_CONFIG_DIR" "$VPN_LOG_DIR"
+}
+
+# 顯示環境感知的標題
+show_env_aware_header() {
+    local script_title="$1"
+    local env_name="${2:-$CURRENT_ENVIRONMENT}"
+    
+    # 載入環境配置
+    env_load_config "$env_name"
+    
+    echo -e "${BLUE}========================================================${NC}"
+    echo -e "${BLUE}           $script_title${NC}"
+    echo -e "${BLUE}========================================================${NC}"
+    echo -e ""
+    echo -e "當前環境: ${ENV_ICON} ${ENV_DISPLAY_NAME}"
+    if [[ "$env_name" == "production" ]]; then
+        echo -e "${RED}⚠️  您正在 Production 環境中操作${NC}"
+    fi
+    echo -e "${BLUE}========================================================${NC}"
+    echo -e ""
+}
+
 # 主程式入口點
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     case "${1:-}" in

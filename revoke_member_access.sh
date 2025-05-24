@@ -2,40 +2,32 @@
 
 # AWS Client VPN 撤銷團隊成員訪問權限腳本
 # 用途：安全撤銷特定團隊成員的 VPN 訪問權限
-# 版本：1.0
+# 版本：1.1 (環境感知版本)
 
-# 設定腳本目錄
+# 全域變數
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REVOCATION_LOG_DIR="$SCRIPT_DIR/revocation-logs"
+
+# 載入環境管理器 (必須第一個載入)
+source "$SCRIPT_DIR/lib/env_manager.sh"
+
+# 初始化環境
+if ! env_init_for_script "revoke_member_access.sh"; then
+    echo -e "${RED}錯誤: 無法初始化環境管理器${NC}"
+    exit 1
+fi
+
+# 設定環境特定路徑
+env_setup_paths
+
+# 環境感知的配置檔案
+REVOCATION_LOG_DIR="$ENV_LOG_DIR/revocation"
 LOG_FILE="$REVOCATION_LOG_DIR/revocation.log"
+CONFIG_FILE="$VPN_ENDPOINT_CONFIG_FILE"
+EASYRSA_DIR_REVOKE="$ENV_CERT_DIR/easy-rsa-env"
 
-# 從環境變數獲取主腳本傳遞的路徑，如果未設定則使用預設值
-MAIN_SCRIPT_DIR="${MAIN_SCRIPT_DIR:-$(dirname "$SCRIPT_DIR")}"
-CONFIG_FILE="${CONFIG_FILE_PATH:-$MAIN_SCRIPT_DIR/config/vpn_config.conf}"
-EASYRSA_DIR_REVOKE="${EASYRSA_PATH:-$MAIN_SCRIPT_DIR/easy-rsa-env}"
-
-# 載入核心函式庫 (從當前腳本的 lib 目錄)
-CORE_FUNCTIONS_LIB="$SCRIPT_DIR/lib/core_functions.sh"
-if [ -f "$CORE_FUNCTIONS_LIB" ]; then
-    # shellcheck source=lib/core_functions.sh
-    source "$CORE_FUNCTIONS_LIB"
-    log_message_core "revoke_member_access.sh: 核心函式庫已載入。日誌將寫入: $LOG_FILE_CORE"
-else
-    echo "錯誤: 核心函式庫 '$CORE_FUNCTIONS_LIB' 未找到。"
-    exit 1
-fi
-
-# 載入憑證管理函式庫 (從當前腳本的 lib 目錄)
-CERT_MANAGEMENT_LIB="$SCRIPT_DIR/lib/cert_management.sh"
-if [ -f "$CERT_MANAGEMENT_LIB" ]; then
-    # shellcheck source=lib/cert_management.sh
-    source "$CERT_MANAGEMENT_LIB"
-    log_message_core "revoke_member_access.sh: 憑證管理函式庫已載入。"
-else
-    echo "錯誤: 憑證管理函式庫 '$CERT_MANAGEMENT_LIB' 未找到。"
-    log_message_core "錯誤: revoke_member_access.sh - 憑證管理函式庫 '$CERT_MANAGEMENT_LIB' 未找到。"
-    exit 1
-fi
+# 載入核心函式庫
+source "$SCRIPT_DIR/lib/core_functions.sh"
+source "$SCRIPT_DIR/lib/cert_management.sh"
 
 # 阻止腳本在出錯時繼續執行
 set -e
@@ -49,9 +41,7 @@ log_revocation_message() {
 # 顯示歡迎訊息
 show_welcome() {
     clear
-    echo -e "${RED}========================================================${NC}"
-    echo -e "${RED}        AWS Client VPN 訪問權限撤銷工具               ${NC}"
-    echo -e "${RED}========================================================${NC}"
+    show_env_aware_header "AWS Client VPN 訪問權限撤銷工具"
     echo -e ""
     echo -e "${YELLOW}此工具用於撤銷團隊成員的 VPN 訪問權限${NC}"
     echo -e "${YELLOW}適用於以下情況：${NC}"
@@ -568,6 +558,14 @@ confirm_revocation() {
 
 # 主函數
 main() {
+    # 環境操作驗證
+    if ! env_validate_operation "REVOKE_ACCESS"; then
+        return 1
+    fi
+    
+    # 記錄操作開始
+    log_env_action "REVOKE_ACCESS_START" "開始撤銷用戶訪問權限"
+    
     # 顯示歡迎訊息
     show_welcome
     
@@ -588,7 +586,7 @@ main() {
     # 顯示最終指示
     show_final_instructions
     
-    log_revocation_message "訪問權限撤銷操作完成"
+    log_env_action "REVOKE_ACCESS_COMPLETE" "訪問權限撤銷操作完成"
 }
 
 # 記錄腳本啟動

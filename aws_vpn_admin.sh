@@ -7,8 +7,22 @@
 
 # 全域變數
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG_FILE="$SCRIPT_DIR/.vpn_config" # 修正 CONFIG_FILE 的定義
-LOG_FILE="$SCRIPT_DIR/vpn_admin.log" # LOG_FILE 保留在主腳本中，因為 core_functions.sh 中的 LOG_FILE_CORE 路徑不同
+
+# 載入環境管理器 (必須第一個載入)
+source "$SCRIPT_DIR/lib/env_manager.sh"
+
+# 初始化環境
+if ! env_init_for_script "aws_vpn_admin.sh"; then
+    echo -e "${RED}錯誤: 無法初始化環境管理器${NC}"
+    exit 1
+fi
+
+# 設定環境特定路徑
+env_setup_paths
+
+# 環境感知的配置檔案
+CONFIG_FILE="$VPN_ENDPOINT_CONFIG_FILE"
+LOG_FILE="$VPN_ADMIN_LOG_FILE"
 
 # 載入核心函式庫
 source "$SCRIPT_DIR/lib/core_functions.sh"
@@ -23,10 +37,7 @@ set -e
 # 顯示主選單
 show_menu() {
     clear
-    echo -e "${CYAN}========================================================${NC}"
-    echo -e "${CYAN}           AWS Client VPN 管理員控制台                ${NC}"
-    echo -e "${CYAN}========================================================${NC}"
-    echo -e ""
+    show_env_aware_header "AWS Client VPN 管理員控制台"
     echo -e "${BLUE}選擇操作：${NC}"
     echo -e "  ${GREEN}1.${NC} 建立新的 VPN 端點"
     echo -e "  ${GREEN}2.${NC} 查看現有 VPN 端點"
@@ -37,6 +48,7 @@ show_menu() {
     echo -e "  ${GREEN}7.${NC} 查看管理員指南"
     echo -e "  ${GREEN}8.${NC} 系統健康檢查"
     echo -e "  ${GREEN}9.${NC} 多 VPC 管理"
+    echo -e "  ${YELLOW}E.${NC} 環境管理"
     echo -e "  ${RED}10.${NC} 退出"
     echo -e ""
     echo -e "${CYAN}========================================================${NC}"
@@ -45,6 +57,14 @@ show_menu() {
 # 建立 VPN 端點
 create_vpn_endpoint() {
     echo -e "\\n${CYAN}=== 建立新的 VPN 端點 ===${NC}"
+    
+    # 環境操作驗證
+    if ! env_validate_operation "CREATE_ENDPOINT"; then
+        return 1
+    fi
+    
+    # 記錄操作開始
+    log_env_action "CREATE_ENDPOINT_START" "開始建立 VPN 端點"
     
     # 載入配置或執行初始設定
     if [ -f "$CONFIG_FILE" ]; then
@@ -869,7 +889,7 @@ main() {
     # 主循環
     while true; do
         show_menu
-        read -p "請選擇操作 (1-10): " choice
+        read -p "請選擇操作 (1-10, E): " choice
         
         case "$choice" in
             1)
@@ -898,6 +918,12 @@ main() {
                 ;;
             9)
                 manage_multi_vpc
+                ;;
+            E|e)
+                echo -e "\n${CYAN}=== 環境管理 ===${NC}"
+                "$SCRIPT_DIR/vpn_env.sh"
+                echo -e "\n${YELLOW}按任意鍵返回主選單...${NC}"
+                read -n 1
                 ;;
             10)
                 echo -e "${BLUE}正在退出...${NC}"

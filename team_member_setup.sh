@@ -2,20 +2,26 @@
 
 # AWS Client VPN 團隊成員設定腳本 for macOS
 # 用途：允許團隊成員連接到已存在的 AWS Client VPN 端點
-# 版本：1.1 (修復版)
-
-# 顏色設定
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-RED='\033[0;31m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+# 版本：1.2 (環境感知版本)
 
 # 全域變數
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-USER_CONFIG_FILE="$SCRIPT_DIR/.user_vpn_config"
-LOG_FILE="$SCRIPT_DIR/user_vpn_setup.log"
+
+# 載入環境管理器 (必須第一個載入)
+source "$SCRIPT_DIR/lib/env_manager.sh"
+
+# 初始化環境
+if ! env_init_for_script "team_member_setup.sh"; then
+    echo -e "${RED}錯誤: 無法初始化環境管理器${NC}"
+    exit 1
+fi
+
+# 設定環境特定路徑
+env_setup_paths
+
+# 環境感知的配置檔案
+USER_CONFIG_FILE="$USER_VPN_CONFIG_FILE"
+LOG_FILE="$TEAM_SETUP_LOG_FILE"
 
 # 載入核心函式庫
 source "$SCRIPT_DIR/lib/core_functions.sh"
@@ -34,9 +40,7 @@ log_team_setup_message() {
 # 顯示歡迎訊息
 show_welcome() {
     clear
-    echo -e "${CYAN}========================================================${NC}"
-    echo -e "${CYAN}          AWS Client VPN 團隊成員設定工具             ${NC}"
-    echo -e "${CYAN}========================================================${NC}"
+    show_env_aware_header "AWS Client VPN 團隊成員設定工具"
     echo -e ""
     echo -e "${BLUE}此工具將幫助您設定 AWS Client VPN 連接${NC}"
     echo -e "${BLUE}以便安全連接到生產環境進行除錯${NC}"
@@ -712,6 +716,14 @@ test_connection() {
 
 # 主函數
 main() {
+    # 環境操作驗證
+    if ! env_validate_operation "TEAM_MEMBER_SETUP"; then
+        return 1
+    fi
+    
+    # 記錄操作開始
+    log_env_action "TEAM_MEMBER_SETUP_START" "開始團隊成員 VPN 設定"
+    
     # 顯示歡迎訊息
     show_welcome
     
@@ -729,7 +741,7 @@ main() {
     # 可選的連接測試
     test_connection
     
-    log_team_setup_message "團隊成員 VPN 設置完成"
+    log_env_action "TEAM_MEMBER_SETUP_COMPLETE" "團隊成員 VPN 設定完成"
 }
 
 # 記錄腳本啟動

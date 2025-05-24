@@ -2,20 +2,25 @@
 
 # AWS Client VPN 人員離職安全處理流程腳本
 # 用途：全面處理離職人員的所有 AWS 和 VPN 相關訪問權限
-# 版本：1.0
-
-# 顏色設定
-GREEN='\\033[0;32m'
-BLUE='\\033[0;34m'
-RED='\\033[0;31m'
-YELLOW='\\033[1;33m'
-CYAN='\\033[0;36m'
-MAGENTA='\\033[0;35m'
-NC='\\033[0m' # No Color
+# 版本：1.1 (環境感知版本)
 
 # 全域變數
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OFFBOARDING_LOG_DIR="$SCRIPT_DIR/offboarding-logs"
+
+# 載入環境管理器 (必須第一個載入)
+source "$SCRIPT_DIR/lib/env_manager.sh"
+
+# 初始化環境
+if ! env_init_for_script "employee_offboarding.sh"; then
+    echo -e "${RED}錯誤: 無法初始化環境管理器${NC}"
+    exit 1
+fi
+
+# 設定環境特定路徑
+env_setup_paths
+
+# 環境感知的配置檔案
+OFFBOARDING_LOG_DIR="$ENV_LOG_DIR/offboarding"
 LOG_FILE="$OFFBOARDING_LOG_DIR/offboarding.log"
 CHECKLIST_FILE=""
 
@@ -72,9 +77,7 @@ log_offboarding_message() {
 # 顯示歡迎訊息
 show_welcome() {
     clear
-    echo -e "${RED}============================================================${NC}"
-    echo -e "${RED}              AWS VPN 人員離職安全處理系統               ${NC}"
-    echo -e "${RED}============================================================${NC}"
+    show_env_aware_header "AWS VPN 人員離職安全處理系統"
     echo -e ""
     echo -e "${YELLOW}此系統將全面處理離職人員的安全清理作業${NC}"
     echo -e ""
@@ -1048,6 +1051,14 @@ show_completion_summary() {
 
 # 主函數
 main() {
+    # 環境操作驗證
+    if ! env_validate_operation "EMPLOYEE_OFFBOARDING"; then
+        return 1
+    fi
+    
+    # 記錄操作開始
+    log_env_action "EMPLOYEE_OFFBOARDING_START" "開始員工離職安全處理程序"
+    
     # 顯示歡迎訊息
     show_welcome
     
@@ -1067,7 +1078,7 @@ main() {
     # 顯示完成摘要
     show_completion_summary
     
-    log_offboarding_message "員工離職安全處理程序完全完成"
+    log_env_action "EMPLOYEE_OFFBOARDING_COMPLETE" "員工離職安全處理程序完全完成"
 }
 
 # 記錄腳本啟動
