@@ -214,7 +214,7 @@ create_vpn_endpoint() {
         return 1
     fi
     # create_vpn_endpoint_lib 應該返回 ENDPOINT_ID
-    ENDPOINT_ID="$creation_output" # 直接賦值，不再需要 cut
+    export ENDPOINT_ID="$creation_output" # 直接賦值，不再需要 cut
 
     # 重新載入配置以獲取新創建的 ENDPOINT_ID
     if ! load_config_core "$CONFIG_FILE"; then
@@ -299,7 +299,7 @@ manage_vpn_settings() {
     
     # 使用統一的端點操作驗證
     if ! validate_endpoint_operation "$CONFIG_FILE"; then
-        echo -e "\\\\n${YELLOW}按任意鍵繼續...${NC}"
+        echo -e "\\n${YELLOW}按任意鍵繼續...${NC}"
         read -n 1
         return 1
     fi
@@ -446,8 +446,16 @@ view_connection_logs() {
     echo -e "${BLUE}查看最近的連接日誌...${NC}"
     
     # 獲取最近 1 小時的日誌
-    start_time=$(date -u -d '1 hour ago' +%s)000
-    end_time=$(date -u +%s)000
+    # macOS 兼容的日期計算
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS (BSD date)
+        start_time=$(date -u -v-1H +%s)000
+        end_time=$(date -u +%s)000
+    else
+        # Linux (GNU date)
+        start_time=$(date -u -d '1 hour ago' +%s)000
+        end_time=$(date -u +%s)000
+    fi
     
     aws logs filter-log-events \
       --log-group-name "$log_group_name" \
@@ -834,8 +842,7 @@ main() {
             echo -e "${RED}AWS 配置設定失敗。無法繼續。${NC}"
             exit 1
         fi
-        echo -e "${GREEN}配置文件已創建。請重新啟動腳本。${NC}"
-        exit 0 # 提示用戶重啟以載入新配置
+        echo -e "${GREEN}配置文件已創建。${NC}"
     fi
     
     # 驗證基本配置 (如 AWS_REGION)
