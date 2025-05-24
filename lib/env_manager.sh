@@ -10,6 +10,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 CURRENT_ENV_FILE="$PROJECT_ROOT/.current_env"
 
+# 載入增強確認模組
+if [[ -f "$SCRIPT_DIR/enhanced_confirmation.sh" ]]; then
+    source "$SCRIPT_DIR/enhanced_confirmation.sh"
+else
+    echo "警告: 找不到增強確認模組 $SCRIPT_DIR/enhanced_confirmation.sh" >&2
+fi
+
 # 顏色定義
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -101,15 +108,8 @@ env_switch() {
     echo "• 記錄環境切換歷史"
     echo ""
     
-    # 如果是 production 環境，需要額外確認
-    if [[ "$target_env" == "production" ]]; then
-        echo -e "${RED}⚠️  警告: 您即將切換到 Production 環境${NC}"
-        echo -e "${RED}   請確保您了解此操作的影響${NC}"
-        echo ""
-    fi
-    
-    read -p "確認切換？ [yes/NO]: " confirm
-    if [[ ! "$confirm" =~ ^[Yy][Ee][Ss]$ ]]; then
+    # 使用增強確認系統進行環境切換確認
+    if ! smart_operation_confirmation "SWITCH_ENVIRONMENT" "$target_env" "切換到 $target_env 環境"; then
         echo -e "${YELLOW}環境切換已取消${NC}"
         return 1
     fi
@@ -393,23 +393,12 @@ env_validate_operation() {
     
     source "$env_file"
     
-    # Production 環境的特殊驗證
-    if [[ "$env_name" == "production" ]]; then
-        case "$operation" in
-            "CREATE_ENDPOINT"|"DELETE_ENDPOINT"|"MANAGE_ENDPOINT"|"TEAM_MEMBER_SETUP"|"REVOKE_ACCESS"|"EMPLOYEE_OFFBOARDING")
-                if [[ "$REQUIRE_OPERATION_CONFIRMATION" == "true" ]]; then
-                    echo -e "${RED}⚠️  Production 環境操作確認${NC}"
-                    echo -e "操作: $operation"
-                    echo -e "環境: ${ENV_ICON} ${ENV_DISPLAY_NAME}"
-                    echo ""
-                    read -p "確認在 Production 環境執行此操作？ [yes/NO]: " confirm
-                    if [[ ! "$confirm" =~ ^[Yy][Ee][Ss]$ ]]; then
-                        echo -e "${YELLOW}操作已取消${NC}"
-                        return 1
-                    fi
-                fi
-                ;;
-        esac
+    # 使用增強確認系統進行操作驗證
+    if [[ "$REQUIRE_OPERATION_CONFIRMATION" == "true" ]]; then
+        if ! smart_operation_confirmation "$operation" "$env_name" "在 $env_name 環境執行 $operation"; then
+            echo -e "${YELLOW}操作已取消${NC}"
+            return 1
+        fi
     fi
     
     return 0
@@ -485,6 +474,49 @@ show_env_aware_header() {
     fi
     echo -e "${BLUE}========================================================${NC}"
     echo -e ""
+}
+
+# 增強版環境操作確認
+env_enhanced_operation_confirm() {
+    local operation="$1"
+    local env_name="$2"
+    local description="$3"
+    local batch_mode="${4:-false}"
+    
+    # 使用增強確認模組
+    if [[ "$batch_mode" == "true" ]]; then
+        batch_operation_confirmation "$operation" "$env_name" "$description"
+    else
+        smart_operation_confirmation "$operation" "$env_name" "$description"
+    fi
+}
+
+# 環境感知的操作執行
+env_aware_operation() {
+    local operation="$1"
+    local description="$2"
+    shift 2
+    local args=("$@")
+    
+    load_current_env
+    
+    # 記錄操作開始
+    log_env_action "OPERATION_START" "$operation: $description"
+    
+    # 環境驗證和確認
+    if ! env_validate_operation "$operation" "$CURRENT_ENVIRONMENT"; then
+        log_env_action "OPERATION_CANCELLED" "$operation: User cancelled"
+        return 1
+    fi
+    
+    # 執行操作（這裡可以調用實際的操作函數）
+    echo -e "${BLUE}正在執行操作: $description${NC}"
+    echo -e "環境: $(get_env_display_info "$CURRENT_ENVIRONMENT")"
+    
+    # 記錄操作完成
+    log_env_action "OPERATION_COMPLETE" "$operation: $description completed successfully"
+    
+    return 0
 }
 
 # 主程式入口點
