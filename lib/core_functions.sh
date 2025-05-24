@@ -232,6 +232,19 @@ validate_username_allow_empty() {
     validate_username "$username"
 }
 
+# 驗證證書 ARN（允許空值）
+validate_certificate_arn_allow_empty() {
+    local cert_arn="$1"
+    
+    # 允許空值
+    if [ -z "$cert_arn" ]; then
+        return 0
+    fi
+    
+    # 如果不為空，則使用標準證書 ARN 驗證
+    validate_certificate_arn "$cert_arn"
+}
+
 # 驗證 JSON 解析結果的通用函數
 # 參數:
 # $1: 解析結果值
@@ -994,4 +1007,10 @@ read_secure_hidden_input() {
     echo -e "${RED}錯誤: 達到最大輸入嘗試次數 ($max_attempts)${NC}"
     log_message_core "錯誤: read_secure_hidden_input 達到最大嘗試次數: $var_name"
     return 1
+}
+
+# 按任意鍵繼續函數
+press_any_key_to_continue() {
+    echo -e "${YELLOW}按任意鍵繼續...${NC}"
+    read -n 1 -s
 }

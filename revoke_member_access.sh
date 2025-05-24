@@ -359,7 +359,7 @@ revoke_certificates() {
     if [ ${#failed_certs[@]} -gt 0 ]; then
         echo -e "\\n${YELLOW}失敗的證書需要手動處理:${NC}"
         for cert in "${failed_certs[@]}"; do
-            echo -e "  ${RED}$cert${NC}"
+            echo -e "  ${RED}\"$cert\"${NC}"
         done
     fi
     
