@@ -320,6 +320,7 @@ _create_aws_client_vpn_endpoint_ec() {
           --server-certificate-arn "$server_cert_arn" \
           --authentication-options "$auth_options" \
           --connection-log-options "$log_options" \
+          --transport-protocol tcp \
           --split-tunnel \
           --dns-servers 8.8.8.8 8.8.4.4 \
           --region "$aws_region" \
@@ -330,6 +331,7 @@ _create_aws_client_vpn_endpoint_ec() {
           --server-certificate-arn "$server_cert_arn" \
           --authentication-options "$auth_options" \
           --connection-log-options "$log_options" \
+          --transport-protocol tcp \
           --split-tunnel \
           --dns-servers 8.8.8.8 8.8.4.4 \
           --region "$aws_region" \
