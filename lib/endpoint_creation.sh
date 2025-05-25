@@ -362,34 +362,34 @@ _create_aws_client_vpn_endpoint_ec() {
     # 清理 VPN 名稱以用於日誌群組 (只允許字母、數字、連字符和斜線)
     local clean_log_name=$(echo "$vpn_name" | sed 's/[^a-zA-Z0-9/_-]/-/g' | sed 's/--*/-/g' | sed 's/^-\|-$//g')
     local log_group_name="/aws/clientvpn/$clean_log_name"
-    echo -e "${BLUE}創建 CloudWatch 日誌群組: $log_group_name${NC}"
+    echo -e "${BLUE}創建 CloudWatch 日誌群組: $log_group_name${NC}" >&2
     
     # 檢查日誌群組是否已存在
     if ! aws logs describe-log-groups --log-group-name-prefix "$log_group_name" --region "$aws_region" --query "logGroups[?logGroupName=='$log_group_name']" --output text | grep -q "$log_group_name"; then
-        echo -e "${YELLOW}日誌群組不存在，正在創建...${NC}"
+        echo -e "${YELLOW}日誌群組不存在，正在創建...${NC}" >&2
         if aws logs create-log-group --log-group-name "$log_group_name" --region "$aws_region" 2>/dev/null; then
-            echo -e "${GREEN}✓ 日誌群組創建成功${NC}"
+            echo -e "${GREEN}✓ 日誌群組創建成功${NC}" >&2
         else
-            echo -e "${YELLOW}日誌群組創建失敗，但這不會影響 VPN 端點創建${NC}"
-            echo -e "${YELLOW}嘗試不使用日誌群組創建 VPN 端點...${NC}"
+            echo -e "${YELLOW}日誌群組創建失敗，但這不會影響 VPN 端點創建${NC}" >&2
+            echo -e "${YELLOW}嘗試不使用日誌群組創建 VPN 端點...${NC}" >&2
             log_group_name=""
         fi
     else
-        echo -e "${GREEN}✓ 日誌群組已存在${NC}"
+        echo -e "${GREEN}✓ 日誌群組已存在${NC}" >&2
     fi
     
-    echo -e "${BLUE}創建 Client VPN 端點...${NC}"
-    echo -e "${YELLOW}使用參數:${NC}"
-    echo -e "  VPN CIDR: $vpn_cidr"
-    echo -e "  伺服器憑證 ARN: $server_cert_arn"
-    echo -e "  客戶端憑證 ARN: $client_cert_arn"
-    echo -e "  VPN 名稱: $vpn_name"
-    echo -e "  AWS 區域: $aws_region"
+    echo -e "${BLUE}創建 Client VPN 端點...${NC}" >&2
+    echo -e "${YELLOW}使用參數:${NC}" >&2
+    echo -e "  VPN CIDR: $vpn_cidr" >&2
+    echo -e "  伺服器憑證 ARN: $server_cert_arn" >&2
+    echo -e "  客戶端憑證 ARN: $client_cert_arn" >&2
+    echo -e "  VPN 名稱: $vpn_name" >&2
+    echo -e "  AWS 區域: $aws_region" >&2
     
     # 執行調試檢查
-    echo -e "\n${BLUE}執行預檢查...${NC}"
-    if ! debug_aws_cli_params "$vpn_cidr" "$server_cert_arn" "$client_cert_arn" "$vpn_name" "$aws_region"; then
-        echo -e "${RED}預檢查失敗，無法繼續創建 VPN 端點${NC}"
+    echo -e "\n${BLUE}執行預檢查...${NC}" >&2
+    if ! debug_aws_cli_params "$vpn_cidr" "$server_cert_arn" "$client_cert_arn" "$vpn_name" "$aws_region" >&2; then
+        echo -e "${RED}預檢查失敗，無法繼續創建 VPN 端點${NC}" >&2
         return 1
     fi
     
@@ -398,7 +398,7 @@ _create_aws_client_vpn_endpoint_ec() {
     # 清理 VPN 名稱中的特殊字符以用於標籤
     local clean_vpn_name=$(echo "$vpn_name" | sed 's/[^a-zA-Z0-9-]/_/g')
     
-    echo -e "${BLUE}執行 AWS CLI 命令創建 VPN 端點...${NC}"
+    echo -e "${BLUE}執行 AWS CLI 命令創建 VPN 端點...${NC}" >&2
     
     # 建構 authentication-options JSON
     auth_options='{
@@ -414,12 +414,12 @@ _create_aws_client_vpn_endpoint_ec() {
             "Enabled": true,
             "CloudwatchLogGroup": "'$log_group_name'"
         }'
-        echo -e "${GREEN}啟用 CloudWatch 日誌記錄${NC}"
+        echo -e "${GREEN}啟用 CloudWatch 日誌記錄${NC}" >&2
     else
         log_options='{
             "Enabled": false
         }'
-        echo -e "${YELLOW}禁用 CloudWatch 日誌記錄${NC}"
+        echo -e "${YELLOW}禁用 CloudWatch 日誌記錄${NC}" >&2
     fi
     
     # 建構 tag-specifications JSON
@@ -431,26 +431,26 @@ _create_aws_client_vpn_endpoint_ec() {
         ]
     }]'
     
-    echo -e "${YELLOW}創建參數預覽:${NC}"
-    echo "VPN CIDR: $vpn_cidr"
-    echo "伺服器證書: $server_cert_arn"
-    echo "客戶端證書: $client_cert_arn"
-    echo "日誌群組: $log_group_name"
-    echo "VPN 名稱: $clean_vpn_name"
+    echo -e "${YELLOW}創建參數預覽:${NC}" >&2
+    echo "VPN CIDR: $vpn_cidr" >&2
+    echo "伺服器證書: $server_cert_arn" >&2
+    echo "客戶端證書: $client_cert_arn" >&2
+    echo "日誌群組: $log_group_name" >&2
+    echo "VPN 名稱: $clean_vpn_name" >&2
     
     # 顯示完整的 AWS CLI 命令預覽
-    echo -e "\n${BLUE}=== AWS CLI 命令預覽 ===${NC}"
-    echo "aws ec2 create-client-vpn-endpoint \\"
-    echo "    --client-cidr-block '$vpn_cidr' \\"
-    echo "    --server-certificate-arn '$server_cert_arn' \\"
-    echo "    --authentication-options '$auth_options' \\"
-    echo "    --connection-log-options '$log_options' \\"
-    echo "    --transport-protocol tcp \\"
-    echo "    --split-tunnel \\"
-    echo "    --dns-servers 8.8.8.8 8.8.4.4 \\"
-    echo "    --region '$aws_region' \\"
-    echo "    --tag-specifications '$tag_specs'"
-    echo -e "${BLUE}===========================================${NC}\n"
+    echo -e "\n${BLUE}=== AWS CLI 命令預覽 ===${NC}" >&2
+    echo "aws ec2 create-client-vpn-endpoint \\" >&2
+    echo "    --client-cidr-block '$vpn_cidr' \\" >&2
+    echo "    --server-certificate-arn '$server_cert_arn' \\" >&2
+    echo "    --authentication-options '$auth_options' \\" >&2
+    echo "    --connection-log-options '$log_options' \\" >&2
+    echo "    --transport-protocol tcp \\" >&2
+    echo "    --split-tunnel \\" >&2
+    echo "    --dns-servers 8.8.8.8 8.8.4.4 \\" >&2
+    echo "    --region '$aws_region' \\" >&2
+    echo "    --tag-specifications '$tag_specs'" >&2
+    echo -e "${BLUE}===========================================${NC}\n" >&2
     
     # 詳細記錄到日誌
     log_message_core "準備執行 VPN 端點創建命令"
@@ -460,9 +460,9 @@ _create_aws_client_vpn_endpoint_ec() {
     log_message_core "VPN 名稱: $vpn_name"
     log_message_core "AWS 區域: $aws_region"
     
-    echo -e "${BLUE}正在執行 AWS CLI 創建命令...${NC}"
+    echo -e "${BLUE}正在執行 AWS CLI 創建命令...${NC}" >&2
     local start_time=$(date '+%Y-%m-%d %H:%M:%S')
-    echo -e "${YELLOW}開始時間: $start_time${NC}"
+    echo -e "${YELLOW}開始時間: $start_time${NC}" >&2
     
     # 執行創建命令
     if [ -n "$log_group_name" ]; then
@@ -491,77 +491,77 @@ _create_aws_client_vpn_endpoint_ec() {
     exit_code=$?
     
     local end_time=$(date '+%Y-%m-%d %H:%M:%S')
-    echo -e "${YELLOW}結束時間: $end_time${NC}"
+    echo -e "${YELLOW}結束時間: $end_time${NC}" >&2
     log_message_core "AWS CLI 命令執行完成，exit code: $exit_code，結束時間: $end_time"
     
     # 檢查 AWS CLI 命令是否成功執行
     if [ $exit_code -ne 0 ]; then
-        echo -e "${RED}═══════════════════════════════════════${NC}"
-        echo -e "${RED}    AWS CLI 錯誤詳細診斷 (exit code: $exit_code)${NC}"
-        echo -e "${RED}═══════════════════════════════════════${NC}"
+        echo -e "${RED}═══════════════════════════════════════${NC}" >&2
+        echo -e "${RED}    AWS CLI 錯誤詳細診斷 (exit code: $exit_code)${NC}" >&2
+        echo -e "${RED}═══════════════════════════════════════${NC}" >&2
         
         # 記錄完整的錯誤信息
-        echo -e "${YELLOW}錯誤輸出:${NC}"
-        echo "$endpoint_result"
-        echo -e ""
+        echo -e "${YELLOW}錯誤輸出:${NC}" >&2
+        echo "$endpoint_result" >&2
+        echo -e "" >&2
         
         # 環境診斷
-        echo -e "${YELLOW}環境診斷信息:${NC}"
-        echo "  AWS CLI 版本: $(aws --version 2>&1 | head -1)"
-        echo "  當前區域: $(aws configure get region 2>/dev/null || echo '未設置')"
-        echo "  當前身份: $(aws sts get-caller-identity --query 'Arn' --output text 2>/dev/null || echo '無法獲取')"
-        echo "  當前時間: $(date)"
-        echo -e ""
+        echo -e "${YELLOW}環境診斷信息:${NC}" >&2
+        echo "  AWS CLI 版本: $(aws --version 2>&1 | head -1)" >&2
+        echo "  當前區域: $(aws configure get region 2>/dev/null || echo '未設置')" >&2
+        echo "  當前身份: $(aws sts get-caller-identity --query 'Arn' --output text 2>/dev/null || echo '無法獲取')" >&2
+        echo "  當前時間: $(date)" >&2
+        echo -e "" >&2
         
         # 參數驗證
-        echo -e "${YELLOW}創建參數驗證:${NC}"
-        echo "  VPN CIDR: '$vpn_cidr'"
-        echo "  伺服器證書 ARN: '$server_cert_arn'"
-        echo "  客戶端證書 ARN: '$client_cert_arn'"
-        echo "  VPN 名稱: '$vpn_name'"
-        echo "  AWS 區域: '$aws_region'"
-        echo -e ""
+        echo -e "${YELLOW}創建參數驗證:${NC}" >&2
+        echo "  VPN CIDR: '$vpn_cidr'" >&2
+        echo "  伺服器證書 ARN: '$server_cert_arn'" >&2
+        echo "  客戶端證書 ARN: '$client_cert_arn'" >&2
+        echo "  VPN 名稱: '$vpn_name'" >&2
+        echo "  AWS 區域: '$aws_region'" >&2
+        echo -e "" >&2
         
         # 檢查證書狀態
-        echo -e "${YELLOW}檢查證書狀態:${NC}"
+        echo -e "${YELLOW}檢查證書狀態:${NC}" >&2
         if aws acm describe-certificate --certificate-arn "$server_cert_arn" --region "$aws_region" &>/dev/null; then
-            echo "  ✓ 伺服器證書可訪問"
+            echo "  ✓ 伺服器證書可訪問" >&2
         else
-            echo "  ✗ 伺服器證書不可訪問或不存在"
+            echo "  ✗ 伺服器證書不可訪問或不存在" >&2
         fi
         
         if aws acm describe-certificate --certificate-arn "$client_cert_arn" --region "$aws_region" &>/dev/null; then
-            echo "  ✓ 客戶端證書可訪問"
+            echo "  ✓ 客戶端證書可訪問" >&2
         else
-            echo "  ✗ 客戶端證書不可訪問或不存在"
+            echo "  ✗ 客戶端證書不可訪問或不存在" >&2
         fi
-        echo -e ""
+        echo -e "" >&2
         
         # 檢查 JSON 格式
-        echo -e "${YELLOW}檢查 JSON 參數格式:${NC}"
-        echo "  認證選項: $auth_options"
+        echo -e "${YELLOW}檢查 JSON 參數格式:${NC}" >&2
+        echo "  認證選項: $auth_options" >&2
         if echo "$auth_options" | jq . &>/dev/null; then
-            echo "  ✓ 認證選項 JSON 格式有效"
+            echo "  ✓ 認證選項 JSON 格式有效" >&2
         else
-            echo "  ✗ 認證選項 JSON 格式無效"
+            echo "  ✗ 認證選項 JSON 格式無效" >&2
         fi
         
-        echo "  日誌選項: $log_options"
+        echo "  日誌選項: $log_options" >&2
         if echo "$log_options" | jq . &>/dev/null; then
-            echo "  ✓ 日誌選項 JSON 格式有效"
+            echo "  ✓ 日誌選項 JSON 格式有效" >&2
         else
-            echo "  ✗ 日誌選項 JSON 格式無效"
+            echo "  ✗ 日誌選項 JSON 格式無效" >&2
         fi
         
-        echo "  標籤規格: $tag_specs"
+        echo "  標籤規格: $tag_specs" >&2
         if echo "$tag_specs" | jq . &>/dev/null; then
-            echo "  ✓ 標籤規格 JSON 格式有效"
+            echo "  ✓ 標籤規格 JSON 格式有效" >&2
         else
-            echo "  ✗ 標籤規格 JSON 格式無效"
+            echo "  ✗ 標籤規格 JSON 格式無效" >&2
         fi
-        echo -e ""
+        echo -e "" >&2
         
-        echo -e "${RED}═══════════════════════════════════════${NC}"
+        echo -e "${RED}═══════════════════════════════════════${NC}" >&2
         
         log_message_core "錯誤: VPN 端點創建失敗 - AWS CLI 錯誤 (exit code: $exit_code) - 詳細診斷已輸出"
         
@@ -587,14 +587,14 @@ _create_aws_client_vpn_endpoint_ec() {
     
     # 檢查輸出是否為空
     if [ -z "$endpoint_result" ]; then
-        echo -e "${RED}AWS CLI 命令沒有返回任何輸出${NC}"
+        echo -e "${RED}AWS CLI 命令沒有返回任何輸出${NC}" >&2
         log_message_core "錯誤: VPN 端點創建失敗 - 無輸出"
         return 1
     fi
     
     # 記錄原始輸出用於調試
-    echo -e "${YELLOW}AWS CLI 原始輸出:${NC}"
-    echo "$endpoint_result"
+    echo -e "${YELLOW}AWS CLI 原始輸出:${NC}" >&2
+    echo "$endpoint_result" >&2
     
     # 嘗試修復可能的 JSON 格式問題
     # 有時候 AWS CLI 可能在 JSON 前面加入一些額外字符
@@ -604,8 +604,8 @@ _create_aws_client_vpn_endpoint_ec() {
         json_start_line=$(echo "$endpoint_result" | grep -n '^[[:space:]]*{' | head -1 | cut -d: -f1)
         if [ -n "$json_start_line" ]; then
             cleaned_result=$(echo "$endpoint_result" | tail -n +$json_start_line)
-            echo -e "${YELLOW}清理後的 JSON:${NC}"
-            echo "$cleaned_result"
+            echo -e "${YELLOW}清理後的 JSON:${NC}" >&2
+            echo "$cleaned_result" >&2
         else
             cleaned_result="$endpoint_result"
         fi
@@ -615,19 +615,19 @@ _create_aws_client_vpn_endpoint_ec() {
     
     # 檢查清理後的輸出是否為有效的 JSON
     if ! echo "$cleaned_result" | jq empty 2>/dev/null; then
-        echo -e "${RED}AWS CLI 返回的不是有效的 JSON 格式${NC}"
-        echo -e "${RED}嘗試使用備用解析方法...${NC}"
+        echo -e "${RED}AWS CLI 返回的不是有效的 JSON 格式${NC}" >&2
+        echo -e "${RED}嘗試使用備用解析方法...${NC}" >&2
         
         # 嘗試使用 grep 和 sed 提取端點 ID
         endpoint_id=$(echo "$endpoint_result" | grep -o '"ClientVpnEndpointId"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"ClientVpnEndpointId"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
         
         if [ -n "$endpoint_id" ] && [ "$endpoint_id" != "null" ]; then
-            echo -e "${GREEN}✓ 使用備用方法成功提取端點 ID: $endpoint_id${NC}"
+            echo -e "${GREEN}✓ 使用備用方法成功提取端點 ID: $endpoint_id${NC}" >&2
             echo "$endpoint_id"
             return 0
         else
-            echo -e "${RED}備用解析方法也失敗${NC}"
-            echo -e "${RED}原始輸出: $endpoint_result${NC}"
+            echo -e "${RED}備用解析方法也失敗${NC}" >&2
+            echo -e "${RED}原始輸出: $endpoint_result${NC}" >&2
             log_message_core "錯誤: VPN 端點創建失敗 - JSON 解析失敗"
             return 1
         fi
@@ -635,20 +635,20 @@ _create_aws_client_vpn_endpoint_ec() {
     
     local endpoint_id
     if ! endpoint_id=$(echo "$cleaned_result" | jq -r '.ClientVpnEndpointId' 2>/dev/null); then
-        echo -e "${RED}無法從響應中解析端點 ID${NC}"
-        echo -e "${RED}響應內容: $cleaned_result${NC}"
+        echo -e "${RED}無法從響應中解析端點 ID${NC}" >&2
+        echo -e "${RED}響應內容: $cleaned_result${NC}" >&2
         log_message_core "錯誤: VPN 端點創建失敗 - 端點 ID 解析失敗"
         return 1
     fi
 
     if [ -z "$endpoint_id" ] || [ "$endpoint_id" == "null" ]; then
-        echo -e "${RED}創建 Client VPN 端點後未能獲取有效的 Endpoint ID${NC}"
-        echo -e "${RED}響應內容: $cleaned_result${NC}"
+        echo -e "${RED}創建 Client VPN 端點後未能獲取有效的 Endpoint ID${NC}" >&2
+        echo -e "${RED}響應內容: $cleaned_result${NC}" >&2
         log_message_core "錯誤: VPN 端點創建失敗 - 端點 ID 為空或 null"
         return 1
     fi
     
-    echo -e "${GREEN}✓ VPN 端點創建成功，ID: $endpoint_id${NC}"
+    echo -e "${GREEN}✓ VPN 端點創建成功，ID: $endpoint_id${NC}" >&2
     log_message_core "VPN 端點創建成功，ID: $endpoint_id"
     echo "$endpoint_id"
     return 0
@@ -2497,7 +2497,7 @@ EOF
 _wait_for_client_vpn_endpoint_available() {
     local endpoint_id="$1"
     local aws_region="$2"
-    local max_attempts=30  # 最多等待 30 次，每次 10 秒，總共 5 分鐘
+    local max_attempts=15  # 最多等待 30 次，每次 10 秒，總共 5 分鐘
     local attempt=0
     
     echo -e "${BLUE}檢查 VPN 端點狀態...${NC}"
@@ -2506,22 +2506,52 @@ _wait_for_client_vpn_endpoint_available() {
     local start_wait_time=$(date '+%Y-%m-%d %H:%M:%S')
     log_message_core "開始等待時間: $start_wait_time"
     
+    # 初始延遲，讓 VPN endpoint 有時間在 AWS 中註冊
+    echo -e "${YELLOW}等待 VPN 端點在 AWS 中註冊... (5秒)${NC}"
+    sleep 5
+    
     while [ $attempt -lt $max_attempts ]; do
         local endpoint_state
+        local aws_error=""
         local query_start_time=$(date '+%Y-%m-%d %H:%M:%S')
         
-        endpoint_state=$(aws ec2 describe-client-vpn-endpoints \
+        # 先嘗試獲取完整的端點信息以診斷問題
+        local full_endpoint_info
+        full_endpoint_info=$(aws ec2 describe-client-vpn-endpoints \
             --client-vpn-endpoint-ids "$endpoint_id" \
             --region "$aws_region" \
-            --query 'ClientVpnEndpoints[0].Status.Code' \
-            --output text 2>/dev/null)
+            --output json 2>&1)
         
         local query_exit_code=$?
+        
+        if [ $query_exit_code -eq 0 ]; then
+            # 如果成功獲取，從中提取狀態
+            endpoint_state=$(echo "$full_endpoint_info" | jq -r '.ClientVpnEndpoints[0].Status.Code // "unknown"' 2>/dev/null)
+            if [ -z "$endpoint_state" ] || [ "$endpoint_state" = "null" ]; then
+                endpoint_state="unknown"
+            fi
+        else
+            # 如果失敗，記錄錯誤信息
+            aws_error="$full_endpoint_info"
+            endpoint_state="error"
+        fi
+        
         log_message_core "AWS CLI 查詢端點狀態: 嘗試 $((attempt+1))/$max_attempts, exit code: $query_exit_code, 狀態: $endpoint_state"
+        
+        if [ $query_exit_code -ne 0 ]; then
+            log_message_core "AWS CLI 錯誤詳情: $aws_error"
+        fi
         
         if [ $query_exit_code -ne 0 ]; then
             echo -e "${RED}查詢端點狀態失敗 (嘗試 $((attempt+1))/$max_attempts)${NC}"
             log_message_core "錯誤: 查詢端點狀態失敗, 嘗試: $((attempt+1))/$max_attempts"
+            
+            # 如果是前幾次嘗試失敗，可能是 AWS 傳播延遲
+            if [ $attempt -lt 5 ]; then
+                echo -e "${YELLOW}可能是 AWS 傳播延遲，繼續等待...${NC}"
+                log_message_core "AWS 傳播延遲，繼續等待"
+            fi
+            
             sleep 10
             ((attempt++))
             continue
@@ -2542,6 +2572,35 @@ _wait_for_client_vpn_endpoint_available() {
             log_message_core "端點狀態: $endpoint_state, 繼續等待 (嘗試: $((attempt+1))/$max_attempts)"
             sleep 10
             ((attempt++))
+        elif [ "$endpoint_state" = "error" ] || [ "$endpoint_state" = "unknown" ]; then
+            echo -e "${RED}端點狀態查詢出現問題: $endpoint_state${NC}"
+            log_message_core "端點狀態查詢問題: $endpoint_state, 端點 ID: $endpoint_id"
+            
+            # 對於錯誤狀態，嘗試更多次但輸出診斷信息
+            if [ $attempt -lt 10 ]; then
+                echo -e "${YELLOW}繼續嘗試查詢 (可能是暫時性問題)...${NC}"
+                sleep 10
+                ((attempt++))
+                continue
+            else
+                # 保存詳細診斷信息
+                {
+                    echo "=== VPN 端點狀態查詢失敗診斷報告 ==="
+                    echo "時間: $(date)"
+                    echo "端點 ID: $endpoint_id"
+                    echo "AWS 區域: $aws_region"
+                    echo "查詢狀態: $endpoint_state"
+                    echo "等待嘗試次數: $((attempt+1))/$max_attempts"
+                    echo "AWS CLI 版本: $(aws --version 2>&1)"
+                    echo "當前身份: $(aws sts get-caller-identity --query 'Arn' --output text 2>/dev/null || echo '無法獲取')"
+                    if [ -n "$aws_error" ]; then
+                        echo "AWS 錯誤信息: $aws_error"
+                    fi
+                    echo "============================="
+                } >> "${LOG_FILE:-vpn_error_diagnostic.log}"
+                
+                return 1
+            fi
         else
             echo -e "${RED}端點狀態異常: $endpoint_state${NC}"
             log_message_core "錯誤: 端點狀態異常: $endpoint_state, 端點 ID: $endpoint_id"
@@ -2556,6 +2615,9 @@ _wait_for_client_vpn_endpoint_available() {
                 echo "等待嘗試次數: $((attempt+1))/$max_attempts"
                 echo "AWS CLI 版本: $(aws --version 2>&1)"
                 echo "當前身份: $(aws sts get-caller-identity --query 'Arn' --output text 2>/dev/null || echo '無法獲取')"
+                if [ -n "$aws_error" ]; then
+                    echo "AWS 錯誤信息: $aws_error"
+                fi
                 echo "============================="
             } >> "${LOG_FILE:-vpn_error_diagnostic.log}"
             
