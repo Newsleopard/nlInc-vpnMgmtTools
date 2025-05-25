@@ -61,6 +61,61 @@ show_welcome() {
 check_revocation_prerequisites() {
     echo -e "\\n${YELLOW}[1/7] 檢查必要工具和權限...${NC}"
     
+    # macOS 特定檢查
+    if [ "$(uname)" = "Darwin" ]; then
+        echo -e "${BLUE}檢測到 macOS 系統，執行 macOS 特定檢查...${NC}"
+        
+        # 檢查 macOS 版本
+        local macos_version
+        macos_version=$(sw_vers -productVersion)
+        echo -e "${BLUE}macOS 版本: $macos_version${NC}"
+        
+        # 檢查 Homebrew
+        if ! command -v brew >/dev/null 2>&1; then
+            echo -e "${RED}錯誤: 需要 Homebrew 來管理相關工具${NC}"
+            echo -e "${YELLOW}請先安裝 Homebrew: /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"${NC}"
+            log_revocation_message "macOS: Homebrew 未安裝"
+            exit 1
+        fi
+        
+        # 檢查關鍵的 macOS 工具
+        local macos_tools=("jq" "aws")
+        local missing_macos_tools=()
+        
+        for tool in "${macos_tools[@]}"; do
+            if ! command -v "$tool" >/dev/null 2>&1; then
+                missing_macos_tools+=("$tool")
+            fi
+        done
+        
+        if [ ${#missing_macos_tools[@]} -gt 0 ]; then
+            echo -e "${RED}缺少必要工具: ${missing_macos_tools[*]}${NC}"
+            echo -e "${YELLOW}請使用 Homebrew 安裝: brew install ${missing_macos_tools[*]}${NC}"
+            log_revocation_message "macOS: 缺少必要工具: ${missing_macos_tools[*]}"
+            exit 1
+        fi
+        
+        # 檢查 macOS 權限
+        echo -e "${BLUE}檢查 macOS 權限設置...${NC}"
+        
+        # 檢查 EasyRSA 目錄權限
+        if [ -d "$EASYRSA_DIR_REVOKE" ]; then
+            local easyrsa_perms
+            easyrsa_perms=$(stat -f "%OLp" "$EASYRSA_DIR_REVOKE" 2>/dev/null || echo "000")
+            if [ "$easyrsa_perms" -lt 755 ]; then
+                echo -e "${YELLOW}調整 EasyRSA 目錄權限...${NC}"
+                chmod 755 "$EASYRSA_DIR_REVOKE" || {
+                    echo -e "${RED}無法設置 EasyRSA 目錄權限${NC}"
+                    log_revocation_message "macOS: 無法設置 EasyRSA 目錄權限"
+                    exit 1
+                }
+            fi
+        fi
+        
+        echo -e "${GREEN}✓ macOS 特定檢查完成${NC}"
+        log_revocation_message "macOS 特定檢查完成"
+    fi
+    
     # 使用 core_functions.sh 中的 check_prerequisites
     if ! check_prerequisites; then
         log_revocation_message "先決條件檢查失敗，腳本終止。"
@@ -313,16 +368,101 @@ revoke_certificates() {
     
     revoked_certs=()
     failed_certs=()
+    easyrsa_revoked=()
+    easyrsa_failed=()
+    
+    # 第一步：執行本地 easyrsa 撤銷操作
+    echo -e "\\n${CYAN}步驟 1: 執行本地 PKI 證書撤銷...${NC}"
+    
+    # 檢查 EasyRSA 目錄是否存在
+    if [ ! -d "$EASYRSA_DIR_REVOKE" ]; then
+        echo -e "${RED}錯誤: EasyRSA 目錄不存在: $EASYRSA_DIR_REVOKE${NC}"
+        echo -e "${YELLOW}跳過本地證書撤銷操作${NC}"
+    else
+        echo -e "${BLUE}使用 EasyRSA 目錄: $EASYRSA_DIR_REVOKE${NC}"
+        
+        # 對於每個證書，嘗試從 ACM 標籤中獲取證書名稱並執行撤銷
+        for cert_arn in "${user_cert_arns[@]}"; do
+            echo -e "${BLUE}檢查證書: $cert_arn${NC}"
+            
+            # 從 ACM 獲取證書詳情和標籤
+            local cert_tags
+            cert_tags=$(aws acm list-tags-for-certificate --certificate-arn "$cert_arn" --region "$aws_region" 2>/dev/null)
+            
+            if [ $? -eq 0 ]; then
+                # 嘗試從標籤中提取用戶名作為證書名稱
+                local cert_name
+                if command -v jq >/dev/null 2>&1; then
+                    cert_name=$(echo "$cert_tags" | jq -r '.Tags[] | select(.Key=="User") | .Value' 2>/dev/null)
+                else
+                    # 備用方法：使用 grep 和 sed
+                    cert_name=$(echo "$cert_tags" | grep -A1 '"Key": "User"' | grep '"Value"' | sed 's/.*"Value": "\([^"]*\)".*/\1/')
+                fi
+                
+                if [ -n "$cert_name" ] && [ "$cert_name" != "null" ]; then
+                    echo -e "${BLUE}找到證書名稱: $cert_name${NC}"
+                    
+                    # 執行本地 easyrsa 撤銷
+                    if revoke_client_certificate_lib "$EASYRSA_DIR_REVOKE" "$cert_name"; then
+                        echo -e "${GREEN}✓ 本地撤銷成功: $cert_name${NC}"
+                        easyrsa_revoked+=("$cert_name")
+                    else
+                        echo -e "${RED}✗ 本地撤銷失敗: $cert_name${NC}"
+                        easyrsa_failed+=("$cert_name")
+                    fi
+                else
+                    echo -e "${YELLOW}無法從證書標籤中獲取用戶名，嘗試使用參數用戶名: $username${NC}"
+                    
+                    # 使用腳本參數中的用戶名嘗試撤銷
+                    if revoke_client_certificate_lib "$EASYRSA_DIR_REVOKE" "$username"; then
+                        echo -e "${GREEN}✓ 本地撤銷成功 (使用用戶名): $username${NC}"
+                        easyrsa_revoked+=("$username")
+                    else
+                        echo -e "${RED}✗ 本地撤銷失敗 (使用用戶名): $username${NC}"
+                        easyrsa_failed+=("$username")
+                    fi
+                fi
+            else
+                echo -e "${YELLOW}無法獲取證書標籤，跳過本地撤銷${NC}"
+            fi
+        done
+        
+        # 第二步：生成和更新 CRL
+        if [ ${#easyrsa_revoked[@]} -gt 0 ]; then
+            echo -e "\\n${CYAN}步驟 2: 生成和更新證書撤銷列表 (CRL)...${NC}"
+            
+            if generate_crl_lib "$EASYRSA_DIR_REVOKE"; then
+                echo -e "${GREEN}✓ CRL 生成成功${NC}"
+                
+                # 第三步：將 CRL 導入到 VPN 端點
+                echo -e "\\n${CYAN}步驟 3: 將 CRL 導入到 VPN 端點...${NC}"
+                if import_crl_to_vpn_endpoint_lib "$EASYRSA_DIR_REVOKE" "$endpoint_id" "$aws_region"; then
+                    echo -e "${GREEN}✓ CRL 已成功導入到 VPN 端點${NC}"
+                else
+                    echo -e "${RED}✗ CRL 導入到 VPN 端點失敗${NC}"
+                    echo -e "${YELLOW}證書已在本地撤銷，但 VPN 端點可能需要手動更新 CRL${NC}"
+                fi
+            else
+                echo -e "${RED}✗ CRL 生成失敗${NC}"
+                echo -e "${YELLOW}證書已在本地撤銷，但 CRL 未更新${NC}"
+            fi
+        else
+            echo -e "${YELLOW}沒有成功的本地撤銷操作，跳過 CRL 更新${NC}"
+        fi
+    fi
+    
+    # 第四步：處理 ACM 證書刪除/標記
+    echo -e "\\n${CYAN}步驟 4: 處理 ACM 證書清理...${NC}"
     
     for cert_arn in "${user_cert_arns[@]}"; do
-        echo -e "${BLUE}處理證書: $cert_arn${NC}"
+        echo -e "${BLUE}處理 ACM 證書: $cert_arn${NC}"
         
         # 嘗試刪除證書
         local delete_result
         delete_result=$(aws acm delete-certificate --certificate-arn "$cert_arn" --region "$aws_region" 2>&1 || echo "failed")
         
         if [[ "$delete_result" == "failed" ]] || [[ "$delete_result" == *"error"* ]]; then
-            echo -e "${RED}✗ 無法刪除證書 $cert_arn${NC}"
+            echo -e "${RED}✗ 無法刪除 ACM 證書 $cert_arn${NC}"
             echo -e "${YELLOW}錯誤詳情: $delete_result${NC}"
             failed_certs+=("$cert_arn")
             
@@ -334,26 +474,57 @@ revoke_certificates() {
               --region "$aws_region" 2>&1 || echo "tag_failed")
             
             if [[ "$tag_result" != "tag_failed" ]]; then
-                echo -e "${YELLOW}已標記證書為已撤銷${NC}"
+                echo -e "${YELLOW}已標記 ACM 證書為已撤銷${NC}"
             fi
         else
-            echo -e "${GREEN}✓ 成功刪除證書 $cert_arn${NC}"
+            echo -e "${GREEN}✓ 成功刪除 ACM 證書 $cert_arn${NC}"
             revoked_certs+=("$cert_arn")
         fi
     done
     
-    echo -e "\\n${CYAN}證書撤銷結果:${NC}"
-    echo -e "  成功撤銷: ${GREEN}${#revoked_certs[@]}${NC} 個證書"
-    echo -e "  撤銷失敗: ${RED}${#failed_certs[@]}${NC} 個證書"
+    # 顯示完整的撤銷結果
+    echo -e "\\n${CYAN}完整證書撤銷結果:${NC}"
+    echo -e "  ${GREEN}本地 PKI 撤銷成功:${NC} ${#easyrsa_revoked[@]} 個證書"
+    echo -e "  ${RED}本地 PKI 撤銷失敗:${NC} ${#easyrsa_failed[@]} 個證書"
+    echo -e "  ${GREEN}ACM 證書刪除成功:${NC} ${#revoked_certs[@]} 個證書"
+    echo -e "  ${RED}ACM 證書刪除失敗:${NC} ${#failed_certs[@]} 個證書"
+    
+    if [ ${#easyrsa_revoked[@]} -gt 0 ]; then
+        echo -e "\\n${GREEN}本地撤銷成功的證書:${NC}"
+        for cert in "${easyrsa_revoked[@]}"; do
+            echo -e "  ${GREEN}✓ $cert${NC}"
+        done
+    fi
+    
+    if [ ${#easyrsa_failed[@]} -gt 0 ]; then
+        echo -e "\\n${YELLOW}本地撤銷失敗的證書:${NC}"
+        for cert in "${easyrsa_failed[@]}"; do
+            echo -e "  ${RED}✗ $cert${NC}"
+        done
+    fi
     
     if [ ${#failed_certs[@]} -gt 0 ]; then
-        echo -e "\\n${YELLOW}失敗的證書需要手動處理:${NC}"
+        echo -e "\\n${YELLOW}ACM 刪除失敗的證書需要手動處理:${NC}"
         for cert in "${failed_certs[@]}"; do
             echo -e "  ${RED}\"$cert\"${NC}"
         done
     fi
     
-    log_revocation_message "證書撤銷完成，成功: ${#revoked_certs[@]}, 失敗: ${#failed_certs[@]}"
+    # 重要安全提醒
+    if [ ${#easyrsa_revoked[@]} -gt 0 ]; then
+        echo -e "\\n${GREEN}✓ 重要: 證書已在本地 PKI 系統中撤銷，VPN 端點的 CRL 已更新${NC}"
+        echo -e "${GREEN}  用戶將無法再使用這些證書連接 VPN${NC}"
+    else
+        echo -e "\\n${RED}⚠ 警告: 沒有執行本地 PKI 撤銷操作${NC}"
+        echo -e "${RED}  用戶可能仍然可以使用現有證書連接 VPN${NC}"
+        echo -e "${YELLOW}  建議手動執行以下步驟:${NC}"
+        echo -e "${YELLOW}  1. 進入 $EASYRSA_DIR_REVOKE${NC}"
+        echo -e "${YELLOW}  2. 執行: ./easyrsa revoke $username${NC}"
+        echo -e "${YELLOW}  3. 執行: ./easyrsa gen-crl${NC}"
+        echo -e "${YELLOW}  4. 將 CRL 導入到 VPN 端點${NC}"
+    fi
+    
+    log_revocation_message "證書撤銷完成 - 本地PKI成功: ${#easyrsa_revoked[@]}, 本地PKI失敗: ${#easyrsa_failed[@]}, ACM成功: ${#revoked_certs[@]}, ACM失敗: ${#failed_certs[@]}"
 }
 
 # 檢查和移除 IAM 權限
@@ -454,23 +625,47 @@ AWS 身份: $(aws sts get-caller-identity --query 'Arn' --output text)
 VPN 端點資訊:
   端點 ID: $endpoint_id
   AWS 區域: $aws_region
+  EasyRSA 目錄: $EASYRSA_DIR_REVOKE
 
-撤銷的證書:
+本地 PKI 撤銷結果:
+EOF
+    
+    if [ ${#easyrsa_revoked[@]} -gt 0 ]; then
+        echo "  成功撤銷的本地證書:" >> "$report_file"
+        for cert in "${easyrsa_revoked[@]}"; do
+            echo "    ✓ $cert" >> "$report_file"
+        done
+    else
+        echo "  無本地證書被成功撤銷" >> "$report_file"
+    fi
+    
+    if [ ${#easyrsa_failed[@]} -gt 0 ]; then
+        echo "" >> "$report_file"
+        echo "  本地撤銷失敗的證書:" >> "$report_file"
+        for cert in "${easyrsa_failed[@]}"; do
+            echo "    ✗ $cert" >> "$report_file"
+        done
+    fi
+    
+    cat >> "$report_file" << EOF
+
+ACM 證書處理結果:
 EOF
     
     if [ ${#revoked_certs[@]} -gt 0 ]; then
+        echo "  成功刪除的 ACM 證書:" >> "$report_file"
         for cert in "${revoked_certs[@]}"; do
-            echo "  ✓ $cert" >> "$report_file"
+            echo "    ✓ $cert" >> "$report_file"
         done
     else
-        echo "  無證書被撤銷" >> "$report_file"
+        echo "  無 ACM 證書被刪除" >> "$report_file"
     fi
     
     if [ ${#failed_certs[@]} -gt 0 ]; then
         echo "" >> "$report_file"
-        echo "撤銷失敗的證書:" >> "$report_file"
+        echo "  ACM 刪除失敗的證書:" >> "$report_file"
         for cert in "${failed_certs[@]}"; do
-            echo "  ✗ $cert" >> "$report_file"
+            echo "    ✗ $cert" >> "$report_file"
         done
     fi
     
@@ -479,11 +674,39 @@ EOF
 IAM 用戶處理:
   $([ "$iam_user_exists" != "not_found" ] && echo "已處理同名 IAM 用戶" || echo "未發現同名 IAM 用戶")
 
+安全狀態評估:
+EOF
+    
+    if [ ${#easyrsa_revoked[@]} -gt 0 ]; then
+        echo "  ✓ 證書已在本地 PKI 系統中正確撤銷" >> "$report_file"
+        echo "  ✓ 證書撤銷列表 (CRL) 已更新並導入 VPN 端點" >> "$report_file"
+        echo "  ✓ 用戶無法再使用被撤銷的證書連接 VPN" >> "$report_file"
+    else
+        echo "  ⚠ 警告: 證書未在本地 PKI 系統中撤銷" >> "$report_file"
+        echo "  ⚠ 用戶可能仍然可以使用現有證書連接 VPN" >> "$report_file"
+        echo "  ⚠ 需要手動執行本地證書撤銷操作" >> "$report_file"
+    fi
+    
+    cat >> "$report_file" << EOF
+
 後續建議:
   1. 監控日誌，確認沒有來自此用戶的連接嘗試
   2. 檢查生產環境訪問日誌
   3. 如需重新授權，需要重新生成證書
   4. 更新團隊的用戶清單文檔
+EOF
+    
+    if [ ${#easyrsa_failed[@]} -gt 0 ] || [ ${#easyrsa_revoked[@]} -eq 0 ]; then
+        cat >> "$report_file" << EOF
+  5. ⚠ 手動完成證書撤銷步驟:
+     a. 進入目錄: $EASYRSA_DIR_REVOKE
+     b. 執行撤銷: ./easyrsa revoke $username
+     c. 生成 CRL: ./easyrsa gen-crl
+     d. 導入 CRL 到 VPN 端點: $endpoint_id
+EOF
+    fi
+    
+    cat >> "$report_file" << EOF
 
 操作完成時間: $(date)
 EOF
@@ -494,9 +717,17 @@ EOF
     echo -e "\\n${CYAN}撤銷操作摘要:${NC}"
     echo -e "  被撤銷用戶: ${YELLOW}$username${NC}"
     echo -e "  撤銷原因: ${YELLOW}$revocation_reason${NC}"
-    echo -e "  處理的證書: ${GREEN}${#revoked_certs[@]} 成功${NC}, ${RED}${#failed_certs[@]} 失敗${NC}"
+    echo -e "  本地 PKI 撤銷: ${GREEN}${#easyrsa_revoked[@]} 成功${NC}, ${RED}${#easyrsa_failed[@]} 失敗${NC}"
+    echo -e "  ACM 證書處理: ${GREEN}${#revoked_certs[@]} 成功${NC}, ${RED}${#failed_certs[@]} 失敗${NC}"
     echo -e "  IAM 用戶: $([ "$iam_user_exists" != "not_found" ] && echo "${YELLOW}已處理${NC}" || echo "${GREEN}未涉及${NC}")"
     echo -e "  報告文件: ${BLUE}$report_file${NC}"
+    
+    # 安全狀態指示
+    if [ ${#easyrsa_revoked[@]} -gt 0 ]; then
+        echo -e "  安全狀態: ${GREEN}✓ 撤銷完整，用戶無法連接 VPN${NC}"
+    else
+        echo -e "  安全狀態: ${RED}⚠ 不完整，需要手動完成撤銷${NC}"
+    fi
     
     log_revocation_message "撤銷報告已生成: $report_file"
 }
@@ -507,21 +738,59 @@ show_final_instructions() {
     echo -e "${GREEN}     訪問權限撤銷操作完成！          ${NC}"
     echo -e "${GREEN}=============================================${NC}"
     echo -e ""
+    
+    # 根據撤銷結果顯示不同的安全狀態
+    if [ ${#easyrsa_revoked[@]} -gt 0 ]; then
+        echo -e "${GREEN}✓ 證書撤銷狀態: 完整${NC}"
+        echo -e "${GREEN}  • 證書已在本地 PKI 系統中撤銷${NC}"
+        echo -e "${GREEN}  • 證書撤銷列表 (CRL) 已更新${NC}"
+        echo -e "${GREEN}  • VPN 端點已應用最新的 CRL${NC}"
+        echo -e "${GREEN}  • 用戶無法再使用被撤銷的證書連接${NC}"
+    else
+        echo -e "${RED}⚠ 證書撤銷狀態: 不完整${NC}"
+        echo -e "${RED}  • 證書未在本地 PKI 系統中撤銷${NC}"
+        echo -e "${RED}  • 用戶可能仍然可以使用現有證書連接${NC}"
+        echo -e "${YELLOW}  • 需要手動完成撤銷操作${NC}"
+    fi
+    
+    echo -e ""
     echo -e "${CYAN}後續確認步驟：${NC}"
     echo -e "${BLUE}1.${NC} 監控 VPN 連接日誌，確認用戶無法連接"
     echo -e "${BLUE}2.${NC} 檢查 AWS CloudWatch 中的 VPN 日誌"
     echo -e "${BLUE}3.${NC} 確認生產環境中沒有來自此用戶的活動"
     echo -e "${BLUE}4.${NC} 更新團隊的訪問權限文檔"
+    
+    # 如果需要手動完成撤銷，顯示具體步驟
+    if [ ${#easyrsa_failed[@]} -gt 0 ] || [ ${#easyrsa_revoked[@]} -eq 0 ]; then
+        echo -e ""
+        echo -e "${RED}⚠ 需要手動完成的操作：${NC}"
+        echo -e "${YELLOW}5.${NC} 完成證書撤銷（關鍵安全步驟）："
+        echo -e "   ${BLUE}a.${NC} 進入目錄: ${CYAN}cd $EASYRSA_DIR_REVOKE${NC}"
+        echo -e "   ${BLUE}b.${NC} 撤銷證書: ${CYAN}./easyrsa revoke $username${NC}"
+        echo -e "   ${BLUE}c.${NC} 生成 CRL: ${CYAN}./easyrsa gen-crl${NC}"
+        echo -e "   ${BLUE}d.${NC} 導入 CRL: ${CYAN}aws ec2 import-client-vpn-client-certificate-revocation-list --client-vpn-endpoint-id $endpoint_id --certificate-revocation-list fileb://pki/crl.pem --region $aws_region${NC}"
+    fi
+    
     echo -e ""
     echo -e "${CYAN}安全建議：${NC}"
     echo -e "${BLUE}•${NC} 持續監控異常訪問嘗試"
     echo -e "${BLUE}•${NC} 定期審計 VPN 用戶權限"
     echo -e "${BLUE}•${NC} 保留撤銷記錄以備審計"
     echo -e "${BLUE}•${NC} 如需重新授權，請重新生成證書"
+    echo -e "${BLUE}•${NC} 確認證書撤銷列表 (CRL) 定期更新"
+    echo -e ""
+    
+    # 顯示不同的完成狀態
+    if [ ${#easyrsa_revoked[@]} -gt 0 ]; then
+        echo -e "${GREEN}操作完成！用戶已被安全地撤銷 VPN 訪問權限。${NC}"
+    else
+        echo -e "${YELLOW}操作部分完成。請執行上述手動步驟以確保完整的安全撤銷。${NC}"
+        echo -e "${RED}在完成手動步驟之前，用戶可能仍然可以連接 VPN！${NC}"
+    fi
+    
     echo -e ""
     echo -e "${YELLOW}如果發現任何問題，請立即聯繫安全團隊${NC}"
     echo -e ""
-    echo -e "${GREEN}操作完成！${NC}"
 }
 
 # 確認操作
