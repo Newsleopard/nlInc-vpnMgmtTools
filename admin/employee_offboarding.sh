@@ -8,7 +8,7 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # 載入環境管理器 (必須第一個載入)
-source "$SCRIPT_DIR/lib/env_manager.sh"
+source "$SCRIPT_DIR/../lib/env_manager.sh"
 
 # 初始化環境
 if ! env_init_for_script "employee_offboarding.sh"; then
@@ -25,7 +25,7 @@ LOG_FILE="$OFFBOARDING_LOG_DIR/offboarding.log"
 CHECKLIST_FILE=""
 
 # 載入核心函式庫
-source "$SCRIPT_DIR/lib/core_functions.sh"
+source "$SCRIPT_DIR/../lib/core_functions.sh"
 
 # 阻止腳本在出錯時繼續執行
 set -e

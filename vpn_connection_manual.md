@@ -496,7 +496,7 @@ aws configure
 ```bash
 # 確保已切換到目標環境 (staging/production)
 ./vpn_env.sh status # 確認當前環境
-./aws_vpn_admin.sh
+./admin/aws_vpn_admin.sh
 ```
 
 **主要功能選單 (示例):**
@@ -526,7 +526,7 @@ aws configure
 **啟動方式:**
 ```bash
 # 確保已切換到目標環境
-./revoke_member_access.sh
+./admin/revoke_member_access.sh
 ```
 
 **撤銷流程 (示例):**
@@ -548,7 +548,7 @@ aws configure
 **啟動方式:**
 ```bash
 # 確保已切換到目標環境 (通常應同時檢查 Staging 和 Production)
-./employee_offboarding.sh
+./admin/employee_offboarding.sh
 ```
 
 **離職處理流程 (示例):**
@@ -957,12 +957,12 @@ echo "" >> $LOG_FILE
 ```bash
 # 清理 Staging 環境
 ./vpn_env.sh switch staging
-./aws_vpn_admin.sh
+./admin/aws_vpn_admin.sh
 # 選擇選項 4: 刪除 VPN 端點 (仔細確認提示)
 
 # 清理 Production 環境
 ./vpn_env.sh switch production
-./aws_vpn_admin.sh
+./admin/aws_vpn_admin.sh
 # 選擇選項 4: 刪除 VPN 端點 (仔細確認提示)
 ```
 

@@ -8,7 +8,7 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # 載入環境管理器 (必須第一個載入)
-source "$SCRIPT_DIR/lib/env_manager.sh"
+source "$SCRIPT_DIR/../lib/env_manager.sh"
 
 # 初始化環境
 if ! env_init_for_script "revoke_member_access.sh"; then
@@ -26,8 +26,8 @@ CONFIG_FILE="$VPN_ENDPOINT_CONFIG_FILE"
 EASYRSA_DIR_REVOKE="$ENV_CERT_DIR/easy-rsa-env"
 
 # 載入核心函式庫
-source "$SCRIPT_DIR/lib/core_functions.sh"
-source "$SCRIPT_DIR/lib/cert_management.sh"
+source "$SCRIPT_DIR/../lib/core_functions.sh"
+source "$SCRIPT_DIR/../lib/cert_management.sh"
 
 # 阻止腳本在出錯時繼續執行
 set -e
