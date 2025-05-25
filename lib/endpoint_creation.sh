@@ -1,7 +1,12 @@
 #!/bin/bash
 
 # 載入核心函式庫和依賴模組
-source "$(dirname "${BASH_SOURCE[0]}")/core_functions.sh"
+# Check if core_functions.sh exists before sourcing
+if [ -f "$(dirname "${BASH_SOURCE[0]}")/core_functions.sh" ]; then
+    source "$(dirname "${BASH_SOURCE[0]}")/core_functions.sh"
+elif [ -f "./lib/core_functions.sh" ]; then
+    source "./lib/core_functions.sh"
+fi
 # cert_management.sh 已經在主腳本中載入，這裡不需要重複載入
 # aws_setup.sh 同樣在主腳本中載入
 
@@ -229,7 +234,9 @@ _create_aws_client_vpn_endpoint_ec() {
     local vpn_name="$4"
     local aws_region="$5"
 
-    local log_group_name="/aws/clientvpn/$vpn_name"
+    # 清理 VPN 名稱以用於日誌群組 (只允許字母、數字、連字符和斜線)
+    local clean_log_name=$(echo "$vpn_name" | sed 's/[^a-zA-Z0-9/_-]/-/g' | sed 's/--*/-/g' | sed 's/^-\|-$//g')
+    local log_group_name="/aws/clientvpn/$clean_log_name"
     echo -e "${BLUE}創建 CloudWatch 日誌群組: $log_group_name${NC}"
     
     # 檢查日誌群組是否已存在
@@ -239,6 +246,8 @@ _create_aws_client_vpn_endpoint_ec() {
             echo -e "${GREEN}✓ 日誌群組創建成功${NC}"
         else
             echo -e "${YELLOW}日誌群組創建失敗，但這不會影響 VPN 端點創建${NC}"
+            echo -e "${YELLOW}嘗試不使用日誌群組創建 VPN 端點...${NC}"
+            log_group_name=""
         fi
     else
         echo -e "${GREEN}✓ 日誌群組已存在${NC}"
@@ -265,15 +274,68 @@ _create_aws_client_vpn_endpoint_ec() {
     local clean_vpn_name=$(echo "$vpn_name" | sed 's/[^a-zA-Z0-9-]/_/g')
     
     echo -e "${BLUE}執行 AWS CLI 命令創建 VPN 端點...${NC}"
-    endpoint_result=$(aws ec2 create-client-vpn-endpoint \
-      --client-cidr-block "$vpn_cidr" \
-      --server-certificate-arn "$server_cert_arn" \
-      --authentication-options Type=certificate-authentication,MutualAuthentication={ClientRootCertificateChainArn="$client_cert_arn"} \
-      --connection-log-options Enabled=true,CloudwatchLogGroup="$log_group_name" \
-      --split-tunnel \
-      --dns-servers 8.8.8.8 8.8.4.4 \
-      --region "$aws_region" \
-      --tag-specifications "ResourceType=client-vpn-endpoint,Tags=[{Key=Name,Value=$clean_vpn_name},{Key=Purpose,Value=VPNManagement}]" 2>&1)
+    
+    # 建構 authentication-options JSON
+    auth_options='{
+        "Type": "certificate-authentication",
+        "MutualAuthentication": {
+            "ClientRootCertificateChainArn": "'$client_cert_arn'"
+        }
+    }'
+    
+    # 建構 connection-log-options JSON (只有當日誌群組存在時才啟用)
+    if [ -n "$log_group_name" ]; then
+        log_options='{
+            "Enabled": true,
+            "CloudwatchLogGroup": "'$log_group_name'"
+        }'
+        echo -e "${GREEN}啟用 CloudWatch 日誌記錄${NC}"
+    else
+        log_options='{
+            "Enabled": false
+        }'
+        echo -e "${YELLOW}禁用 CloudWatch 日誌記錄${NC}"
+    fi
+    
+    # 建構 tag-specifications JSON
+    tag_specs='[{
+        "ResourceType": "client-vpn-endpoint",
+        "Tags": [
+            {"Key": "Name", "Value": "'$clean_vpn_name'"},
+            {"Key": "Purpose", "Value": "VPNManagement"}
+        ]
+    }]'
+    
+    echo -e "${YELLOW}創建參數預覽:${NC}"
+    echo "VPN CIDR: $vpn_cidr"
+    echo "伺服器證書: $server_cert_arn"
+    echo "客戶端證書: $client_cert_arn"
+    echo "日誌群組: $log_group_name"
+    echo "VPN 名稱: $clean_vpn_name"
+    
+    # 執行創建命令
+    if [ -n "$log_group_name" ]; then
+        endpoint_result=$(aws ec2 create-client-vpn-endpoint \
+          --client-cidr-block "$vpn_cidr" \
+          --server-certificate-arn "$server_cert_arn" \
+          --authentication-options "$auth_options" \
+          --connection-log-options "$log_options" \
+          --split-tunnel \
+          --dns-servers 8.8.8.8 8.8.4.4 \
+          --region "$aws_region" \
+          --tag-specifications "$tag_specs" 2>&1)
+    else
+        endpoint_result=$(aws ec2 create-client-vpn-endpoint \
+          --client-cidr-block "$vpn_cidr" \
+          --server-certificate-arn "$server_cert_arn" \
+          --authentication-options "$auth_options" \
+          --connection-log-options "$log_options" \
+          --split-tunnel \
+          --dns-servers 8.8.8.8 8.8.4.4 \
+          --region "$aws_region" \
+          --tag-specifications "$tag_specs" 2>&1)
+    fi
+      --tag-specifications "$tag_specs" 2>&1)
     exit_code=$?
     
     # 檢查 AWS CLI 命令是否成功執行
@@ -1972,7 +2034,8 @@ terminate_vpn_endpoint_lib() {
     fi
 
     # 5. Optionally, offer to delete CloudWatch log group
-    local log_group_name="/aws/clientvpn/$arg_vpn_name"
+    local clean_vpn_name=$(echo "$arg_vpn_name" | sed 's/[^a-zA-Z0-9/_-]/-/g' | sed 's/--*/-/g' | sed 's/^-\|-$//g')
+    local log_group_name="/aws/clientvpn/$clean_vpn_name"
     read -p "是否要刪除 CloudWatch 日誌群組 $log_group_name? (yes/no): " delete_log_group_confirmation
     if [[ "$delete_log_group_confirmation" == "yes" ]]; then
         echo -e "${BLUE}正在刪除 CloudWatch 日誌群組 $log_group_name...${NC}"
