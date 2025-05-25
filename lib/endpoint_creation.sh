@@ -661,11 +661,57 @@ _associate_target_network_ec() {
     local aws_region="$3"
 
     echo -e "${BLUE}關聯子網路...${NC}"
-    aws ec2 associate-client-vpn-target-network \
+    log_message_core "開始關聯子網路: 端點 ID=$endpoint_id, 子網路 ID=$subnet_id, 區域=$aws_region"
+    
+    local start_time=$(date '+%Y-%m-%d %H:%M:%S')
+    echo -e "${YELLOW}開始時間: $start_time${NC}"
+    log_message_core "AWS CLI 命令開始執行: associate-client-vpn-target-network, 開始時間: $start_time"
+    
+    # 執行 AWS CLI 命令並捕獲輸出和錯誤
+    local result output error_output exit_code
+    output=$(aws ec2 associate-client-vpn-target-network \
       --client-vpn-endpoint-id "$endpoint_id" \
       --subnet-id "$subnet_id" \
-      --region "$aws_region"
-    # 可以加入錯誤檢查
+      --region "$aws_region" 2>&1)
+    exit_code=$?
+    
+    local end_time=$(date '+%Y-%m-%d %H:%M:%S')
+    echo -e "${YELLOW}結束時間: $end_time${NC}"
+    log_message_core "AWS CLI 命令執行完成: associate-client-vpn-target-network, exit code: $exit_code, 結束時間: $end_time"
+    
+    if [ $exit_code -eq 0 ]; then
+        echo -e "${GREEN}✓ 子網路關聯成功${NC}"
+        log_message_core "子網路關聯成功: $output"
+        # 嘗試解析關聯 ID
+        local association_id
+        if association_id=$(echo "$output" | jq -r '.AssociationId' 2>/dev/null); then
+            if [ -n "$association_id" ] && [ "$association_id" != "null" ]; then
+                echo -e "${GREEN}關聯 ID: $association_id${NC}"
+                log_message_core "關聯 ID: $association_id"
+            fi
+        fi
+        return 0
+    else
+        echo -e "${RED}✗ 子網路關聯失敗${NC}"
+        echo -e "${RED}錯誤輸出: $output${NC}"
+        log_message_core "錯誤: 子網路關聯失敗 (exit code: $exit_code) - $output"
+        
+        # 保存詳細診斷信息
+        {
+            echo "=== 子網路關聯失敗診斷報告 ==="
+            echo "時間: $(date)"
+            echo "Exit Code: $exit_code"
+            echo "端點 ID: $endpoint_id"
+            echo "子網路 ID: $subnet_id"
+            echo "AWS 區域: $aws_region"
+            echo "錯誤輸出: $output"
+            echo "AWS CLI 版本: $(aws --version 2>&1)"
+            echo "當前身份: $(aws sts get-caller-identity --query 'Arn' --output text 2>/dev/null || echo '無法獲取')"
+            echo "================================"
+        } >> "${LOG_FILE:-vpn_error_diagnostic.log}"
+        
+        return 1
+    fi
 }
 
 # 輔助函式：設定授權和路由
@@ -676,20 +722,97 @@ _setup_authorization_and_routes_ec() {
     local aws_region="$4"
 
     echo -e "${BLUE}添加授權規則 (允許訪問主要 VPC)...${NC}"
-    aws ec2 authorize-client-vpn-ingress \
+    log_message_core "開始添加授權規則: 端點 ID=$endpoint_id, VPC CIDR=$vpc_cidr, 區域=$aws_region"
+    
+    local start_time=$(date '+%Y-%m-%d %H:%M:%S')
+    echo -e "${YELLOW}授權規則開始時間: $start_time${NC}"
+    log_message_core "AWS CLI 命令開始執行: authorize-client-vpn-ingress, 開始時間: $start_time"
+    
+    # 執行授權規則 AWS CLI 命令並捕獲輸出和錯誤
+    local auth_output auth_exit_code
+    auth_output=$(aws ec2 authorize-client-vpn-ingress \
       --client-vpn-endpoint-id "$endpoint_id" \
       --target-network-cidr "$vpc_cidr" \
       --authorize-all-groups \
-      --region "$aws_region"
-    # 可以加入錯誤檢查
+      --region "$aws_region" 2>&1)
+    auth_exit_code=$?
+    
+    local auth_end_time=$(date '+%Y-%m-%d %H:%M:%S')
+    echo -e "${YELLOW}授權規則結束時間: $auth_end_time${NC}"
+    log_message_core "AWS CLI 命令執行完成: authorize-client-vpn-ingress, exit code: $auth_exit_code, 結束時間: $auth_end_time"
+    
+    if [ $auth_exit_code -eq 0 ]; then
+        echo -e "${GREEN}✓ 授權規則添加成功${NC}"
+        log_message_core "授權規則添加成功: $auth_output"
+    else
+        echo -e "${RED}✗ 授權規則添加失敗${NC}"
+        echo -e "${RED}錯誤輸出: $auth_output${NC}"
+        log_message_core "錯誤: 授權規則添加失敗 (exit code: $auth_exit_code) - $auth_output"
+        
+        # 保存詳細診斷信息
+        {
+            echo "=== 授權規則添加失敗診斷報告 ==="
+            echo "時間: $(date)"
+            echo "Exit Code: $auth_exit_code"
+            echo "端點 ID: $endpoint_id"
+            echo "VPC CIDR: $vpc_cidr"
+            echo "AWS 區域: $aws_region"
+            echo "錯誤輸出: $auth_output"
+            echo "AWS CLI 版本: $(aws --version 2>&1)"
+            echo "當前身份: $(aws sts get-caller-identity --query 'Arn' --output text 2>/dev/null || echo '無法獲取')"
+            echo "============================="
+        } >> "${LOG_FILE:-vpn_error_diagnostic.log}"
+        
+        return 1
+    fi
 
     echo -e "${BLUE}創建路由 (允許所有流量通過 VPN 到主要子網路)...${NC}"
-    aws ec2 create-client-vpn-route \
+    log_message_core "開始創建路由: 端點 ID=$endpoint_id, 子網路 ID=$subnet_id, 區域=$aws_region"
+    
+    local route_start_time=$(date '+%Y-%m-%d %H:%M:%S')
+    echo -e "${YELLOW}路由創建開始時間: $route_start_time${NC}"
+    log_message_core "AWS CLI 命令開始執行: create-client-vpn-route, 開始時間: $route_start_time"
+    
+    # 執行路由創建 AWS CLI 命令並捕獲輸出和錯誤
+    local route_output route_exit_code
+    route_output=$(aws ec2 create-client-vpn-route \
       --client-vpn-endpoint-id "$endpoint_id" \
       --destination-cidr-block "0.0.0.0/0" \
       --target-vpc-subnet-id "$subnet_id" \
-      --region "$aws_region"
-    # 可以加入錯誤檢查
+      --region "$aws_region" 2>&1)
+    route_exit_code=$?
+    
+    local route_end_time=$(date '+%Y-%m-%d %H:%M:%S')
+    echo -e "${YELLOW}路由創建結束時間: $route_end_time${NC}"
+    log_message_core "AWS CLI 命令執行完成: create-client-vpn-route, exit code: $route_exit_code, 結束時間: $route_end_time"
+    
+    if [ $route_exit_code -eq 0 ]; then
+        echo -e "${GREEN}✓ 路由創建成功${NC}"
+        log_message_core "路由創建成功: $route_output"
+    else
+        echo -e "${RED}✗ 路由創建失敗${NC}"
+        echo -e "${RED}錯誤輸出: $route_output${NC}"
+        log_message_core "錯誤: 路由創建失敗 (exit code: $route_exit_code) - $route_output"
+        
+        # 保存詳細診斷信息
+        {
+            echo "=== 路由創建失敗診斷報告 ==="
+            echo "時間: $(date)"
+            echo "Exit Code: $route_exit_code"
+            echo "端點 ID: $endpoint_id"
+            echo "目標子網路 ID: $subnet_id"
+            echo "目標 CIDR: 0.0.0.0/0"
+            echo "AWS 區域: $aws_region"
+            echo "錯誤輸出: $route_output"
+            echo "AWS CLI 版本: $(aws --version 2>&1)"
+            echo "當前身份: $(aws sts get-caller-identity --query 'Arn' --output text 2>/dev/null || echo '無法獲取')"
+            echo "========================="
+        } >> "${LOG_FILE:-vpn_error_diagnostic.log}"
+        
+        return 1
+    fi
+    
+    return 0
 }
 
 # 主要的端點創建函式
@@ -760,17 +883,34 @@ create_vpn_endpoint_lib() {
 
     # 等待端點可用
     echo -e "${BLUE}等待 VPN 端點可用...${NC}"
+    log_message_core "開始等待 VPN 端點可用: $endpoint_id"
     if ! _wait_for_client_vpn_endpoint_available "$endpoint_id" "$aws_region"; then
         echo -e "${RED}等待 VPN 端點可用時發生錯誤或超時。${NC}"
+        log_message_core "錯誤: 等待 VPN 端點可用失敗或超時: $endpoint_id"
         # 可以考慮是否需要刪除部分創建的資源
         return 1
     fi
+    log_message_core "VPN 端點已可用: $endpoint_id"
 
     # 關聯子網路
-    _associate_target_network_ec "$endpoint_id" "$subnet_id" "$aws_region"
+    echo -e "\n${CYAN}=== 步驟：關聯子網路到 VPN 端點 ===${NC}"
+    log_message_core "開始執行關聯子網路步驟: 端點=$endpoint_id, 子網路=$subnet_id"
+    if ! _associate_target_network_ec "$endpoint_id" "$subnet_id" "$aws_region"; then
+        echo -e "${RED}關聯子網路失敗，VPN 端點創建過程終止。${NC}"
+        log_message_core "錯誤: 關聯子網路失敗，VPN 端點創建過程終止"
+        return 1
+    fi
+    log_message_core "關聯子網路步驟完成成功"
 
     # 添加授權規則和路由
-    _setup_authorization_and_routes_ec "$endpoint_id" "$vpc_cidr" "$subnet_id" "$aws_region"
+    echo -e "\n${CYAN}=== 步驟：設置授權規則和路由 ===${NC}"
+    log_message_core "開始執行設置授權規則和路由步驟: 端點=$endpoint_id, VPC CIDR=$vpc_cidr"
+    if ! _setup_authorization_and_routes_ec "$endpoint_id" "$vpc_cidr" "$subnet_id" "$aws_region"; then
+        echo -e "${RED}設置授權規則和路由失敗，VPN 端點創建過程終止。${NC}"
+        log_message_core "錯誤: 設置授權規則和路由失敗，VPN 端點創建過程終止"
+        return 1
+    fi
+    log_message_core "設置授權規則和路由步驟完成成功"
 
     # 保存配置
     echo -e "${BLUE}保存配置到 \"$main_config_file\"...${NC}" # Quoted $main_config_file
@@ -866,16 +1006,62 @@ _associate_one_vpc_to_endpoint_lib() {
     fi
     
     echo -e "${BLUE}關聯子網路到 VPN 端點...${NC}"
-    local association_result
-    association_result=$(aws ec2 associate-client-vpn-target-network \
+    log_message_core "開始執行 AWS CLI 命令: associate-client-vpn-target-network"
+    log_message_core "命令參數: endpoint_id=$arg_endpoint_id, subnet_id=$subnet_to_associate_id, region=$arg_aws_region"
+    
+    local start_time=$(date '+%Y-%m-%d %H:%M:%S')
+    local association_result output exit_code
+    output=$(aws ec2 associate-client-vpn-target-network \
       --client-vpn-endpoint-id "$arg_endpoint_id" \
       --subnet-id "$subnet_to_associate_id" \
       --region "$arg_aws_region" 2>&1)
+    exit_code=$?
+    local end_time=$(date '+%Y-%m-%d %H:%M:%S')
     
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}關聯子網路 \"$subnet_to_associate_id\" 失敗: $association_result${NC}" # Quoted variable, association_result is a variable
+    log_message_core "AWS CLI 命令執行完成: associate-client-vpn-target-network, exit code: $exit_code, 結束時間: $end_time"
+    
+    if [ $exit_code -ne 0 ]; then
+        echo -e "${RED}關聯子網路 \"$subnet_to_associate_id\" 失敗${NC}"
+        log_message_core "錯誤: AWS CLI 命令失敗: associate-client-vpn-target-network"
+        log_message_core "錯誤輸出: $output"
+        
+        # 保存詳細的診斷信息到錯誤日誌文件
+        local error_log_file="/tmp/vpn_associate_subnet_error_$(date +%Y%m%d_%H%M%S).log"
+        cat > "$error_log_file" << EOF
+=== VPN 端點子網路關聯失敗診斷報告 ===
+時間: $(date)
+函數: _associate_one_vpc_to_endpoint_lib
+
+參數信息:
+- VPN Endpoint ID: $arg_endpoint_id
+- Subnet ID: $subnet_to_associate_id  
+- AWS Region: $arg_aws_region
+
+AWS CLI 命令: 
+aws ec2 associate-client-vpn-target-network --client-vpn-endpoint-id "$arg_endpoint_id" --subnet-id "$subnet_to_associate_id" --region "$arg_aws_region"
+
+執行時間:
+- 開始時間: $start_time
+- 結束時間: $end_time
+- Exit Code: $exit_code
+
+錯誤輸出:
+$output
+
+建議檢查項目:
+1. VPN 端點是否存在且狀態正常
+2. 子網路是否存在且可用
+3. IAM 權限是否充足
+4. 網路配置是否正確
+5. AWS 服務狀態是否正常
+EOF
+        
+        log_message_core "錯誤診斷報告已保存到: $error_log_file"
+        echo -e "${RED}詳細錯誤信息已記錄到: $error_log_file${NC}"
         return 1
     fi
+    
+    association_result="$output"
     
     local new_association_id
     new_association_id=$(echo "$association_result" | jq -r '.AssociationId')
@@ -886,27 +1072,129 @@ _associate_one_vpc_to_endpoint_lib() {
     echo -e "${BLUE}關聯 ID: $new_association_id${NC}" # new_association_id is a variable
     
     echo -e "${BLUE}添加授權規則...${NC}"
-    if ! aws ec2 authorize-client-vpn-ingress \
+    log_message_core "開始執行 AWS CLI 命令: authorize-client-vpn-ingress"
+    log_message_core "命令參數: endpoint_id=$arg_endpoint_id, target_network_cidr=$vpc_to_add_cidr, region=$arg_aws_region"
+    
+    local auth_start_time=$(date '+%Y-%m-%d %H:%M:%S')
+    local auth_output auth_exit_code
+    auth_output=$(aws ec2 authorize-client-vpn-ingress \
       --client-vpn-endpoint-id "$arg_endpoint_id" \
       --target-network-cidr "$vpc_to_add_cidr" \
       --authorize-all-groups \
-      --region "$arg_aws_region"; then
-        echo -e "${RED}為 CIDR \"$vpc_to_add_cidr\" 添加授權規則失敗。${NC}" # Quoted variable
+      --region "$arg_aws_region" 2>&1)
+    auth_exit_code=$?
+    local auth_end_time=$(date '+%Y-%m-%d %H:%M:%S')
+    
+    log_message_core "AWS CLI 命令執行完成: authorize-client-vpn-ingress, exit code: $auth_exit_code, 結束時間: $auth_end_time"
+    
+    if [ $auth_exit_code -ne 0 ]; then
+        echo -e "${RED}為 CIDR \"$vpc_to_add_cidr\" 添加授權規則失敗${NC}"
+        log_message_core "錯誤: AWS CLI 命令失敗: authorize-client-vpn-ingress"
+        log_message_core "錯誤輸出: $auth_output"
+        
+        # 保存詳細的診斷信息到錯誤日誌文件
+        local auth_error_log_file="/tmp/vpn_authorize_ingress_error_$(date +%Y%m%d_%H%M%S).log"
+        cat > "$auth_error_log_file" << EOF
+=== VPN 端點授權規則添加失敗診斷報告 ===
+時間: $(date)
+函數: _associate_one_vpc_to_endpoint_lib
+
+參數信息:
+- VPN Endpoint ID: $arg_endpoint_id
+- Target Network CIDR: $vpc_to_add_cidr
+- AWS Region: $arg_aws_region
+
+AWS CLI 命令:
+aws ec2 authorize-client-vpn-ingress --client-vpn-endpoint-id "$arg_endpoint_id" --target-network-cidr "$vpc_to_add_cidr" --authorize-all-groups --region "$arg_aws_region"
+
+執行時間:
+- 開始時間: $auth_start_time
+- 結束時間: $auth_end_time
+- Exit Code: $auth_exit_code
+
+錯誤輸出:
+$auth_output
+
+建議檢查項目:
+1. VPN 端點是否存在且狀態正常
+2. 授權規則是否已存在（重複添加）
+3. CIDR 格式是否正確
+4. IAM 權限是否充足
+5. AWS 服務狀態是否正常
+EOF
+        
+        log_message_core "錯誤診斷報告已保存到: $auth_error_log_file"
+        echo -e "${RED}詳細錯誤信息已記錄到: $auth_error_log_file${NC}"
         return 1 
     fi
+    
+    echo -e "${GREEN}✓ 授權規則添加成功${NC}"
+    log_message_core "授權規則添加成功: $auth_output"
       
     local add_route_for_vpc
     read -p "是否為此 VPC ($vpc_to_add_id) 添加路由? (y/n): " add_route_for_vpc
     if [[ "$add_route_for_vpc" == "y" ]]; then
-        echo -e "${BLUE}添加到 VPC \"$vpc_to_add_id\" 的路由...${NC}" # Quoted variable
-        if ! aws ec2 create-client-vpn-route \
+        echo -e "${BLUE}添加到 VPC \"$vpc_to_add_id\" 的路由...${NC}"
+        log_message_core "開始執行 AWS CLI 命令: create-client-vpn-route"
+        log_message_core "命令參數: endpoint_id=$arg_endpoint_id, destination_cidr=$vpc_to_add_cidr, target_subnet_id=$subnet_to_associate_id, region=$arg_aws_region"
+        
+        local route_start_time=$(date '+%Y-%m-%d %H:%M:%S')
+        local route_output route_exit_code
+        route_output=$(aws ec2 create-client-vpn-route \
           --client-vpn-endpoint-id "$arg_endpoint_id" \
           --destination-cidr-block "$vpc_to_add_cidr" \
           --target-vpc-subnet-id "$subnet_to_associate_id" \
-          --region "$arg_aws_region"; then
-            echo -e "${RED}為 VPC \"$vpc_to_add_id\" (CIDR \"$vpc_to_add_cidr\") 創建路由到子網路 \"$subnet_to_associate_id\" 失敗。${NC}" # Quoted variables
+          --region "$arg_aws_region" 2>&1)
+        route_exit_code=$?
+        local route_end_time=$(date '+%Y-%m-%d %H:%M:%S')
+        
+        log_message_core "AWS CLI 命令執行完成: create-client-vpn-route, exit code: $route_exit_code, 結束時間: $route_end_time"
+        
+        if [ $route_exit_code -ne 0 ]; then
+            echo -e "${RED}為 VPC \"$vpc_to_add_id\" (CIDR \"$vpc_to_add_cidr\") 創建路由到子網路 \"$subnet_to_associate_id\" 失敗${NC}"
+            log_message_core "錯誤: AWS CLI 命令失敗: create-client-vpn-route"
+            log_message_core "錯誤輸出: $route_output"
+            
+            # 保存詳細的診斷信息到錯誤日誌文件
+            local route_error_log_file="/tmp/vpn_create_route_error_$(date +%Y%m%d_%H%M%S).log"
+            cat > "$route_error_log_file" << EOF
+=== VPN 端點路由創建失敗診斷報告 ===
+時間: $(date)
+函數: _associate_one_vpc_to_endpoint_lib
+
+參數信息:
+- VPN Endpoint ID: $arg_endpoint_id
+- Destination CIDR: $vpc_to_add_cidr
+- Target Subnet ID: $subnet_to_associate_id
+- VPC ID: $vpc_to_add_id
+- AWS Region: $arg_aws_region
+
+AWS CLI 命令:
+aws ec2 create-client-vpn-route --client-vpn-endpoint-id "$arg_endpoint_id" --destination-cidr-block "$vpc_to_add_cidr" --target-vpc-subnet-id "$subnet_to_associate_id" --region "$arg_aws_region"
+
+執行時間:
+- 開始時間: $route_start_time
+- 結束時間: $route_end_time
+- Exit Code: $route_exit_code
+
+錯誤輸出:
+$route_output
+
+建議檢查項目:
+1. VPN 端點是否存在且狀態正常
+2. 目標子網路是否已正確關聯到端點
+3. 路由是否已存在（重複添加）
+4. CIDR 格式是否正確
+5. IAM 權限是否充足
+6. AWS 服務狀態是否正常
+EOF
+            
+            log_message_core "錯誤診斷報告已保存到: $route_error_log_file"
+            echo -e "${RED}詳細錯誤信息已記錄到: $route_error_log_file${NC}"
+            echo -e "${YELLOW}警告: 路由創建失敗，但 VPC 關聯和授權規則已成功。可稍後手動添加路由。${NC}"
         else
-            echo -e "${GREEN}路由已添加${NC}"
+            echo -e "${GREEN}✓ 路由已添加${NC}"
+            log_message_core "路由創建成功: $route_output"
         fi
     fi
     
@@ -1061,22 +1349,121 @@ disassociate_vpc_lib() {
     fi
     
     echo -e "${BLUE}正在移除 VPC 關聯 (ID: \"$association_id_to_remove\")...${NC}" # Quoted variable
-    if ! aws ec2 disassociate-client-vpn-target-network \
+    log_message_core "開始執行 AWS CLI 命令: disassociate-client-vpn-target-network"
+    log_message_core "命令參數: endpoint_id=$arg_endpoint_id, association_id=$association_id_to_remove, region=$arg_aws_region"
+    
+    local disassociate_start_time=$(date '+%Y-%m-%d %H:%M:%S')
+    local disassociate_output disassociate_exit_code
+    disassociate_output=$(aws ec2 disassociate-client-vpn-target-network \
       --client-vpn-endpoint-id "$arg_endpoint_id" \
       --association-id "$association_id_to_remove" \
-      --region "$arg_aws_region"; then
+      --region "$arg_aws_region" 2>&1)
+    disassociate_exit_code=$?
+    local disassociate_end_time=$(date '+%Y-%m-%d %H:%M:%S')
+    
+    log_message_core "AWS CLI 命令執行完成: disassociate-client-vpn-target-network, exit code: $disassociate_exit_code, 結束時間: $disassociate_end_time"
+    
+    if [ $disassociate_exit_code -ne 0 ]; then
         echo -e "${RED}解除關聯 \"$association_id_to_remove\" 失敗。${NC}" # Quoted variable
+        log_message_core "錯誤: AWS CLI 命令失敗: disassociate-client-vpn-target-network"
+        log_message_core "錯誤輸出: $disassociate_output"
+        
+        # 保存詳細的診斷信息到錯誤日誌文件
+        local disassociate_error_log_file="/tmp/vpn_disassociate_subnet_error_$(date +%Y%m%d_%H%M%S).log"
+        cat > "$disassociate_error_log_file" << EOF
+=== VPN 端點子網路解除關聯失敗診斷報告 ===
+時間: $(date)
+函數: disassociate_vpc_lib
+
+參數信息:
+- VPN Endpoint ID: $arg_endpoint_id
+- Association ID: $association_id_to_remove
+- Target Subnet ID: $target_subnet_for_assoc
+- AWS Region: $arg_aws_region
+
+AWS CLI 命令:
+aws ec2 disassociate-client-vpn-target-network --client-vpn-endpoint-id "$arg_endpoint_id" --association-id "$association_id_to_remove" --region "$arg_aws_region"
+
+執行時間:
+- 開始時間: $disassociate_start_time
+- 結束時間: $disassociate_end_time
+- Exit Code: $disassociate_exit_code
+
+錯誤輸出:
+$disassociate_output
+
+建議檢查項目:
+1. VPN 端點是否存在且狀態正常
+2. 關聯 ID 是否有效
+3. 關聯是否處於可解除的狀態
+4. IAM 權限是否充足
+5. 是否有依賴的路由或授權規則需要先移除
+6. AWS 服務狀態是否正常
+EOF
+        
+        log_message_core "錯誤診斷報告已保存到: $disassociate_error_log_file"
         return 1
     fi
     
+    echo -e "${GREEN}✓ 子網路解除關聯命令執行成功${NC}"
+    log_message_core "子網路解除關聯成功: $disassociate_output"
+    
     echo -e "${BLUE}等待解除關聯完成...${NC}"
-    if ! aws ec2 wait client-vpn-target-network-disassociated \
+    log_message_core "開始執行 AWS CLI 命令: wait client-vpn-target-network-disassociated"
+    log_message_core "等待參數: endpoint_id=$arg_endpoint_id, association_id=$association_id_to_remove, region=$arg_aws_region"
+    
+    local wait_start_time=$(date '+%Y-%m-%d %H:%M:%S')
+    local wait_output wait_exit_code
+    wait_output=$(aws ec2 wait client-vpn-target-network-disassociated \
       --client-vpn-endpoint-id "$arg_endpoint_id" \
       --association-id "$association_id_to_remove" \
-      --region "$arg_aws_region"; then
+      --region "$arg_aws_region" 2>&1)
+    wait_exit_code=$?
+    local wait_end_time=$(date '+%Y-%m-%d %H:%M:%S')
+    
+    log_message_core "AWS CLI 命令執行完成: wait client-vpn-target-network-disassociated, exit code: $wait_exit_code, 結束時間: $wait_end_time"
+    
+    if [ $wait_exit_code -ne 0 ]; then
         echo -e "${RED}等待解除關聯 \"$association_id_to_remove\" 完成時發生錯誤或超時。${NC}" # Quoted variable
-        # Proceed with config update, but log this issue.
         log_message_core "警告: 等待解除關聯 \"$association_id_to_remove\" 完成時發生錯誤或超時。" # Quoted variable
+        log_message_core "等待命令錯誤輸出: $wait_output"
+        
+        # 保存詳細的診斷信息到錯誤日誌文件
+        local wait_error_log_file="/tmp/vpn_wait_disassociate_error_$(date +%Y%m%d_%H%M%S).log"
+        cat > "$wait_error_log_file" << EOF
+=== VPN 端點解除關聯等待失敗診斷報告 ===
+時間: $(date)
+函數: disassociate_vpc_lib
+
+參數信息:
+- VPN Endpoint ID: $arg_endpoint_id
+- Association ID: $association_id_to_remove
+- AWS Region: $arg_aws_region
+
+AWS CLI 命令:
+aws ec2 wait client-vpn-target-network-disassociated --client-vpn-endpoint-id "$arg_endpoint_id" --association-id "$association_id_to_remove" --region "$arg_aws_region"
+
+執行時間:
+- 開始時間: $wait_start_time
+- 結束時間: $wait_end_time
+- Exit Code: $wait_exit_code
+
+錯誤輸出:
+$wait_output
+
+建議檢查項目:
+1. 關聯是否確實已啟動解除程序
+2. 解除關聯是否因依賴項目而阻塞
+3. AWS 服務是否有延遲或問題
+4. 關聯 ID 是否仍然有效
+5. 網路配置是否阻止解除關聯
+6. 檢查 AWS CloudWatch 或 CloudTrail 日誌
+EOF
+        
+        log_message_core "等待錯誤診斷報告已保存到: $wait_error_log_file"
+    else
+        echo -e "${GREEN}✓ 等待解除關聯完成${NC}"
+        log_message_core "等待解除關聯成功完成"
     fi
     echo -e "${GREEN}關聯 \"$association_id_to_remove\" 已成功解除。${NC}" # Quoted variable
 
@@ -1345,17 +1732,66 @@ manage_routes_lib() {
                         # Routes with origin 'associate' (from subnet association) or 'add-route' (manually added) can be deleted.
                         # 'local' routes (VPN client CIDR) cannot be deleted.
                         if [ "$origin_of_route_to_delete_lib" == "associate" ] || [ "$origin_of_route_to_delete_lib" == "add-route" ]; then
-                             if aws ec2 delete-client-vpn-route \
+                            echo -e "${BLUE}正在刪除路由 \"$del_dest_cidr_lib\" (目標子網路: \"$del_target_subnet_id_lib\")...${NC}"
+                            log_message_core "開始執行 AWS CLI 命令: delete-client-vpn-route"
+                            log_message_core "命令參數: endpoint_id=$arg_endpoint_id, destination_cidr=$del_dest_cidr_lib, target_subnet_id=$del_target_subnet_id_lib, region=$arg_aws_region"
+                            
+                            local delete_route_start_time=$(date '+%Y-%m-%d %H:%M:%S')
+                            local delete_route_output delete_route_exit_code
+                            delete_route_output=$(aws ec2 delete-client-vpn-route \
                                 --client-vpn-endpoint-id "$arg_endpoint_id" \
                                 --destination-cidr-block "$del_dest_cidr_lib" \
                                 --target-vpc-subnet-id "$del_target_subnet_id_lib" \
-                                --region "$arg_aws_region"; then
+                                --region "$arg_aws_region" 2>&1)
+                            delete_route_exit_code=$?
+                            local delete_route_end_time=$(date '+%Y-%m-%d %H:%M:%S')
+                            
+                            log_message_core "AWS CLI 命令執行完成: delete-client-vpn-route, exit code: $delete_route_exit_code, 結束時間: $delete_route_end_time"
+                            
+                            if [ $delete_route_exit_code -eq 0 ]; then
                                 echo -e "${GREEN}路由已刪除。${NC}"
-                                log_message_core "路由已刪除 (lib): \"$del_dest_cidr_lib\" (目標子網路: \"$del_target_subnet_id_lib\") from endpoint \"$arg_endpoint_id\"" # Quoted variables
-                             else
+                                log_message_core "路由已刪除 (lib): \"$del_dest_cidr_lib\" (目標子網路: \"$del_target_subnet_id_lib\") from endpoint \"$arg_endpoint_id\""
+                            else
                                 echo -e "${RED}刪除路由失敗。${NC}"
-                                log_message_core "錯誤: 刪除路由失敗 (lib): \"$del_dest_cidr_lib\" (目標子網路: \"$del_target_subnet_id_lib\") from endpoint \"$arg_endpoint_id\"" # Quoted variables
-                             fi
+                                log_message_core "錯誤: AWS CLI 命令失敗: delete-client-vpn-route"
+                                log_message_core "錯誤輸出: $delete_route_output"
+                                
+                                # 保存詳細的診斷信息到錯誤日誌文件
+                                local delete_route_error_log_file="/tmp/vpn_delete_route_error_$(date +%Y%m%d_%H%M%S).log"
+                                cat > "$delete_route_error_log_file" << EOF
+=== VPN 端點路由刪除失敗診斷報告 ===
+時間: $(date)
+函數: manage_routes_lib (第一個 delete-client-vpn-route 實例)
+
+參數信息:
+- VPN Endpoint ID: $arg_endpoint_id
+- Destination CIDR: $del_dest_cidr_lib
+- Target Subnet ID: $del_target_subnet_id_lib
+- Route Origin: $origin_of_route_to_delete_lib
+- AWS Region: $arg_aws_region
+
+AWS CLI 命令:
+aws ec2 delete-client-vpn-route --client-vpn-endpoint-id "$arg_endpoint_id" --destination-cidr-block "$del_dest_cidr_lib" --target-vpc-subnet-id "$del_target_subnet_id_lib" --region "$arg_aws_region"
+
+執行時間:
+- 開始時間: $delete_route_start_time
+- 結束時間: $delete_route_end_time
+- Exit Code: $delete_route_exit_code
+
+錯誤輸出:
+$delete_route_output
+
+建議檢查項目:
+1. VPN 端點是否存在且狀態正常
+2. 路由是否確實存在
+3. 目標子網路 ID 是否正確
+4. 路由來源是否允許刪除 (associate/add-route)
+5. IAM 權限是否充足
+6. AWS 服務狀態是否正常
+EOF
+                                
+                                log_message_core "錯誤診斷報告已保存到: $delete_route_error_log_file"
+                            fi
                         else
                              echo -e "${RED}無法刪除此路由。來源為 '$origin_of_route_to_delete_lib'。通常只有手動添加的路由 ('add-route') 或因子網路關聯而創建的路由 ('associate') 可以刪除。${NC}" # origin_of_route_to_delete_lib is a variable
                              echo -e "${YELLOW}提示: 'local' 路由 (VPN Client CIDR) 不能被刪除。${NC}"
@@ -1732,15 +2168,62 @@ remove_authorization_rule_lib() {
             echo -e "${YELLOW}警告: 您即將移除目標 CIDR 為 '$revoke_cidr_lib' 的授權規則。${NC}" # revoke_cidr_lib is a variable
             read -p "確認移除? (y/n): " confirm_revoke_lib
             if [[ "$confirm_revoke_lib" == "y" ]]; then
-                if aws ec2 revoke-client-vpn-ingress \
+                log_message_core "開始執行 AWS CLI 命令: revoke-client-vpn-ingress"
+                log_message_core "命令參數: endpoint_id=$arg_endpoint_id, target_network_cidr=$revoke_cidr_lib, region=$arg_aws_region"
+                
+                local revoke_start_time=$(date '+%Y-%m-%d %H:%M:%S')
+                local revoke_output revoke_exit_code
+                revoke_output=$(aws ec2 revoke-client-vpn-ingress \
                   --client-vpn-endpoint-id "$arg_endpoint_id" \
                   --target-network-cidr "$revoke_cidr_lib" \
                   --revoke-all-groups \
-                  --region "$arg_aws_region"; then
+                  --region "$arg_aws_region" 2>&1)
+                revoke_exit_code=$?
+                local revoke_end_time=$(date '+%Y-%m-%d %H:%M:%S')
+                
+                log_message_core "AWS CLI 命令執行完成: revoke-client-vpn-ingress, exit code: $revoke_exit_code, 結束時間: $revoke_end_time"
+                
+                if [ $revoke_exit_code -eq 0 ]; then
                     echo -e "${GREEN}授權規則 \"$revoke_cidr_lib\" 已移除。${NC}" # Quoted variable
                     log_message_core "授權規則已移除 (lib): $revoke_cidr_lib from endpoint $arg_endpoint_id" # Quoted variables
                 else
                     echo -e "${RED}移除授權規則 \"$revoke_cidr_lib\" 失敗。${NC}" # Quoted variable
+                    log_message_core "錯誤: AWS CLI 命令失敗: revoke-client-vpn-ingress"
+                    log_message_core "錯誤輸出: $revoke_output"
+                    
+                    # 保存詳細的診斷信息到錯誤日誌文件
+                    local revoke_error_log_file="/tmp/vpn_revoke_ingress_error_$(date +%Y%m%d_%H%M%S).log"
+                    cat > "$revoke_error_log_file" << EOF
+=== VPN 端點授權規則移除失敗診斷報告 ===
+時間: $(date)
+函數: manage_batch_vpc_auth_lib
+
+參數信息:
+- VPN Endpoint ID: $arg_endpoint_id
+- Target Network CIDR: $revoke_cidr_lib
+- AWS Region: $arg_aws_region
+
+AWS CLI 命令:
+aws ec2 revoke-client-vpn-ingress --client-vpn-endpoint-id "$arg_endpoint_id" --target-network-cidr "$revoke_cidr_lib" --revoke-all-groups --region "$arg_aws_region"
+
+執行時間:
+- 開始時間: $revoke_start_time
+- 結束時間: $revoke_end_time
+- Exit Code: $revoke_exit_code
+
+錯誤輸出:
+$revoke_output
+
+建議檢查項目:
+1. VPN 端點是否存在且狀態正常
+2. 授權規則是否確實存在
+3. CIDR 格式是否正確
+4. IAM 權限是否充足
+5. AWS 服務狀態是否正常
+EOF
+                    
+                    log_message_core "錯誤診斷報告已保存到: $revoke_error_log_file"
+                    echo -e "${RED}詳細錯誤信息已記錄到: $revoke_error_log_file${NC}"
                 fi
             else
                 echo -e "${BLUE}操作已取消。${NC}"
@@ -1940,17 +2423,66 @@ remove_route_lib() {
     origin_of_route_to_delete_lib=$(echo "$route_to_delete_info_lib" | jq -r '.Origin')
     
     if [ "$origin_of_route_to_delete_lib" == "associate" ] || [ "$origin_of_route_to_delete_lib" == "add-route" ]; then
-        if aws ec2 delete-client-vpn-route \
+        echo -e "${BLUE}正在刪除路由 \"$del_dest_cidr_lib\" (目標子網路: \"$del_target_subnet_id_lib\")...${NC}"
+        log_message_core "開始執行 AWS CLI 命令: delete-client-vpn-route"
+        log_message_core "命令參數: endpoint_id=$arg_endpoint_id, destination_cidr=$del_dest_cidr_lib, target_subnet_id=$del_target_subnet_id_lib, region=$arg_aws_region"
+        
+        local delete_route_start_time=$(date '+%Y-%m-%d %H:%M:%S')
+        local delete_route_output delete_route_exit_code
+        delete_route_output=$(aws ec2 delete-client-vpn-route \
             --client-vpn-endpoint-id "$arg_endpoint_id" \
             --destination-cidr-block "$del_dest_cidr_lib" \
             --target-vpc-subnet-id "$del_target_subnet_id_lib" \
-            --region "$arg_aws_region"; then
+            --region "$arg_aws_region" 2>&1)
+        delete_route_exit_code=$?
+        local delete_route_end_time=$(date '+%Y-%m-%d %H:%M:%S')
+        
+        log_message_core "AWS CLI 命令執行完成: delete-client-vpn-route, exit code: $delete_route_exit_code, 結束時間: $delete_route_end_time"
+        
+        if [ $delete_route_exit_code -eq 0 ]; then
             echo -e "${GREEN}路由已成功刪除。${NC}"
             log_message_core "路由已刪除 (lib): $del_dest_cidr_lib (目標子網路: $del_target_subnet_id_lib) from endpoint $arg_endpoint_id"
             return 0
         else
             echo -e "${RED}刪除路由失敗。${NC}"
-            log_message_core "錯誤: 刪除路由失敗 (lib): $del_dest_cidr_lib (目標子網路: $del_target_subnet_id_lib) from endpoint $arg_endpoint_id"
+            log_message_core "錯誤: AWS CLI 命令失敗: delete-client-vpn-route"
+            log_message_core "錯誤輸出: $delete_route_output"
+            
+            # 保存詳細的診斷信息到錯誤日誌文件
+            local delete_route_error_log_file="/tmp/vpn_delete_route_error_$(date +%Y%m%d_%H%M%S).log"
+            cat > "$delete_route_error_log_file" << EOF
+=== VPN 端點路由刪除失敗診斷報告 ===
+時間: $(date)
+函數: delete_route_lib
+
+參數信息:
+- VPN Endpoint ID: $arg_endpoint_id
+- Destination CIDR: $del_dest_cidr_lib
+- Target Subnet ID: $del_target_subnet_id_lib
+- Route Origin: $origin_of_route_to_delete_lib
+- AWS Region: $arg_aws_region
+
+AWS CLI 命令:
+aws ec2 delete-client-vpn-route --client-vpn-endpoint-id "$arg_endpoint_id" --destination-cidr-block "$del_dest_cidr_lib" --target-vpc-subnet-id "$del_target_subnet_id_lib" --region "$arg_aws_region"
+
+執行時間:
+- 開始時間: $delete_route_start_time
+- 結束時間: $delete_route_end_time
+- Exit Code: $delete_route_exit_code
+
+錯誤輸出:
+$delete_route_output
+
+建議檢查項目:
+1. VPN 端點是否存在且狀態正常
+2. 路由是否確實存在
+3. 目標子網路 ID 是否正確
+4. 路由來源是否允許刪除 (associate/add-route)
+5. IAM 權限是否充足
+6. AWS 服務狀態是否正常
+EOF
+            
+            log_message_core "錯誤診斷報告已保存到: $delete_route_error_log_file"
             return 1
         fi
     else
@@ -1969,28 +2501,84 @@ _wait_for_client_vpn_endpoint_available() {
     local attempt=0
     
     echo -e "${BLUE}檢查 VPN 端點狀態...${NC}"
+    log_message_core "開始等待 VPN 端點可用: 端點 ID=$endpoint_id, 區域=$aws_region, 最大嘗試次數=$max_attempts"
+    
+    local start_wait_time=$(date '+%Y-%m-%d %H:%M:%S')
+    log_message_core "開始等待時間: $start_wait_time"
     
     while [ $attempt -lt $max_attempts ]; do
         local endpoint_state
+        local query_start_time=$(date '+%Y-%m-%d %H:%M:%S')
+        
         endpoint_state=$(aws ec2 describe-client-vpn-endpoints \
             --client-vpn-endpoint-ids "$endpoint_id" \
             --region "$aws_region" \
             --query 'ClientVpnEndpoints[0].Status.Code' \
             --output text 2>/dev/null)
         
+        local query_exit_code=$?
+        log_message_core "AWS CLI 查詢端點狀態: 嘗試 $((attempt+1))/$max_attempts, exit code: $query_exit_code, 狀態: $endpoint_state"
+        
+        if [ $query_exit_code -ne 0 ]; then
+            echo -e "${RED}查詢端點狀態失敗 (嘗試 $((attempt+1))/$max_attempts)${NC}"
+            log_message_core "錯誤: 查詢端點狀態失敗, 嘗試: $((attempt+1))/$max_attempts"
+            sleep 10
+            ((attempt++))
+            continue
+        fi
+        
         if [ "$endpoint_state" = "available" ]; then
+            local end_wait_time=$(date '+%Y-%m-%d %H:%M:%S')
             echo -e "${GREEN}✓ VPN 端點現在可用${NC}"
+            log_message_core "VPN 端點已可用: 端點 ID=$endpoint_id, 總等待時間: $((attempt * 10))秒, 結束時間: $end_wait_time"
             return 0
-        elif [ "$endpoint_state" = "pending-associate" ] || [ "$endpoint_state" = "pending" ]; then
+        elif [ "$endpoint_state" = "pending-associate" ]; then
+            local end_wait_time=$(date '+%Y-%m-%d %H:%M:%S')
+            echo -e "${GREEN}✓ VPN 端點已創建完成，狀態: pending-associate (等待子網關聯)${NC}"
+            log_message_core "VPN 端點創建成功，狀態: pending-associate, 端點 ID=$endpoint_id, 總等待時間: $((attempt * 10))秒, 結束時間: $end_wait_time"
+            return 0
+        elif [ "$endpoint_state" = "pending" ]; then
             echo -e "${YELLOW}端點狀態: $endpoint_state - 等待中 (${attempt}/$max_attempts)${NC}"
+            log_message_core "端點狀態: $endpoint_state, 繼續等待 (嘗試: $((attempt+1))/$max_attempts)"
             sleep 10
             ((attempt++))
         else
             echo -e "${RED}端點狀態異常: $endpoint_state${NC}"
+            log_message_core "錯誤: 端點狀態異常: $endpoint_state, 端點 ID: $endpoint_id"
+            
+            # 保存詳細診斷信息
+            {
+                echo "=== VPN 端點狀態異常診斷報告 ==="
+                echo "時間: $(date)"
+                echo "端點 ID: $endpoint_id"
+                echo "AWS 區域: $aws_region"
+                echo "異常狀態: $endpoint_state"
+                echo "等待嘗試次數: $((attempt+1))/$max_attempts"
+                echo "AWS CLI 版本: $(aws --version 2>&1)"
+                echo "當前身份: $(aws sts get-caller-identity --query 'Arn' --output text 2>/dev/null || echo '無法獲取')"
+                echo "============================="
+            } >> "${LOG_FILE:-vpn_error_diagnostic.log}"
+            
             return 1
         fi
     done
     
+    local timeout_end_time=$(date '+%Y-%m-%d %H:%M:%S')
     echo -e "${RED}等待端點可用超時${NC}"
+    log_message_core "錯誤: 等待端點可用超時: 端點 ID=$endpoint_id, 總等待時間: $((max_attempts * 10))秒, 超時時間: $timeout_end_time"
+    
+    # 保存超時診斷信息
+    {
+        echo "=== VPN 端點等待超時診斷報告 ==="
+        echo "時間: $(date)"
+        echo "端點 ID: $endpoint_id"
+        echo "AWS 區域: $aws_region"
+        echo "最大等待時間: $((max_attempts * 10))秒"
+        echo "最後狀態: $endpoint_state"
+        echo "AWS CLI 版本: $(aws --version 2>&1)"
+        echo "當前身份: $(aws sts get-caller-identity --query 'Arn' --output text 2>/dev/null || echo '無法獲取')"
+        echo "=========================="
+    } >> "${LOG_FILE:-vpn_error_diagnostic.log}"
+    
     return 1
 }
