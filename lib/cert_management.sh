@@ -44,10 +44,11 @@ initialize_easyrsa_lib() {
 }
 
 # 生成 CA 憑證 (庫函式版本)
-# 參數: $1 = EASYRSA_DIR, $2 = CA_NAME (可選, 預設 "NL-VPN-CA")
+# 參數: $1 = EASYRSA_DIR, $2 = CA_NAME (可選, 預設 "NL-VPN-CA"), $3 = env_config_file
 generate_ca_certificate_lib() {
     local easyrsa_dir="$1"
     local ca_name="${2:-NL-VPN-CA}" # 如果 $2 未提供或為空，則使用預設值
+    local env_config_file="$3"
 
     # 參數驗證
     if [ -z "$easyrsa_dir" ] || [ ! -d "$easyrsa_dir/pki" ]; then # 檢查 pki 是否存在，表示已初始化
@@ -60,8 +61,13 @@ generate_ca_certificate_lib() {
         # validate_username 應已處理特定錯誤的記錄和輸出
         return 1
     fi
+    if [ -z "$env_config_file" ] || [ ! -f "$env_config_file" ]; then
+        echo -e "${RED}錯誤: 環境配置文件參數無效或文件不存在: $env_config_file${NC}"
+        log_message_core "錯誤: generate_ca_certificate_lib 調用時 env_config_file 參數無效: $env_config_file"
+        return 1
+    fi
 
-    log_message_core "開始生成 CA 憑證 (lib) - CA 名稱: $ca_name, EasyRSA 目錄: $easyrsa_dir"
+    log_message_core "開始生成 CA 憑證 (lib) - CA 名稱: $ca_name, EasyRSA 目錄: $easyrsa_dir, Config: $env_config_file"
 
     # 生成 CA 證書
     if [ ! -f "$easyrsa_dir/pki/ca.crt" ]; then
@@ -79,8 +85,15 @@ generate_ca_certificate_lib() {
     fi
 
     # 更新配置文件中的 CA ARN
-    echo "CA_CERT_ARN='$(aws acm import-certificate --certificate fileb://$easyrsa_dir/pki/ca.crt --private-key fileb://$easyrsa_dir/pki/private/ca.key --region $AWS_REGION --output text --query CertificateArn)'" >> "$script_dir/vpn_config"
-    log_message_core "CA 憑證 ARN 已更新到配置文件: $script_dir/vpn_config"
+    local ca_arn_value
+    ca_arn_value=$(aws acm import-certificate --certificate "fileb://$easyrsa_dir/pki/ca.crt" --private-key "fileb://$easyrsa_dir/pki/private/ca.key" --region "$AWS_REGION" --output text --query CertificateArn 2>&1)
+    if [ $? -ne 0 ] || [ -z "$ca_arn_value" ] || [[ "$ca_arn_value" == "null" ]]; then
+        log_message_core "錯誤: 從 AWS ACM 獲取 CA_CERT_ARN 失敗。輸出: $ca_arn_value"
+        echo -e "${RED}錯誤: 無法獲取 CA 憑證 ARN。請檢查日誌。${NC}"
+        return 1
+    fi
+    update_config "$env_config_file" "CA_CERT_ARN" "$ca_arn_value"
+    log_message_core "CA 憑證 ARN 已更新到配置文件: $env_config_file"
 
     echo -e "${GREEN}CA 憑證生成流程完成！${NC}"
     log_message "VPN CA 證書已生成"
@@ -89,10 +102,11 @@ generate_ca_certificate_lib() {
 }
 
 # 生成伺服器憑證 (庫函式版本)
-# 參數: $1 = EASYRSA_DIR, $2 = SERVER_NAME (可選, 預設 "server")
+# 參數: $1 = EASYRSA_DIR, $2 = SERVER_NAME (可選, 預設 "server"), $3 = env_config_file
 generate_server_certificate_lib() {
     local easyrsa_dir="$1"
     local server_name="${2:-server}"
+    local env_config_file="$3"
 
     # 參數驗證
     if [ -z "$easyrsa_dir" ] || [ ! -d "$easyrsa_dir/pki" ]; then
@@ -104,8 +118,13 @@ generate_server_certificate_lib() {
         log_message_core "錯誤: generate_server_certificate_lib - 伺服器名稱無效: '$server_name'"
         return 1
     fi
+    if [ -z "$env_config_file" ] || [ ! -f "$env_config_file" ]; then
+        echo -e "${RED}錯誤: 環境配置文件參數無效或文件不存在: $env_config_file${NC}"
+        log_message_core "錯誤: generate_server_certificate_lib 調用時 env_config_file 參數無效: $env_config_file"
+        return 1
+    fi
 
-    log_message_core "開始生成伺服器憑證 (lib) - 名稱: $server_name, 目錄: $easyrsa_dir"
+    log_message_core "開始生成伺服器憑證 (lib) - 名稱: $server_name, 目錄: $easyrsa_dir, Config: $env_config_file"
 
     # 生成伺服器證書
     if [ ! -f "$easyrsa_dir/pki/issued/server.crt" ]; then
@@ -127,8 +146,15 @@ generate_server_certificate_lib() {
     fi
 
     # 更新配置文件中的伺服器憑證 ARN
-    echo "SERVER_CERT_ARN='$(aws acm import-certificate --certificate fileb://$easyrsa_dir/pki/issued/server.crt --private-key fileb://$easyrsa_dir/pki/private/server.key --certificate-chain fileb://$easyrsa_dir/pki/ca.crt --region $AWS_REGION --output text --query CertificateArn)'" >> "$script_dir/vpn_config"
-    log_message_core "伺服器憑證 ARN 已更新到配置文件: $script_dir/vpn_config"
+    local server_arn_value
+    server_arn_value=$(aws acm import-certificate --certificate "fileb://$easyrsa_dir/pki/issued/server.crt" --private-key "fileb://$easyrsa_dir/pki/private/server.key" --certificate-chain "fileb://$easyrsa_dir/pki/ca.crt" --region "$AWS_REGION" --output text --query CertificateArn 2>&1)
+    if [ $? -ne 0 ] || [ -z "$server_arn_value" ] || [[ "$server_arn_value" == "null" ]]; then
+        log_message_core "錯誤: 從 AWS ACM 獲取 SERVER_CERT_ARN 失敗。輸出: $server_arn_value"
+        echo -e "${RED}錯誤: 無法獲取伺服器憑證 ARN。請檢查日誌。${NC}"
+        return 1
+    fi
+    update_config "$env_config_file" "SERVER_CERT_ARN" "$server_arn_value"
+    log_message_core "伺服器憑證 ARN 已更新到配置文件: $env_config_file"
 
     echo -e "${GREEN}伺服器憑證生成流程完成！${NC}"
     log_message "VPN 伺服器證書已生成"
@@ -137,15 +163,21 @@ generate_server_certificate_lib() {
 }
 
 # 生成客戶端憑證 (庫函式版本)
-# 參數: $1 = EASYRSA_DIR, $2 = CLIENT_NAME
+# 參數: $1 = EASYRSA_DIR, $2 = CLIENT_NAME, $3 = env_config_file
 generate_client_certificate_lib() {
     local easyrsa_dir="$1"
     local client_name="$2"
+    local env_config_file="$3"
 
     # 參數驗證
     if [ -z "$easyrsa_dir" ] || [ ! -d "$easyrsa_dir/pki" ]; then
         echo -e "${RED}錯誤: EasyRSA 目錄未初始化或無效${NC}"
         log_message_core "錯誤: generate_client_certificate_lib 調用時 EasyRSA 目錄未初始化或無效: $easyrsa_dir"
+        return 1
+    fi
+    if [ -z "$env_config_file" ] || [ ! -f "$env_config_file" ]; then
+        echo -e "${RED}錯誤: 環境配置文件參數無效或文件不存在: $env_config_file${NC}"
+        log_message_core "錯誤: generate_client_certificate_lib 調用時 env_config_file 參數無效: $env_config_file"
         return 1
     fi
     
@@ -157,7 +189,7 @@ generate_client_certificate_lib() {
         return 1
     fi
 
-    log_message_core "開始生成客戶端憑證 (lib) - 名稱: $client_name, 目錄: $easyrsa_dir"
+    log_message_core "開始生成客戶端憑證 (lib) - 名稱: $client_name, 目錄: $easyrsa_dir, Config: $env_config_file"
 
     # 生成客戶端證書
     if [ ! -f "$easyrsa_dir/pki/issued/$client_name.crt" ]; then
@@ -179,8 +211,15 @@ generate_client_certificate_lib() {
     fi
 
     # 更新配置文件中的客戶端憑證 ARN
-    echo "CLIENT_CERT_ARN_${client_name}='$(aws acm import-certificate --certificate fileb://$easyrsa_dir/pki/issued/$client_name.crt --private-key fileb://$easyrsa_dir/pki/private/$client_name.key --region $AWS_REGION --output text --query CertificateArn)'" >> "$script_dir/vpn_config"
-    log_message_core "客戶端憑證 ARN 已更新到配置文件: $script_dir/vpn_config"
+    local client_arn_value
+    client_arn_value=$(aws acm import-certificate --certificate "fileb://$easyrsa_dir/pki/issued/$client_name.crt" --private-key "fileb://$easyrsa_dir/pki/private/$client_name.key" --region "$AWS_REGION" --output text --query CertificateArn 2>&1)
+    if [ $? -ne 0 ] || [ -z "$client_arn_value" ] || [[ "$client_arn_value" == "null" ]]; then
+        log_message_core "錯誤: 從 AWS ACM 獲取 CLIENT_CERT_ARN_${client_name} 失敗。輸出: $client_arn_value"
+        echo -e "${RED}錯誤: 無法獲取客戶端憑證 ARN。請檢查日誌。${NC}"
+        return 1
+    fi
+    update_config "$env_config_file" "CLIENT_CERT_ARN_${client_name}" "$client_arn_value"
+    log_message_core "客戶端憑證 ARN 已更新到配置文件: $env_config_file"
 
     echo -e "${GREEN}客戶端憑證生成流程完成！${NC}"
     log_message "VPN 客戶端證書已生成"
@@ -293,15 +332,21 @@ import_certificate_to_acm_lib() {
 }
 
 # 撤銷客戶端憑證 (庫函式版本)
-# 參數: $1 = EASYRSA_DIR, $2 = CLIENT_NAME
+# 參數: $1 = EASYRSA_DIR, $2 = CLIENT_NAME, $3 = env_config_file
 revoke_client_certificate_lib() {
     local easyrsa_dir="$1"
     local client_name="$2"
+    local env_config_file="$3"
 
     # 參數驗證
     if [ -z "$easyrsa_dir" ] || [ ! -d "$easyrsa_dir/pki" ]; then
         echo -e "${RED}錯誤: EasyRSA 目錄未初始化或無效${NC}"
         log_message_core "錯誤: revoke_client_certificate_lib - EasyRSA 目錄無效: $easyrsa_dir"
+        return 1
+    fi
+    if [ -z "$env_config_file" ] || [ ! -f "$env_config_file" ]; then
+        echo -e "${RED}錯誤: 環境配置文件參數無效或文件不存在: $env_config_file${NC}"
+        log_message_core "錯誤: revoke_client_certificate_lib 調用時 env_config_file 參數無效: $env_config_file"
         return 1
     fi
 
@@ -313,7 +358,7 @@ revoke_client_certificate_lib() {
         return 1
     fi
 
-    log_message_core "開始撤銷客戶端憑證 (lib) - 名稱: $client_name, 目錄: $easyrsa_dir"
+    log_message_core "開始撤銷客戶端憑證 (lib) - 名稱: $client_name, 目錄: $easyrsa_dir, Config: $env_config_file"
 
     # 撤銷客戶端證書
     if "$easyrsa_dir/easyrsa" revoke "$client_name"; then
@@ -329,13 +374,24 @@ revoke_client_certificate_lib() {
 
     # 匯入 CRL 到 VPN 端點
     local endpoint_id
-    endpoint_id=$(grep -Eo 'ENDPOINT_ID="[^"]+"' "$script_dir/vpn_config" | cut -d'"' -f2)
+    # 從 env_config_file 獲取 ENDPOINT_ID
+    if [ -f "$env_config_file" ]; then
+        endpoint_id=$(grep -Eo 'ENDPOINT_ID="[^"]+"' "$env_config_file" | cut -d'"' -f2)
+    fi
+
     if [ -n "$endpoint_id" ]; then
+        log_message_core "找到 ENDPOINT_ID: $endpoint_id 從 $env_config_file"
         if ! import_crl_to_vpn_endpoint_lib "$easyrsa_dir" "$endpoint_id" "$AWS_REGION"; then
-            handle_error "匯入 CRL 到 VPN 端點失敗。" "$?" 1
+            # import_crl_to_vpn_endpoint_lib 應該已經調用 handle_error
+            # 此處只記錄並返回錯誤
+            log_message_core "錯誤: revoke_client_certificate_lib - import_crl_to_vpn_endpoint_lib 失敗"
+            return 1 # 確保返回錯誤碼
         fi
     else
-        echo -e "${YELLOW}未找到 ENDPOINT_ID，跳過 CRL 匯入到 VPN 端點。${NC}"
+        echo -e "${YELLOW}未在 $env_config_file 中找到 ENDPOINT_ID 或文件不存在，跳過 CRL 匯入到 VPN 端點。${NC}"
+        log_message_core "警告: 未在 $env_config_file 中找到 ENDPOINT_ID，跳過 CRL 自動匯入"
+        # 根據需求，這裡可以選擇是否返回錯誤。如果 CRL 匯入是關鍵步驟，則應返回錯誤。
+        # 目前，我們只發出警告並繼續，因為主要目的是撤銷證書。
     fi
 
     echo -e "${GREEN}客戶端憑證 '$client_name' 撤銷成功。請重新生成 CRL 並上傳。${NC}"
@@ -516,10 +572,11 @@ import_certificates_to_acm_lib() {
 }
 
 # 生成完整的證書集合 (庫函式版本)
-# 參數: $1 = SCRIPT_DIR
+# 參數: $1 = cert_dir, $2 = env_config_file
 # 功能: 初始化 EasyRSA、生成 CA、伺服器和客戶端證書
 generate_certificates_lib() {
-    local cert_dir="$1" # 改為使用 cert_dir 而不是 script_dir
+    local cert_dir="$1"
+    local env_config_file="$2"
     local easyrsa_dir="$cert_dir" # 直接使用證書目錄
     local original_dir="$PWD"  # 記錄原始目錄
 
@@ -529,8 +586,13 @@ generate_certificates_lib() {
         log_message_core "錯誤: generate_certificates_lib - 證書目錄無效: $cert_dir"
         return 1
     fi
+    if [ -z "$env_config_file" ] || [ ! -f "$env_config_file" ]; then
+        echo -e "${RED}錯誤: 環境配置文件參數無效或文件不存在: $env_config_file${NC}" >&2
+        log_message_core "錯誤: generate_certificates_lib - 環境配置文件無效: $env_config_file"
+        return 1
+    fi
 
-    log_message_core "開始生成完整證書集合 (lib) - 目標目錄: $easyrsa_dir"
+    log_message_core "開始生成完整證書集合 (lib) - 目標目錄: $easyrsa_dir, Config: $env_config_file"
 
     # 檢查是否已經存在證書
     if [ -f "$easyrsa_dir/pki/ca.crt" ] && [ -f "$easyrsa_dir/pki/issued/server.crt" ]; then
@@ -572,7 +634,7 @@ generate_certificates_lib() {
 
     # 3. 生成 CA 證書
     echo -e "${BLUE}生成 CA 證書...${NC}"
-    if ! generate_ca_certificate_lib "$easyrsa_dir" "NL-VPN-CA"; then
+    if ! generate_ca_certificate_lib "$easyrsa_dir" "NL-VPN-CA" "$env_config_file"; then
         echo -e "${RED}錯誤: CA 證書生成失敗${NC}" >&2
         cd "$original_dir" || {
             echo -e "${RED}警告: 無法恢復到原始目錄${NC}"
@@ -582,7 +644,7 @@ generate_certificates_lib() {
 
     # 4. 生成伺服器證書
     echo -e "${BLUE}生成伺服器證書...${NC}"
-    if ! generate_server_certificate_lib "$easyrsa_dir" "server"; then
+    if ! generate_server_certificate_lib "$easyrsa_dir" "server" "$env_config_file"; then
         echo -e "${RED}錯誤: 伺服器證書生成失敗${NC}" >&2
         cd "$original_dir" || {
             echo -e "${RED}警告: 無法恢復到原始目錄${NC}"
@@ -592,7 +654,7 @@ generate_certificates_lib() {
 
     # 5. 生成預設管理員客戶端證書
     echo -e "${BLUE}生成管理員客戶端證書...${NC}"
-    if ! generate_client_certificate_lib "$easyrsa_dir" "admin"; then
+    if ! generate_client_certificate_lib "$easyrsa_dir" "admin" "$env_config_file"; then
         echo -e "${RED}錯誤: 管理員客戶端證書生成失敗${NC}" >&2
         cd "$original_dir" || {
             echo -e "${RED}警告: 無法恢復到原始目錄${NC}"

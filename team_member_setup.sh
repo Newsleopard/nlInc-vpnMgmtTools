@@ -394,8 +394,6 @@ generate_client_certificate() {
     # 優先檢查環境特定的 CA 證書路徑
     if [ -f "$VPN_CA_CERT_FILE" ]; then
         ca_cert_path="$VPN_CA_CERT_FILE"
-    elif [ -f "$SCRIPT_DIR/ca.crt" ]; then
-        ca_cert_path="$SCRIPT_DIR/ca.crt"
     elif [ -f "$VPN_CERT_DIR/ca.crt" ]; then
         ca_cert_path="$VPN_CERT_DIR/ca.crt"
     else

@@ -87,7 +87,7 @@ create_vpn_endpoint() {
     
     # 1. 生成證書 (如果不存在) - 使用環境感知路徑
     if [ ! -f "$VPN_CERT_DIR/pki/ca.crt" ]; then
-        generate_certificates_lib "$VPN_CERT_DIR"
+        generate_certificates_lib "$VPN_CERT_DIR" "$CONFIG_FILE"
         if [ $? -ne 0 ]; then
             echo -e "${RED}證書生成失敗。中止操作。${NC}"
             return 1
