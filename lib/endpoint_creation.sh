@@ -230,11 +230,41 @@ _create_aws_client_vpn_endpoint_ec() {
     local aws_region="$5"
 
     local log_group_name="/aws/clientvpn/$vpn_name"
-    echo -e "${BLUE}創建 CloudWatch 日誌群組...${NC}"
-    aws logs create-log-group --log-group-name "$log_group_name" --region "$aws_region" 2>/dev/null || true
+    echo -e "${BLUE}創建 CloudWatch 日誌群組: $log_group_name${NC}"
+    
+    # 檢查日誌群組是否已存在
+    if ! aws logs describe-log-groups --log-group-name-prefix "$log_group_name" --region "$aws_region" --query "logGroups[?logGroupName=='$log_group_name']" --output text | grep -q "$log_group_name"; then
+        echo -e "${YELLOW}日誌群組不存在，正在創建...${NC}"
+        if aws logs create-log-group --log-group-name "$log_group_name" --region "$aws_region" 2>/dev/null; then
+            echo -e "${GREEN}✓ 日誌群組創建成功${NC}"
+        else
+            echo -e "${YELLOW}日誌群組創建失敗，但這不會影響 VPN 端點創建${NC}"
+        fi
+    else
+        echo -e "${GREEN}✓ 日誌群組已存在${NC}"
+    fi
     
     echo -e "${BLUE}創建 Client VPN 端點...${NC}"
-    local endpoint_result
+    echo -e "${YELLOW}使用參數:${NC}"
+    echo -e "  VPN CIDR: $vpn_cidr"
+    echo -e "  伺服器憑證 ARN: $server_cert_arn"
+    echo -e "  客戶端憑證 ARN: $client_cert_arn"
+    echo -e "  VPN 名稱: $vpn_name"
+    echo -e "  AWS 區域: $aws_region"
+    
+    # 執行調試檢查
+    echo -e "\n${BLUE}執行預檢查...${NC}"
+    if ! debug_aws_cli_params "$vpn_cidr" "$server_cert_arn" "$client_cert_arn" "$vpn_name" "$aws_region"; then
+        echo -e "${RED}預檢查失敗，無法繼續創建 VPN 端點${NC}"
+        return 1
+    fi
+    
+    local endpoint_result exit_code
+    
+    # 清理 VPN 名稱中的特殊字符以用於標籤
+    local clean_vpn_name=$(echo "$vpn_name" | sed 's/[^a-zA-Z0-9-]/_/g')
+    
+    echo -e "${BLUE}執行 AWS CLI 命令創建 VPN 端點...${NC}"
     endpoint_result=$(aws ec2 create-client-vpn-endpoint \
       --client-cidr-block "$vpn_cidr" \
       --server-certificate-arn "$server_cert_arn" \
@@ -243,19 +273,83 @@ _create_aws_client_vpn_endpoint_ec() {
       --split-tunnel \
       --dns-servers 8.8.8.8 8.8.4.4 \
       --region "$aws_region" \
-      --tag-specifications "ResourceType=client-vpn-endpoint,Tags=[{Key=Name,Value=\"$vpn_name\"},{Key=Purpose,Value=ProductionDebug}]" 2>&1) # Quoted $vpn_name in Value
+      --tag-specifications "ResourceType=client-vpn-endpoint,Tags=[{Key=Name,Value=$clean_vpn_name},{Key=Purpose,Value=VPNManagement}]" 2>&1)
+    exit_code=$?
+    
+    # 檢查 AWS CLI 命令是否成功執行
+    if [ $exit_code -ne 0 ]; then
+        echo -e "${RED}AWS CLI 命令執行失敗 (exit code: $exit_code)${NC}"
+        echo -e "${RED}錯誤輸出:${NC}"
+        echo "$endpoint_result"
+        log_message_core "錯誤: VPN 端點創建失敗 - AWS CLI 錯誤 (exit code: $exit_code)"
+        return 1
+    fi
+    
+    # 檢查輸出是否為空
+    if [ -z "$endpoint_result" ]; then
+        echo -e "${RED}AWS CLI 命令沒有返回任何輸出${NC}"
+        log_message_core "錯誤: VPN 端點創建失敗 - 無輸出"
+        return 1
+    fi
+    
+    # 記錄原始輸出用於調試
+    echo -e "${YELLOW}AWS CLI 原始輸出:${NC}"
+    echo "$endpoint_result"
+    
+    # 嘗試修復可能的 JSON 格式問題
+    # 有時候 AWS CLI 可能在 JSON 前面加入一些額外字符
+    cleaned_result=$(echo "$endpoint_result" | sed '1{/^[[:space:]]*$/d;}' | grep -E '^\s*\{' | head -1)
+    if [ -n "$cleaned_result" ]; then
+        # 從找到的第一個 { 開始提取 JSON
+        json_start_line=$(echo "$endpoint_result" | grep -n '^[[:space:]]*{' | head -1 | cut -d: -f1)
+        if [ -n "$json_start_line" ]; then
+            cleaned_result=$(echo "$endpoint_result" | tail -n +$json_start_line)
+            echo -e "${YELLOW}清理後的 JSON:${NC}"
+            echo "$cleaned_result"
+        else
+            cleaned_result="$endpoint_result"
+        fi
+    else
+        cleaned_result="$endpoint_result"
+    fi
+    
+    # 檢查清理後的輸出是否為有效的 JSON
+    if ! echo "$cleaned_result" | jq empty 2>/dev/null; then
+        echo -e "${RED}AWS CLI 返回的不是有效的 JSON 格式${NC}"
+        echo -e "${RED}嘗試使用備用解析方法...${NC}"
+        
+        # 嘗試使用 grep 和 sed 提取端點 ID
+        endpoint_id=$(echo "$endpoint_result" | grep -o '"ClientVpnEndpointId"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"ClientVpnEndpointId"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+        
+        if [ -n "$endpoint_id" ] && [ "$endpoint_id" != "null" ]; then
+            echo -e "${GREEN}✓ 使用備用方法成功提取端點 ID: $endpoint_id${NC}"
+            echo "$endpoint_id"
+            return 0
+        else
+            echo -e "${RED}備用解析方法也失敗${NC}"
+            echo -e "${RED}原始輸出: $endpoint_result${NC}"
+            log_message_core "錯誤: VPN 端點創建失敗 - JSON 解析失敗"
+            return 1
+        fi
+    fi
     
     local endpoint_id
-    if ! endpoint_id=$(echo "$endpoint_result" | jq -r '.ClientVpnEndpointId'); then
-        echo -e "${RED}創建 Client VPN 端點失敗: $endpoint_result${NC}" # endpoint_result is a variable
+    if ! endpoint_id=$(echo "$cleaned_result" | jq -r '.ClientVpnEndpointId' 2>/dev/null); then
+        echo -e "${RED}無法從響應中解析端點 ID${NC}"
+        echo -e "${RED}響應內容: $cleaned_result${NC}"
+        log_message_core "錯誤: VPN 端點創建失敗 - 端點 ID 解析失敗"
         return 1
     fi
 
     if [ -z "$endpoint_id" ] || [ "$endpoint_id" == "null" ]; then
-        echo -e "${RED}創建 Client VPN 端點後未能獲取 Endpoint ID: $endpoint_result${NC}" # endpoint_result is a variable
+        echo -e "${RED}創建 Client VPN 端點後未能獲取有效的 Endpoint ID${NC}"
+        echo -e "${RED}響應內容: $cleaned_result${NC}"
+        log_message_core "錯誤: VPN 端點創建失敗 - 端點 ID 為空或 null"
         return 1
     fi
     
+    echo -e "${GREEN}✓ VPN 端點創建成功，ID: $endpoint_id${NC}"
+    log_message_core "VPN 端點創建成功，ID: $endpoint_id"
     echo "$endpoint_id"
     return 0
 }
@@ -743,7 +837,7 @@ disassociate_vpc_lib() {
 
     for (( i=1; i<=$current_multi_vpc_count; i++ )); do
         local vpc_entry_line
-        vpc_entry_line=$(grep "^MULTI_VPC_${i}=" "$main_config_file")
+        vpc_entry_line=$(grep "^MULTI_VPC_$i=" "$main_config_file")
         if [ -n "$vpc_entry_line" ]; then
             local vpc_entry_value
             vpc_entry_value=$(echo "$vpc_entry_line" | cut -d'"' -f2)
@@ -1103,8 +1197,8 @@ manage_batch_vpc_auth_lib() {
         return 1
     fi
 
-    echo -e "${BLUE}當前端點 ID: \"$arg_endpoint_id\"${NC}" # Quoted variable
-    echo -e "${BLUE}當前 AWS 區域: \"$arg_aws_region\"${NC}" # Quoted variable
+    echo -e "${BLUE}當前端點 ID: $arg_endpoint_id${NC}" # Quoted variable
+    echo -e "${BLUE}當前 AWS 區域: $arg_aws_region${NC}" # Quoted variable
     echo -e ""
     echo -e "批量操作選項："
     echo -e "  ${GREEN}1.${NC} 為所有關聯 VPC 添加相同授權規則 (通常指授權訪問目標網路 CIDR)"
@@ -1313,50 +1407,49 @@ remove_authorization_rule_lib() {
         auth_rules_lib_count=$(echo "$auth_rules_json_lib" | grep -c '"DestinationCidr"' || echo "0")
     fi
 
-    if [ $? -ne 0 ] || [ -z "$auth_rules_json_lib" ] || [ "$auth_rules_lib_count" -eq 0 ]; then
-        echo -e "${YELLOW}端點 $arg_endpoint_id 沒有配置授權規則。${NC}"
-        return 0 # Not an error, just nothing to do.
-    fi
-
-    echo "$auth_rules_json_lib" | jq -r '.AuthorizationRules[] | "  目標 CIDR: \\(.DestinationCidr), 狀態: \\(.Status.Code), 描述: \\(.Description // "N/A")"'
-    
-    local revoke_cidr_lib
-    read -p "請輸入要移除授權規則的目標網路 CIDR: " revoke_cidr_lib
-    if [ -z "$revoke_cidr_lib" ]; then
-        echo -e "${RED}目標網路 CIDR 不可為空。${NC}"
-        return 1
-    fi
-
-    # 驗證該規則是否存在，含備用方法
-    local rule_exists_lib
-    if ! rule_exists_lib=$(echo "$auth_rules_json_lib" | jq -e --arg rc "$revoke_cidr_lib" '.AuthorizationRules[] | select(.DestinationCidr == $rc)' 2>/dev/null); then
-        # 備用驗證方法：使用 grep 檢查 CIDR 是否存在
-        if echo "$auth_rules_json_lib" | grep -q "\"DestinationCidr\":\"$revoke_cidr_lib\""; then
-            rule_exists_lib="found" # 非空值表示找到
-        else
-            rule_exists_lib=""
+    if [ $? -eq 0 ] && [ -n "$auth_rules_json_lib" ] && [ "$auth_rules_lib_count" -gt 0 ]; then
+        echo "$auth_rules_json_lib" | jq -r '.AuthorizationRules[] | "  目標 CIDR: \\(.DestinationCidr), 狀態: \\(.Status.Code), 描述: \\(.Description // "N/A")"'
+        
+        local revoke_cidr_lib
+        read -p "請輸入要移除授權規則的目標網路 CIDR: " revoke_cidr_lib
+        if [ -z "$revoke_cidr_lib" ]; then
+            echo -e "${RED}目標網路 CIDR 不可為空。${NC}"
+            return 1 # Indicate failure or loop back
         fi
-    fi
-    if [ -z "$rule_exists_lib" ]; then
-        echo -e "${RED}找不到目標 CIDR 為 '$revoke_cidr_lib' 的授權規則。${NC}" # revoke_cidr_lib is a variable
-    else
-        echo -e "${YELLOW}警告: 您即將移除目標 CIDR 為 '$revoke_cidr_lib' 的授權規則。${NC}" # revoke_cidr_lib is a variable
-        read -p "確認移除? (y/n): " confirm_revoke_lib
-        if [[ "$confirm_revoke_lib" == "y" ]]; then
-            if aws ec2 revoke-client-vpn-ingress \
-              --client-vpn-endpoint-id "$arg_endpoint_id" \
-              --target-network-cidr "$revoke_cidr_lib" \
-              --revoke-all-groups \
-              --region "$arg_aws_region"; then
-                echo -e "${GREEN}授權規則 $revoke_cidr_lib 已移除。${NC}" # Quoted variable
-                log_message_core "授權規則已移除 (lib): $revoke_cidr_lib from endpoint $arg_endpoint_id" # Quoted variables
+
+        # 驗證該規則是否存在，含備用方法
+        local rule_exists_lib
+        if ! rule_exists_lib=$(echo "$auth_rules_json_lib" | jq -e --arg rc "$revoke_cidr_lib" '.AuthorizationRules[] | select(.DestinationCidr == $rc)' 2>/dev/null); then
+            # 備用驗證方法：使用 grep 檢查 CIDR 是否存在
+            if echo "$auth_rules_json_lib" | grep -q "\"DestinationCidr\":\"$revoke_cidr_lib\""; then
+                rule_exists_lib="found" # 非空值表示找到
             else
-                echo -e "${RED}移除授權規則 $revoke_cidr_lib 失敗。${NC}" # Quoted variable
-                log_message_core "錯誤: 移除授權規則失敗 (lib): $revoke_cidr_lib from endpoint $arg_endpoint_id" # Quoted variables
+                rule_exists_lib=""
             fi
-        else
-            echo -e "${BLUE}操作已取消。${NC}"
         fi
+        if [ -z "$rule_exists_lib" ]; then
+            echo -e "${RED}找不到目標 CIDR 為 '$revoke_cidr_lib' 的授權規則。${NC}" # revoke_cidr_lib is a variable
+        else
+            echo -e "${YELLOW}警告: 您即將移除目標 CIDR 為 '$revoke_cidr_lib' 的授權規則。${NC}" # revoke_cidr_lib is a variable
+            read -p "確認移除? (y/n): " confirm_revoke_lib
+            if [[ "$confirm_revoke_lib" == "y" ]]; then
+                if aws ec2 revoke-client-vpn-ingress \
+                  --client-vpn-endpoint-id "$arg_endpoint_id" \
+                  --target-network-cidr "$revoke_cidr_lib" \
+                  --revoke-all-groups \
+                  --region "$arg_aws_region"; then
+                    echo -e "${GREEN}授權規則 \"$revoke_cidr_lib\" 已移除。${NC}" # Quoted variable
+                    log_message_core "授權規則已移除 (lib): $revoke_cidr_lib from endpoint $arg_endpoint_id" # Quoted variables
+                else
+                    echo -e "${RED}移除授權規則 \"$revoke_cidr_lib\" 失敗。${NC}" # Quoted variable
+                    log_message_core "錯誤: 移除授權規則失敗 (lib): $revoke_cidr_lib from endpoint $arg_endpoint_id" # Quoted variables
+                fi
+            else
+                echo -e "${BLUE}操作已取消。${NC}"
+            fi
+        fi
+    else
+        echo -e "${YELLOW}端點 $arg_endpoint_id 沒有配置授權規則，或無法獲取資訊。${NC}"
     fi
 }
 
@@ -1426,17 +1519,17 @@ add_route_lib() {
 
     # 列出已關聯的子網路以供選擇
     echo -e "\n${YELLOW}端點 $arg_endpoint_id 已關聯的子網路:${NC}"
-    local associated_subnets_json_lib
-    associated_subnets_json_lib=$(aws ec2 describe-client-vpn-target-networks \
+    local associated_subnets_json
+    associated_subnets_json=$(aws ec2 describe-client-vpn-target-networks \
         --client-vpn-endpoint-id "$arg_endpoint_id" \
         --region "$arg_aws_region" 2>/dev/null)
 
-    if [ $? -ne 0 ] || [ -z "$associated_subnets_json_lib" ] || [ "$(echo "$associated_subnets_json_lib" | jq '.ClientVpnTargetNetworks | length')" -eq 0 ]; then
+    if [ $? -ne 0 ] || [ -z "$associated_subnets_json" ] || [ "$(echo "$associated_subnets_json" | jq '.ClientVpnTargetNetworks | length')" -eq 0 ]; then
         echo -e "${RED}端點 $arg_endpoint_id 沒有已關聯的子網路。無法添加路由。請先關聯子網路。${NC}"
         return 1
     fi
     
-    echo "$associated_subnets_json_lib" | jq -r '.ClientVpnTargetNetworks[] | 
+    echo "$associated_subnets_json" | jq -r '.ClientVpnTargetNetworks[] | 
     "  子網路 ID: \\(.TargetNetworkId) (VPC ID: \\(.VpcId), 狀態: \\(.Status.Code))"'
 
     local target_subnet_lib
@@ -1448,9 +1541,9 @@ add_route_lib() {
 
     # 驗證選擇的子網路是否已關聯，含備用方法
     local is_valid_subnet_lib
-    if ! is_valid_subnet_lib=$(echo "$associated_subnets_json_lib" | jq -e --arg sn "$target_subnet_lib" '.ClientVpnTargetNetworks[] | select(.TargetNetworkId == $sn)' 2>/dev/null); then
+    if ! is_valid_subnet_lib=$(echo "$associated_subnets_json" | jq -e --arg sn "$target_subnet_lib" '.ClientVpnTargetNetworks[] | select(.TargetNetworkId == $sn)' 2>/dev/null); then
         # 備用驗證方法：使用 grep 檢查子網路 ID 是否存在
-        if echo "$associated_subnets_json_lib" | grep -q "\"TargetNetworkId\":\"$target_subnet_lib\""; then
+        if echo "$associated_subnets_json" | grep -q "\"TargetNetworkId\":\"$target_subnet_lib\""; then
             is_valid_subnet_lib="found" # 非空值表示找到
         else
             is_valid_subnet_lib=""
@@ -1537,7 +1630,7 @@ remove_route_lib() {
         return 1
     fi
 
-    echo -e "${BLUE}正在刪除路由: $del_dest_cidr_lib (目標子網路: $del_target_subnet_id_lib)...${NC}"
+    echo -e "${BLUE}正在刪除路由: $del_dest_cidr_lib (目標子網路: $del_target_subnet_id_lib)...${NC}" # Quoted variables
     local route_to_delete_info_lib origin_of_route_to_delete_lib
     route_to_delete_info_lib=$(echo "$routes_json_del_lib" | jq -r --arg dc "$del_dest_cidr_lib" --arg ts "$del_target_subnet_id_lib" '.Routes[] | select(.DestinationCidr == $dc and (.TargetSubnet // .TargetVpcSubnetId) == $ts)')
     
@@ -1729,17 +1822,17 @@ terminate_vpn_endpoint_lib() {
             # 備用解析方法：使用 grep 和 sed 提取 CIDR
             echo "$auth_rules_json" | grep -o '"DestinationCidr":"[^"]*"' | sed 's/"DestinationCidr":"//g' | sed 's/"//g' | while IFS= read -r cidr; do
                 if [ -n "$cidr" ]; then
-                    echo -e "${BLUE}  正在撤銷對 CIDR $cidr 的授權...${NC}"
+                    echo -e "${BLUE}  正在撤銷對 CIDR $cidr 的授權...${NC}" # Quoted variable
                     if aws ec2 revoke-client-vpn-ingress \
                         --client-vpn-endpoint-id "$arg_endpoint_id" \
                         --target-network-cidr "$cidr" \
                         --revoke-all-groups \
                         --region "$arg_aws_region"; then
                         echo -e "${GREEN}    已成功撤銷對 CIDR $cidr 的授權。${NC}"
-                        log_message_core "已撤銷對 CIDR $cidr 的授權 for endpoint $arg_endpoint_id (lib)"
+                        log_message_core "已撤銷對 CIDR $cidr 的授權 (lib) for endpoint $arg_endpoint_id"
                     else
                         echo -e "${RED}    撤銷對 CIDR $cidr 的授權失敗。${NC}"
-                        log_message_core "錯誤: 撤銷對 CIDR $cidr 的授權失敗 for endpoint $arg_endpoint_id (lib)"
+                        log_message_core "錯誤: 撤銷對 CIDR $cidr 的授權失敗 (lib) for endpoint $arg_endpoint_id"
                     fi
                 fi
             done
@@ -1775,7 +1868,7 @@ terminate_vpn_endpoint_lib() {
                     fi
                     
                     if ! target_subnet=$(echo "$route_entry" | jq -r '.TargetSubnet // .TargetVpcSubnetId' 2>/dev/null); then
-                        # 備用解析：先嘗試 TargetSubnet，再嘗試 TargetVpcSubnetId
+                        # 備用驗證：先嘗試 TargetSubnet，再嘗試 TargetVpcSubnetId
                         target_subnet=$(echo "$route_entry" | grep -o '"TargetSubnet":"[^"]*"' | sed 's/"TargetSubnet":"//g' | sed 's/"//g')
                         if [ -z "$target_subnet" ] || [ "$target_subnet" == "null" ]; then
                             target_subnet=$(echo "$route_entry" | grep -o '"TargetVpcSubnetId":"[^"]*"' | sed 's/"TargetVpcSubnetId":"//g' | sed 's/"//g')
@@ -1972,5 +2065,58 @@ view_associated_networks_lib() {
     # .ClientVpnThreads might not be available or relevant for all views.
 
     log_message_core "已顯示端點 $arg_endpoint_id 的關聯網絡 (lib)。"
+    return 0
+}
+
+# 調試函數：測試 AWS CLI 參數
+debug_aws_cli_params() {
+    local vpn_cidr="$1"
+    local server_cert_arn="$2"
+    local client_cert_arn="$3"
+    local vpn_name="$4"
+    local aws_region="$5"
+    
+    echo -e "${CYAN}=== AWS CLI 參數調試 ===${NC}"
+    echo -e "VPN CIDR: $vpn_cidr"
+    echo -e "伺服器憑證 ARN: $server_cert_arn"
+    echo -e "客戶端憑證 ARN: $client_cert_arn"
+    echo -e "VPN 名稱: $vpn_name"
+    echo -e "AWS 區域: $aws_region"
+    
+    # 測試 AWS 連線
+    echo -e "\n${BLUE}測試 AWS 連線...${NC}"
+    if aws sts get-caller-identity --region "$aws_region" >/dev/null 2>&1; then
+        echo -e "${GREEN}✓ AWS 連線正常${NC}"
+    else
+        echo -e "${RED}✗ AWS 連線失敗${NC}"
+        return 1
+    fi
+    
+    # 驗證憑證 ARN
+    echo -e "\n${BLUE}驗證伺服器憑證...${NC}"
+    if aws acm describe-certificate --certificate-arn "$server_cert_arn" --region "$aws_region" >/dev/null 2>&1; then
+        echo -e "${GREEN}✓ 伺服器憑證有效${NC}"
+    else
+        echo -e "${RED}✗ 伺服器憑證無效或無權限訪問${NC}"
+        return 1
+    fi
+    
+    echo -e "\n${BLUE}驗證客戶端憑證...${NC}"
+    if aws acm describe-certificate --certificate-arn "$client_cert_arn" --region "$aws_region" >/dev/null 2>&1; then
+        echo -e "${GREEN}✓ 客戶端憑證有效${NC}"
+    else
+        echo -e "${RED}✗ 客戶端憑證無效或無權限訪問${NC}"
+        return 1
+    fi
+    
+    # 測試 VPC 端點創建權限
+    echo -e "\n${BLUE}測試 Client VPN 權限...${NC}"
+    if aws ec2 describe-client-vpn-endpoints --region "$aws_region" >/dev/null 2>&1; then
+        echo -e "${GREEN}✓ Client VPN 讀取權限正常${NC}"
+    else
+        echo -e "${RED}✗ Client VPN 權限不足${NC}"
+        return 1
+    fi
+    
     return 0
 }
