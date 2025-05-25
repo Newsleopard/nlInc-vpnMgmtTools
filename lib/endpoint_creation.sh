@@ -19,48 +19,89 @@ get_vpc_subnet_vpn_details_lib() {
     log_message_core "開始獲取 VPC/子網路/VPN 詳細資訊 (lib) - Region: $aws_region"
 
     # 提示使用者選擇 VPC
-    echo -e "\\n${BLUE}選擇網絡設定...${NC}"
+    echo -e "\\n${BLUE}選擇網絡設定...${NC}" >&2
     
-    echo -e "${YELLOW}可用的 VPCs:${NC}"
-    aws ec2 describe-vpcs --region "$aws_region" | jq -r '.Vpcs[] | "VPC ID: \(.VpcId), CIDR: \(.CidrBlock), 名稱: \(if .Tags then (.Tags[] | select(.Key=="Name") | .Value) else "無名稱" end)"'
+    echo -e "${YELLOW}可用的 VPCs:${NC}" >&2
+    aws ec2 describe-vpcs --region "$aws_region" | jq -r '.Vpcs[] | "VPC ID: \(.VpcId), CIDR: \(.CidrBlock), 名稱: \(if .Tags then (.Tags[] | select(.Key=="Name") | .Value) else "無名稱" end)"' >&2
     
     local vpc_id
     while true; do
-        read -p "請輸入要連接的 VPC ID: " vpc_id
+        echo -n "請輸入要連接的 VPC ID: " >&2
+        read vpc_id
         if aws ec2 describe-vpcs --vpc-ids "$vpc_id" --region "$aws_region" >/dev/null 2>&1; then
             break
         else
-            echo -e "${RED}VPC ID '$vpc_id' 無效或不存在於區域 '$aws_region'。請重試。${NC}"
+            echo -e "${RED}VPC ID '$vpc_id' 無效或不存在於區域 '$aws_region'。請重試。${NC}" >&2
         fi
     done
     
     # 顯示選定 VPC 中的子網路
-    echo -e "\\n${YELLOW}VPC $vpc_id 中的子網路:${NC}"
-    aws ec2 describe-subnets --filters "Name=vpc-id,Values=$vpc_id" --region "$aws_region" | \
-      jq -r '.Subnets[] | "子網路 ID: \\(.SubnetId), 可用區: \\(.AvailabilityZone), CIDR: \\(.CidrBlock)"'
+    echo -e "\\n${YELLOW}VPC $vpc_id 中的子網路:${NC}" >&2
+    local subnet_list
+    subnet_list=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$vpc_id" --region "$aws_region" 2>/dev/null | \
+      jq -r '.Subnets[] | "子網路 ID: \(.SubnetId), 可用區: \(.AvailabilityZone), CIDR: \(.CidrBlock)"' 2>/dev/null)
+    
+    if [ -z "$subnet_list" ]; then
+        echo -e "${YELLOW}無法獲取子網路列表或此 VPC 沒有子網路。${NC}" >&2
+        echo -e "${BLUE}您可以手動輸入子網路 ID，或輸入 'skip' 跳過此步驟。${NC}" >&2
+    else
+        echo "$subnet_list" >&2
+        echo -e "${BLUE}請從上述列表中選擇一個子網路 ID，或輸入 'skip' 跳過此步驟。${NC}" >&2
+    fi
     
     local subnet_id
-    while true; do
-        read -p "請輸入要關聯的子網路 ID: " subnet_id
+    local max_attempts=5
+    local attempts=0
+    while [ $attempts -lt $max_attempts ]; do
+        echo -n "請輸入要關聯的子網路 ID (或輸入 'skip' 跳過): " >&2
+        read subnet_id
+        
+        # 允許跳過
+        if [ "$subnet_id" = "skip" ]; then
+            echo -e "${YELLOW}跳過子網路關聯步驟。您稍後可以手動關聯子網路。${NC}" >&2
+            subnet_id=""
+            break
+        fi
+        
+        # 驗證子網路 ID 格式
+        if [[ ! "$subnet_id" =~ ^subnet-[0-9a-f]{8,17}$ ]]; then
+            echo -e "${RED}子網路 ID 格式無效。正確格式應為 'subnet-xxxxxxxxx'。${NC}" >&2
+            attempts=$((attempts + 1))
+            continue
+        fi
+        
+        # 驗證子網路是否存在
         if aws ec2 describe-subnets --subnet-ids "$subnet_id" --filters "Name=vpc-id,Values=$vpc_id" --region "$aws_region" >/dev/null 2>&1; then
+            echo -e "${GREEN}✓ 子網路 ID 驗證成功${NC}" >&2
             break
         else
-            echo -e "${RED}子網路 ID '$subnet_id' 無效、不存在於 VPC '$vpc_id' 或區域 '$aws_region'。請重試。${NC}"
+            echo -e "${RED}子網路 ID '$subnet_id' 無效、不存在於 VPC '$vpc_id' 或區域 '$aws_region'。${NC}" >&2
+            attempts=$((attempts + 1))
+            if [ $attempts -lt $max_attempts ]; then
+                echo -e "${YELLOW}請重試 ($attempts/$max_attempts) 或輸入 'skip' 跳過。${NC}" >&2
+            fi
         fi
     done
+    
+    if [ $attempts -eq $max_attempts ] && [ "$subnet_id" != "skip" ] && [ -n "$subnet_id" ]; then
+        echo -e "${RED}已達到最大嘗試次數。將跳過子網路關聯步驟。${NC}" >&2
+        subnet_id=""
+    fi
     
     # 獲取 VPN 設定
     local default_vpn_cidr="172.16.0.0/22"
     local vpn_cidr
-    read -p "請輸入 VPN CIDR (預設: $default_vpn_cidr): " vpn_cidr
+    echo -n "請輸入 VPN CIDR (預設: $default_vpn_cidr): " >&2
+    read vpn_cidr
     vpn_cidr=${vpn_cidr:-$default_vpn_cidr}
     
     local vpn_name
-    read -p "請輸入 VPN 端點名稱 (預設: Production-VPN): " vpn_name
+    echo -n "請輸入 VPN 端點名稱 (預設: Production-VPN): " >&2
+    read vpn_name
     vpn_name=${vpn_name:-Production-VPN}
 
-    # 驗證輸入
-    if [ -z "$vpc_id" ] || [ -z "$subnet_id" ] || [ -z "$vpn_cidr" ] || [ -z "$vpn_name" ]; then
+    # 驗證輸入 (subnet_id 可以為空，因為允許跳過)
+    if [ -z "$vpc_id" ] || [ -z "$vpn_cidr" ] || [ -z "$vpn_name" ]; then
         echo -e "${RED}錯誤: 獲取的詳細資訊不完整${NC}" >&2
         log_message_core "錯誤: get_vpc_subnet_vpn_details_lib - 詳細資訊不完整"
         return 1
@@ -112,18 +153,55 @@ _prompt_network_details_ec() {
     vpc_cidr=$(aws ec2 describe-vpcs --vpc-ids "$vpc_id" --region "$aws_region" | jq -r '.Vpcs[0].CidrBlock')
     
     echo -e "\\n${YELLOW}VPC $vpc_id 中的子網路:${NC}" # vpc_id is a variable
-    aws ec2 describe-subnets --filters "Name=vpc-id,Values=$vpc_id" --region "$aws_region" | \
-      jq -r '.Subnets[] | "子網路 ID: \\(.SubnetId), 可用區: \\(.AvailabilityZone), CIDR: \\(.CidrBlock)"'
+    local subnet_list
+    subnet_list=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$vpc_id" --region "$aws_region" 2>/dev/null | \
+      jq -r '.Subnets[] | "子網路 ID: \\(.SubnetId), 可用區: \\(.AvailabilityZone), CIDR: \\(.CidrBlock)"' 2>/dev/null)
+    
+    if [ -z "$subnet_list" ]; then
+        echo -e "${YELLOW}無法獲取子網路列表或此 VPC 沒有子網路。${NC}"
+        echo -e "${BLUE}您可以手動輸入子網路 ID，或輸入 'skip' 跳過此步驟。${NC}"
+    else
+        echo "$subnet_list"
+        echo -e "${BLUE}請從上述列表中選擇一個子網路 ID，或輸入 'skip' 跳過此步驟。${NC}"
+    fi
     
     local subnet_id
-    while true; do
-        read -p "請輸入要關聯的子網路 ID: " subnet_id
+    local max_attempts=5
+    local attempts=0
+    while [ $attempts -lt $max_attempts ]; do
+        read -p "請輸入要關聯的子網路 ID (或輸入 'skip' 跳過): " subnet_id
+        
+        # 允許跳過
+        if [ "$subnet_id" = "skip" ]; then
+            echo -e "${YELLOW}跳過子網路關聯步驟。您稍後可以手動關聯子網路。${NC}"
+            subnet_id=""
+            break
+        fi
+        
+        # 驗證子網路 ID 格式
+        if [[ ! "$subnet_id" =~ ^subnet-[0-9a-f]{8,17}$ ]]; then
+            echo -e "${RED}子網路 ID 格式無效。正確格式應為 'subnet-xxxxxxxxx'。${NC}"
+            attempts=$((attempts + 1))
+            continue
+        fi
+        
+        # 驗證子網路是否存在
         if aws ec2 describe-subnets --subnet-ids "$subnet_id" --filters "Name=vpc-id,Values=$vpc_id" --region "$aws_region" &>/dev/null; then
+            echo -e "${GREEN}✓ 子網路 ID 驗證成功${NC}"
             break
         else
-            echo -e "${RED}子網路 ID '$subnet_id' 無效、不存在於 VPC '$vpc_id' 或區域 '$aws_region'。請重試。${NC}" # subnet_id, vpc_id, aws_region are variables
+            echo -e "${RED}子網路 ID '$subnet_id' 無效、不存在於 VPC '$vpc_id' 或區域 '$aws_region'。${NC}" # subnet_id, vpc_id, aws_region are variables
+            attempts=$((attempts + 1))
+            if [ $attempts -lt $max_attempts ]; then
+                echo -e "${YELLOW}請重試 ($attempts/$max_attempts) 或輸入 'skip' 跳過。${NC}"
+            fi
         fi
     done
+    
+    if [ $attempts -eq $max_attempts ] && [ "$subnet_id" != "skip" ] && [ -n "$subnet_id" ]; then
+        echo -e "${RED}已達到最大嘗試次數。將跳過子網路關聯步驟。${NC}"
+        subnet_id=""
+    fi
     
     local default_vpn_cidr="172.16.0.0/22"
     read -p "請輸入 VPN CIDR (預設: $default_vpn_cidr): " vpn_cidr
@@ -357,13 +435,39 @@ _associate_one_vpc_to_endpoint_lib() {
       jq -r '.Subnets[] | "子網路 ID: \\(.SubnetId), 可用區: \\(.AvailabilityZone), CIDR: \\(.CidrBlock), 類型: \\(if .MapPublicIpOnLaunch then "公有" else "私有" end)"'
     
     local subnet_to_associate_id
-    read -p "請輸入要關聯的子網路 ID: " subnet_to_associate_id
-    if [[ ! "$subnet_to_associate_id" =~ ^subnet-[0-9a-f]{17}$ && ! "$subnet_to_associate_id" =~ ^subnet-[0-9a-f]{8}$ ]]; then
-        echo -e "${RED}子網路 ID '$subnet_to_associate_id' 格式無效。${NC}" # subnet_to_associate_id is a variable
-        return 1
-    fi
-    if ! aws ec2 describe-subnets --subnet-ids "$subnet_to_associate_id" --filters "Name=vpc-id,Values=$vpc_to_add_id" --region "$arg_aws_region" &>/dev/null; then
-        echo -e "${RED}子網路 ID '$subnet_to_associate_id' 無效、不存在於 VPC '$vpc_to_add_id' 或區域 '$arg_aws_region'。${NC}" # Quoted variables
+    local max_attempts=5
+    local attempts=0
+    while [ $attempts -lt $max_attempts ]; do
+        read -p "請輸入要關聯的子網路 ID (或輸入 'skip' 跳過): " subnet_to_associate_id
+        
+        # 允許跳過
+        if [ "$subnet_to_associate_id" = "skip" ]; then
+            echo -e "${YELLOW}跳過子網路關聯步驟。${NC}"
+            return 0
+        fi
+        
+        # 驗證子網路 ID 格式
+        if [[ ! "$subnet_to_associate_id" =~ ^subnet-[0-9a-f]{8,17}$ ]]; then
+            echo -e "${RED}子網路 ID 格式無效。正確格式應為 'subnet-xxxxxxxxx'。${NC}"
+            attempts=$((attempts + 1))
+            continue
+        fi
+        
+        # 驗證子網路是否存在
+        if aws ec2 describe-subnets --subnet-ids "$subnet_to_associate_id" --filters "Name=vpc-id,Values=$vpc_to_add_id" --region "$arg_aws_region" &>/dev/null; then
+            echo -e "${GREEN}✓ 子網路 ID 驗證成功${NC}"
+            break
+        else
+            echo -e "${RED}子網路 ID '$subnet_to_associate_id' 無效、不存在於 VPC '$vpc_to_add_id' 或區域 '$arg_aws_region'。${NC}"
+            attempts=$((attempts + 1))
+            if [ $attempts -lt $max_attempts ]; then
+                echo -e "${YELLOW}請重試 ($attempts/$max_attempts) 或輸入 'skip' 跳過。${NC}"
+            fi
+        fi
+    done
+    
+    if [ $attempts -eq $max_attempts ]; then
+        echo -e "${RED}已達到最大嘗試次數。操作取消。${NC}"
         return 1
     fi
     
