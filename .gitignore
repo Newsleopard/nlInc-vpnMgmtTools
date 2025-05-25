@@ -12,7 +12,8 @@
 certificates/
 user-certificates/
 team-configs/
-configs/
+configs/production/
+configs/staging/
 vpn-config/
 offboarding-logs/
 revocation-logs/
