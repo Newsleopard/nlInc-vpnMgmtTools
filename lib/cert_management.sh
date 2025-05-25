@@ -527,7 +527,7 @@ import_certificates_to_acm_lib() {
         return 1
     fi
 
-    echo -e "${BLUE}正在匯入伺服器憑證到 ACM...${NC}"
+    echo -e "${BLUE}正在匯入伺服器憑證到 ACM...${NC}" >&2
     local server_import_output
     server_import_output=$(aws acm import-certificate \
       --certificate "fileb://$server_cert_file" \
@@ -545,7 +545,7 @@ import_certificates_to_acm_lib() {
         return 1
     fi
 
-    echo -e "${BLUE}正在匯入客戶端 CA 憑證到 ACM...${NC}"
+    echo -e "${BLUE}正在匯入客戶端 CA 憑證到 ACM...${NC}" >&2
     local client_import_output
     client_import_output=$(aws acm import-certificate \
       --certificate "fileb://$ca_cert_file" \
@@ -574,19 +574,24 @@ import_certificates_to_acm_lib() {
         return 1
     fi
 
-    echo -e "${GREEN}憑證匯入成功！${NC}"
-    echo -e "${GREEN}伺服器憑證 ARN: $server_cert_arn${NC}"
-    echo -e "${GREEN}客戶端 CA 憑證 ARN: $client_cert_arn${NC}"
+    echo -e "${GREEN}憑證匯入成功！${NC}" >&2
+    echo -e "${GREEN}伺服器憑證 ARN: $server_cert_arn${NC}" >&2
+    echo -e "${GREEN}客戶端 CA 憑證 ARN: $client_cert_arn${NC}" >&2
 
     log_message_core "伺服器憑證 ARN: $server_cert_arn"
     log_message_core "客戶端 CA 憑證 ARN: $client_cert_arn"
 
     # 返回 JSON 格式的結果
     local result_json
-    result_json=$(jq -n \
-        --arg server_arn "$server_cert_arn" \
-        --arg client_arn "$client_cert_arn" \
-        '{server_cert_arn: $server_arn, client_cert_arn: $client_arn}')
+    if command -v jq >/dev/null 2>&1; then
+        result_json=$(jq -n \
+            --arg server_arn "$server_cert_arn" \
+            --arg client_arn "$client_cert_arn" \
+            '{server_cert_arn: $server_arn, client_cert_arn: $client_arn}')
+    else
+        # 備用 JSON 生成方法
+        result_json='{"server_cert_arn":"'$server_cert_arn'","client_cert_arn":"'$client_cert_arn'"}'
+    fi
 
     echo "$result_json"
     return 0

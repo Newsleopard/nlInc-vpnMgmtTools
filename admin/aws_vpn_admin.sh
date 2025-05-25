@@ -108,13 +108,21 @@ create_vpn_endpoint() {
     # 解析 JSON 回應中的證書 ARN
     # import_certificates_to_acm_lib 現在返回 JSON 格式
     # 例如: {"server_cert_arn": "arn1", "client_cert_arn": "arn2"}
+    
+    # 記錄用於調試的 ACM 結果
+    log_message "ACM 導入結果: $acm_arns_result"
+    
     if command -v jq >/dev/null 2>&1; then
         # 如果系統有 jq，使用 jq 解析
         if ! main_server_cert_arn=$(echo "$acm_arns_result" | jq -r '.server_cert_arn' 2>/dev/null); then
+            echo -e "${RED}錯誤: 無法使用 jq 解析伺服器證書 ARN${NC}" >&2
+            echo -e "${YELLOW}ACM 導入原始結果: $acm_arns_result${NC}" >&2
             handle_error "無法從 ACM 導入結果中解析伺服器證書 ARN。"
             return 1
         fi
         if ! main_client_cert_arn=$(echo "$acm_arns_result" | jq -r '.client_cert_arn' 2>/dev/null); then
+            echo -e "${RED}錯誤: 無法使用 jq 解析客戶端證書 ARN${NC}" >&2
+            echo -e "${YELLOW}ACM 導入原始結果: $acm_arns_result${NC}" >&2
             handle_error "無法從 ACM 導入結果中解析客戶端證書 ARN。"
             return 1
         fi
@@ -125,10 +133,12 @@ create_vpn_endpoint() {
         
         # 使用通用驗證函數進行錯誤檢查
         if ! validate_json_parse_result "$main_server_cert_arn" "伺服器證書 ARN" "validate_certificate_arn"; then
+            echo -e "${YELLOW}ACM 導入原始結果: $acm_arns_result${NC}" >&2
             return 1
         fi
         
         if ! validate_json_parse_result "$main_client_cert_arn" "客戶端證書 ARN" "validate_certificate_arn"; then
+            echo -e "${YELLOW}ACM 導入原始結果: $acm_arns_result${NC}" >&2
             return 1
         fi
     fi

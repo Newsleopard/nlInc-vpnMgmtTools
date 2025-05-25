@@ -47,3 +47,4 @@ pki/
 *.ovpn
 
 .current_env
+certs/
