@@ -92,7 +92,7 @@ EOF
         # Bug fix item 6: Add missing config variables - 使用環境感知路徑
         local main_script_dir
         main_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" # SCRIPT_DIR of the script calling this lib function
-        echo "EASYRSA_DIR=/usr/local/share/easy-rsa" >> "$main_config_file"
+        echo "EASYRSA_DIR=/opt/homebrew/opt/easy-rsa/libexec" >> "$main_config_file"
         # 使用環境變數而不是硬編碼路徑
         update_config "$main_config_file" "CERT_OUTPUT_DIR" "$VPN_CERT_DIR"
         echo "SERVER_CERT_NAME_PREFIX=server" >> "$main_config_file"

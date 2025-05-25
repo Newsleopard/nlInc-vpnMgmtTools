@@ -33,8 +33,29 @@ initialize_easyrsa_lib() {
     # 創建 EasyRSA 目錄
     mkdir -p "$easyrsa_dir"
 
-    # 複製 Easy-RSA 檔案
-    cp -r "$script_dir/easy-rsa/*" "$easyrsa_dir"
+    # 檢查系統中是否有 EasyRSA 安裝
+    local system_easyrsa_path=""
+    if [ -f "/opt/homebrew/opt/easy-rsa/libexec/easyrsa" ]; then
+        system_easyrsa_path="/opt/homebrew/opt/easy-rsa/libexec"
+    elif [ -f "/usr/local/opt/easy-rsa/libexec/easyrsa" ]; then
+        system_easyrsa_path="/usr/local/opt/easy-rsa/libexec"
+    elif [ -f "/usr/share/easy-rsa/easyrsa" ]; then
+        system_easyrsa_path="/usr/share/easy-rsa"
+    fi
+
+    if [ -n "$system_easyrsa_path" ] && [ -f "$system_easyrsa_path/easyrsa" ]; then
+        # 從系統安裝位置複製 EasyRSA
+        echo -e "${BLUE}從系統安裝位置複製 EasyRSA: $system_easyrsa_path${NC}"
+        cp "$system_easyrsa_path/easyrsa" "$easyrsa_dir/"
+        chmod +x "$easyrsa_dir/easyrsa"
+    elif [ -d "$script_dir/easy-rsa" ]; then
+        # 舊的邏輯：從腳本目錄複製 Easy-RSA 檔案
+        cp -r "$script_dir/easy-rsa/*" "$easyrsa_dir"
+    else
+        echo -e "${RED}錯誤: 找不到 EasyRSA 安裝。請安裝 EasyRSA：brew install easy-rsa${NC}"
+        log_message_core "錯誤: 找不到 EasyRSA 安裝"
+        return 1
+    fi
 
     # 設置權限
     chmod -R 700 "$easyrsa_dir"
@@ -579,6 +600,7 @@ generate_certificates_lib() {
     local env_config_file="$2"
     local easyrsa_dir="$cert_dir" # 直接使用證書目錄
     local original_dir="$PWD"  # 記錄原始目錄
+    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" # 獲取當前腳本目錄
 
     # 參數驗證
     if [ -z "$cert_dir" ] || [ ! -d "$(dirname "$cert_dir")" ]; then
