@@ -403,7 +403,7 @@ revoke_certificates() {
                     echo -e "${BLUE}找到證書名稱: $cert_name${NC}"
                     
                     # 執行本地 easyrsa 撤銷
-                    if revoke_client_certificate_lib "$EASYRSA_DIR_REVOKE" "$cert_name"; then
+                    if revoke_client_certificate_lib "$EASYRSA_DIR_REVOKE" "$cert_name" "$CONFIG_FILE"; then
                         echo -e "${GREEN}✓ 本地撤銷成功: $cert_name${NC}"
                         easyrsa_revoked+=("$cert_name")
                     else
@@ -414,7 +414,7 @@ revoke_certificates() {
                     echo -e "${YELLOW}無法從證書標籤中獲取用戶名，嘗試使用參數用戶名: $username${NC}"
                     
                     # 使用腳本參數中的用戶名嘗試撤銷
-                    if revoke_client_certificate_lib "$EASYRSA_DIR_REVOKE" "$username"; then
+                    if revoke_client_certificate_lib "$EASYRSA_DIR_REVOKE" "$username" "$CONFIG_FILE"; then
                         echo -e "${GREEN}✓ 本地撤銷成功 (使用用戶名): $username${NC}"
                         easyrsa_revoked+=("$username")
                     else
