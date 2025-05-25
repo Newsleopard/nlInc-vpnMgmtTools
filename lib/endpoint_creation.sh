@@ -22,7 +22,7 @@ get_vpc_subnet_vpn_details_lib() {
     echo -e "\\n${BLUE}選擇網絡設定...${NC}"
     
     echo -e "${YELLOW}可用的 VPCs:${NC}"
-    aws ec2 describe-vpcs --region "$aws_region" | jq -r '.Vpcs[] | "VPC ID: \\(.VpcId), CIDR: \\(.CidrBlock), 名稱: \\(if .Tags then (.Tags[] | select(.Key=="Name") | .Value) else "無名稱" end)"'
+    aws ec2 describe-vpcs --region "$aws_region" | jq -r '.Vpcs[] | "VPC ID: \(.VpcId), CIDR: \(.CidrBlock), 名稱: \(if .Tags then (.Tags[] | select(.Key=="Name") | .Value) else "無名稱" end)"'
     
     local vpc_id
     while true; do
@@ -96,7 +96,7 @@ _prompt_network_details_ec() {
     echo -e "\\n${BLUE}選擇網絡設定...${NC}"
     
     echo -e "${YELLOW}可用的 VPCs:${NC}"
-    aws ec2 describe-vpcs --region "$aws_region" | jq -r '.Vpcs[] | "VPC ID: \\(.VpcId), CIDR: \\(.CidrBlock), 名稱: \\(if .Tags then (.Tags[] | select(.Key=="Name") | .Value) else "無名稱" end)"'
+    aws ec2 describe-vpcs --region "$aws_region" | jq -r '.Vpcs[] | "VPC ID: \(.VpcId), CIDR: \(.CidrBlock), 名稱: \(if .Tags then (.Tags[] | select(.Key=="Name") | .Value) else "無名稱" end)"'
     
     local vpc_id
     while true; do
