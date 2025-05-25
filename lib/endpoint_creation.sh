@@ -226,6 +226,131 @@ _prompt_network_details_ec() {
 EOF
 }
 
+# 預檢查函數：驗證 AWS CLI 參數
+debug_aws_cli_params() {
+    local vpn_cidr="$1"
+    local server_cert_arn="$2"
+    local client_cert_arn="$3"
+    local vpn_name="$4"
+    local aws_region="$5"
+    
+    echo -e "${BLUE}=== 開始 AWS CLI 參數預檢查 ===${NC}"
+    local validation_errors=0
+    
+    # 1. 檢查 AWS CLI 可用性
+    echo -e "${YELLOW}1. 檢查 AWS CLI 可用性${NC}"
+    if ! command -v aws &> /dev/null; then
+        echo -e "${RED}✗ AWS CLI 未安裝${NC}"
+        ((validation_errors++))
+    else
+        local aws_version=$(aws --version 2>&1 | head -1)
+        echo -e "${GREEN}✓ AWS CLI 可用: $aws_version${NC}"
+    fi
+    
+    # 2. 檢查 AWS 身份驗證
+    echo -e "${YELLOW}2. 檢查 AWS 身份驗證${NC}"
+    local caller_identity
+    if caller_identity=$(aws sts get-caller-identity --region "$aws_region" 2>/dev/null); then
+        local account_id=$(echo "$caller_identity" | jq -r '.Account' 2>/dev/null || echo "無法解析")
+        local user_arn=$(echo "$caller_identity" | jq -r '.Arn' 2>/dev/null || echo "無法解析")
+        echo -e "${GREEN}✓ AWS 身份驗證成功${NC}"
+        echo -e "    帳號 ID: $account_id"
+        echo -e "    用戶 ARN: $user_arn"
+    else
+        echo -e "${RED}✗ AWS 身份驗證失敗${NC}"
+        ((validation_errors++))
+    fi
+    
+    # 3. 檢查 AWS 區域配置
+    echo -e "${YELLOW}3. 檢查 AWS 區域配置${NC}"
+    local config_region=$(aws configure get region 2>/dev/null || echo "未設置")
+    echo -e "    配置區域: $config_region"
+    echo -e "    指定區域: $aws_region"
+    if [ -n "$aws_region" ]; then
+        echo -e "${GREEN}✓ 區域參數有效${NC}"
+    else
+        echo -e "${RED}✗ 區域參數為空${NC}"
+        ((validation_errors++))
+    fi
+    
+    # 4. 檢查伺服器證書
+    echo -e "${YELLOW}4. 檢查伺服器證書狀態${NC}"
+    if [ -n "$server_cert_arn" ]; then
+        if aws acm describe-certificate --certificate-arn "$server_cert_arn" --region "$aws_region" &>/dev/null; then
+            local cert_status=$(aws acm describe-certificate --certificate-arn "$server_cert_arn" --region "$aws_region" --query 'Certificate.Status' --output text 2>/dev/null)
+            echo -e "${GREEN}✓ 伺服器證書可訪問，狀態: $cert_status${NC}"
+        else
+            echo -e "${RED}✗ 伺服器證書不可訪問或不存在${NC}"
+            echo -e "    ARN: $server_cert_arn"
+            ((validation_errors++))
+        fi
+    else
+        echo -e "${RED}✗ 伺服器證書 ARN 為空${NC}"
+        ((validation_errors++))
+    fi
+    
+    # 5. 檢查客戶端證書
+    echo -e "${YELLOW}5. 檢查客戶端證書狀態${NC}"
+    if [ -n "$client_cert_arn" ]; then
+        if aws acm describe-certificate --certificate-arn "$client_cert_arn" --region "$aws_region" &>/dev/null; then
+            local cert_status=$(aws acm describe-certificate --certificate-arn "$client_cert_arn" --region "$aws_region" --query 'Certificate.Status' --output text 2>/dev/null)
+            echo -e "${GREEN}✓ 客戶端證書可訪問，狀態: $cert_status${NC}"
+        else
+            echo -e "${RED}✗ 客戶端證書不可訪問或不存在${NC}"
+            echo -e "    ARN: $client_cert_arn"
+            ((validation_errors++))
+        fi
+    else
+        echo -e "${RED}✗ 客戶端證書 ARN 為空${NC}"
+        ((validation_errors++))
+    fi
+    
+    # 6. 檢查 VPN CIDR 格式
+    echo -e "${YELLOW}6. 檢查 VPN CIDR 格式${NC}"
+    if [[ "$vpn_cidr" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$ ]]; then
+        echo -e "${GREEN}✓ VPN CIDR 格式有效: $vpn_cidr${NC}"
+    else
+        echo -e "${RED}✗ VPN CIDR 格式無效: $vpn_cidr${NC}"
+        ((validation_errors++))
+    fi
+    
+    # 7. 檢查 VPN 名稱
+    echo -e "${YELLOW}7. 檢查 VPN 名稱${NC}"
+    if [ -n "$vpn_name" ] && [ ${#vpn_name} -le 255 ]; then
+        echo -e "${GREEN}✓ VPN 名稱有效: $vpn_name${NC}"
+    else
+        echo -e "${RED}✗ VPN 名稱無效或過長: $vpn_name${NC}"
+        ((validation_errors++))
+    fi
+    
+    # 8. 檢查 EC2 權限
+    echo -e "${YELLOW}8. 檢查 EC2 權限${NC}"
+    if aws ec2 describe-client-vpn-endpoints --region "$aws_region" --max-items 1 &>/dev/null; then
+        echo -e "${GREEN}✓ EC2 Client VPN 權限正常${NC}"
+    else
+        echo -e "${RED}✗ 缺少 EC2 Client VPN 權限${NC}"
+        ((validation_errors++))
+    fi
+    
+    # 9. 檢查 jq 工具
+    echo -e "${YELLOW}9. 檢查 jq 工具可用性${NC}"
+    if command -v jq &> /dev/null; then
+        echo -e "${GREEN}✓ jq 工具可用${NC}"
+    else
+        echo -e "${YELLOW}⚠ jq 工具不可用，可能影響 JSON 解析${NC}"
+    fi
+    
+    echo -e "${BLUE}=== 預檢查完成 ===${NC}"
+    
+    if [ $validation_errors -eq 0 ]; then
+        echo -e "${GREEN}✓ 所有預檢查通過，可以繼續創建 VPN 端點${NC}"
+        return 0
+    else
+        echo -e "${RED}✗ 發現 $validation_errors 個驗證錯誤，無法繼續創建 VPN 端點${NC}"
+        return 1
+    fi
+}
+
 # 輔助函式：創建 AWS Client VPN 端點實體
 _create_aws_client_vpn_endpoint_ec() {
     local vpn_cidr="$1"
@@ -313,6 +438,32 @@ _create_aws_client_vpn_endpoint_ec() {
     echo "日誌群組: $log_group_name"
     echo "VPN 名稱: $clean_vpn_name"
     
+    # 顯示完整的 AWS CLI 命令預覽
+    echo -e "\n${BLUE}=== AWS CLI 命令預覽 ===${NC}"
+    echo "aws ec2 create-client-vpn-endpoint \\"
+    echo "    --client-cidr-block '$vpn_cidr' \\"
+    echo "    --server-certificate-arn '$server_cert_arn' \\"
+    echo "    --authentication-options '$auth_options' \\"
+    echo "    --connection-log-options '$log_options' \\"
+    echo "    --transport-protocol tcp \\"
+    echo "    --split-tunnel \\"
+    echo "    --dns-servers 8.8.8.8 8.8.4.4 \\"
+    echo "    --region '$aws_region' \\"
+    echo "    --tag-specifications '$tag_specs'"
+    echo -e "${BLUE}===========================================${NC}\n"
+    
+    # 詳細記錄到日誌
+    log_message_core "準備執行 VPN 端點創建命令"
+    log_message_core "VPN CIDR: $vpn_cidr"
+    log_message_core "伺服器證書 ARN: $server_cert_arn"
+    log_message_core "客戶端證書 ARN: $client_cert_arn"
+    log_message_core "VPN 名稱: $vpn_name"
+    log_message_core "AWS 區域: $aws_region"
+    
+    echo -e "${BLUE}正在執行 AWS CLI 創建命令...${NC}"
+    local start_time=$(date '+%Y-%m-%d %H:%M:%S')
+    echo -e "${YELLOW}開始時間: $start_time${NC}"
+    
     # 執行創建命令
     if [ -n "$log_group_name" ]; then
         endpoint_result=$(aws ec2 create-client-vpn-endpoint \
@@ -339,12 +490,98 @@ _create_aws_client_vpn_endpoint_ec() {
     fi
     exit_code=$?
     
+    local end_time=$(date '+%Y-%m-%d %H:%M:%S')
+    echo -e "${YELLOW}結束時間: $end_time${NC}"
+    log_message_core "AWS CLI 命令執行完成，exit code: $exit_code，結束時間: $end_time"
+    
     # 檢查 AWS CLI 命令是否成功執行
     if [ $exit_code -ne 0 ]; then
-        echo -e "${RED}AWS CLI 命令執行失敗 (exit code: $exit_code)${NC}"
-        echo -e "${RED}錯誤輸出:${NC}"
+        echo -e "${RED}═══════════════════════════════════════${NC}"
+        echo -e "${RED}    AWS CLI 錯誤詳細診斷 (exit code: $exit_code)${NC}"
+        echo -e "${RED}═══════════════════════════════════════${NC}"
+        
+        # 記錄完整的錯誤信息
+        echo -e "${YELLOW}錯誤輸出:${NC}"
         echo "$endpoint_result"
-        log_message_core "錯誤: VPN 端點創建失敗 - AWS CLI 錯誤 (exit code: $exit_code)"
+        echo -e ""
+        
+        # 環境診斷
+        echo -e "${YELLOW}環境診斷信息:${NC}"
+        echo "  AWS CLI 版本: $(aws --version 2>&1 | head -1)"
+        echo "  當前區域: $(aws configure get region 2>/dev/null || echo '未設置')"
+        echo "  當前身份: $(aws sts get-caller-identity --query 'Arn' --output text 2>/dev/null || echo '無法獲取')"
+        echo "  當前時間: $(date)"
+        echo -e ""
+        
+        # 參數驗證
+        echo -e "${YELLOW}創建參數驗證:${NC}"
+        echo "  VPN CIDR: '$vpn_cidr'"
+        echo "  伺服器證書 ARN: '$server_cert_arn'"
+        echo "  客戶端證書 ARN: '$client_cert_arn'"
+        echo "  VPN 名稱: '$vpn_name'"
+        echo "  AWS 區域: '$aws_region'"
+        echo -e ""
+        
+        # 檢查證書狀態
+        echo -e "${YELLOW}檢查證書狀態:${NC}"
+        if aws acm describe-certificate --certificate-arn "$server_cert_arn" --region "$aws_region" &>/dev/null; then
+            echo "  ✓ 伺服器證書可訪問"
+        else
+            echo "  ✗ 伺服器證書不可訪問或不存在"
+        fi
+        
+        if aws acm describe-certificate --certificate-arn "$client_cert_arn" --region "$aws_region" &>/dev/null; then
+            echo "  ✓ 客戶端證書可訪問"
+        else
+            echo "  ✗ 客戶端證書不可訪問或不存在"
+        fi
+        echo -e ""
+        
+        # 檢查 JSON 格式
+        echo -e "${YELLOW}檢查 JSON 參數格式:${NC}"
+        echo "  認證選項: $auth_options"
+        if echo "$auth_options" | jq . &>/dev/null; then
+            echo "  ✓ 認證選項 JSON 格式有效"
+        else
+            echo "  ✗ 認證選項 JSON 格式無效"
+        fi
+        
+        echo "  日誌選項: $log_options"
+        if echo "$log_options" | jq . &>/dev/null; then
+            echo "  ✓ 日誌選項 JSON 格式有效"
+        else
+            echo "  ✗ 日誌選項 JSON 格式無效"
+        fi
+        
+        echo "  標籤規格: $tag_specs"
+        if echo "$tag_specs" | jq . &>/dev/null; then
+            echo "  ✓ 標籤規格 JSON 格式有效"
+        else
+            echo "  ✗ 標籤規格 JSON 格式無效"
+        fi
+        echo -e ""
+        
+        echo -e "${RED}═══════════════════════════════════════${NC}"
+        
+        log_message_core "錯誤: VPN 端點創建失敗 - AWS CLI 錯誤 (exit code: $exit_code) - 詳細診斷已輸出"
+        
+        # 保存完整診斷到文件
+        {
+            echo "=== VPN 端點創建失敗診斷報告 ==="
+            echo "時間: $(date)"
+            echo "Exit Code: $exit_code"
+            echo "錯誤輸出: $endpoint_result"
+            echo "AWS CLI 版本: $(aws --version 2>&1)"
+            echo "當前區域: $(aws configure get region 2>/dev/null || echo '未設置')"
+            echo "當前身份: $(aws sts get-caller-identity --query 'Arn' --output text 2>/dev/null || echo '無法獲取')"
+            echo "VPN CIDR: $vpn_cidr"
+            echo "伺服器證書 ARN: $server_cert_arn"
+            echo "客戶端證書 ARN: $client_cert_arn"
+            echo "認證選項: $auth_options"
+            echo "日誌選項: $log_options"
+            echo "標籤規格: $tag_specs"
+        } >> "${LOG_FILE:-vpn_error_diagnostic.log}"
+        
         return 1
     fi
     
@@ -1058,7 +1295,7 @@ manage_routes_lib() {
                           --destination-cidr-block "$route_dest_cidr_lib" \
                           --target-vpc-subnet-id "$route_target_subnet_id_lib" \
                           --description "Route to $target_vpc_id_for_route_lib via $route_target_subnet_id_lib" \
-                          --region "$arg_aws_region"; then
+                          --region "$aws_region"; then
                             echo -e "${GREEN}路由已添加。${NC}"
                             log_message_core "路由已添加 (lib): \"$route_dest_cidr_lib\" -> \"$route_target_subnet_id_lib\" for endpoint \"$arg_endpoint_id\"" # Quoted variables
                         else
@@ -1357,7 +1594,6 @@ manage_batch_vpc_auth_lib() {
                             log_message_core "授權規則已移除 (lib): \"$revoke_cidr_lib\" from endpoint \"$arg_endpoint_id\"" # Quoted variables
                         else
                             echo -e "${RED}移除授權規則 \"$revoke_cidr_lib\" 失敗。${NC}" # Quoted variable
-                            log_message_core "錯誤: 移除授權規則失敗 (lib): \"$revoke_cidr_lib\" from endpoint \"$arg_endpoint_id\"" # Quoted variables
                         fi
                     else
                         echo -e "${BLUE}操作已取消。${NC}"
@@ -1425,7 +1661,7 @@ add_authorization_rule_lib() {
     local auth_desc_lib
     read -p "請輸入此授權規則的描述 (可選): " auth_desc_lib
 
-    echo -e "${BLUE}正在為端點 $arg_endpoint_id 添加授權規則以訪問目標網路 $auth_cidr_lib...${NC}"
+    echo -e "${BLUE}正在為端點 $arg_endpoint_id 添加授權規則以訪問目標網路 $auth_cidr_lib...${NC}" # Quoted variables
     if aws ec2 authorize-client-vpn-ingress \
       --client-vpn-endpoint-id "$arg_endpoint_id" \
       --target-network-cidr "$auth_cidr_lib" \
@@ -1505,7 +1741,6 @@ remove_authorization_rule_lib() {
                     log_message_core "授權規則已移除 (lib): $revoke_cidr_lib from endpoint $arg_endpoint_id" # Quoted variables
                 else
                     echo -e "${RED}移除授權規則 \"$revoke_cidr_lib\" 失敗。${NC}" # Quoted variable
-                    log_message_core "錯誤: 移除授權規則失敗 (lib): $revoke_cidr_lib from endpoint $arg_endpoint_id" # Quoted variables
                 fi
             else
                 echo -e "${BLUE}操作已取消。${NC}"
@@ -1541,7 +1776,7 @@ view_route_table_lib() {
     if [ $? -ne 0 ] || [ -z "$routes_json_lib" ] || [ "$(echo "$routes_json_lib" | jq '.Routes | length')" -eq 0 ]; then
         echo -e "${YELLOW}此端點沒有配置路由。${NC}"
         log_message_core "端點 $arg_endpoint_id 沒有配置路由 (lib)。"
-        return 0 # Not an error, just no routes to show
+        return 0 # Not an error, just nothing to do
     fi
 
     echo "$routes_json_lib" | jq -r '.Routes[] | 
@@ -1549,7 +1784,6 @@ view_route_table_lib() {
     目標子網路: \\(.TargetSubnet // .TargetVpcSubnetId)
     狀態: \\(.Status.Code)
     來源: \\(.Origin)
-    類型: \\(.Type // "N/A")
     描述: \\(.Description // "無描述")
     ------------------------------------"'
     
@@ -1962,7 +2196,7 @@ terminate_vpn_endpoint_lib() {
                             echo -e "${YELLOW}  跳過路由: $dest_cidr -> $target_subnet (來源: $origin, 不可刪除)。${NC}"
                         fi
                     else
-                        echo -e "${YELLOW}  跳過路由條目：無法解析必要欄位 (CIDR: $dest_cidr, 子網路: $target_subnet, 來源: $origin)。${NC}"
+                        echo -e "${YELLOW}  跳過路由條目，無法解析必要欄位 (CIDR: $dest_cidr, 子網路: $target_subnet, 來源: $origin)。${NC}"
                         log_message_core "警告: 跳過路由條目，無法解析必要欄位 for endpoint $arg_endpoint_id (lib)"
                     fi
                 done
@@ -2132,55 +2366,213 @@ view_associated_networks_lib() {
     return 0
 }
 
-# 調試函數：測試 AWS CLI 參數
-debug_aws_cli_params() {
-    local vpn_cidr="$1"
-    local server_cert_arn="$2"
+# 增強的錯誤診斷函數
+debug_aws_cli_error() {
+    local exit_code="$1"
+    local command="$2"
+    local output="$3"
+    local error_output="$4"
+    
+    echo -e "${RED}═══════════════════════════════════════${NC}"
+    echo -e "${RED}    AWS CLI 錯誤詳細診斷報告${NC}"
+    echo -e "${RED}═══════════════════════════════════════${NC}"
+    
+    # 基本錯誤信息
+    echo -e "${YELLOW}錯誤代碼:${NC} $exit_code"
+    echo -e "${YELLOW}執行時間:${NC} $(date '+%Y-%m-%d %H:%M:%S')"
+    echo -e "${YELLOW}失敗命令:${NC} $command"
+    
+    # 分析錯誤代碼
+    case $exit_code in
+        1)
+            echo -e "${YELLOW}錯誤類型:${NC} 一般錯誤 (可能是參數問題或 AWS 服務錯誤)"
+            ;;
+        2)
+            echo -e "${YELLOW}錯誤類型:${NC} 命令語法錯誤或參數錯誤"
+            ;;
+        127)
+            echo -e "${YELLOW}錯誤類型:${NC} AWS CLI 命令未找到"
+            ;;
+        130)
+            echo -e "${YELLOW}錯誤類型:${NC} 操作被中斷 (Ctrl+C)"
+            ;;
+        255)
+            echo -e "${YELLOW}錯誤類型:${NC} AWS CLI 內部錯誤"
+            ;;
+        *)
+            echo -e "${YELLOW}錯誤類型:${NC} 未知錯誤代碼"
+            ;;
+    esac
+    
+    # 分析錯誤輸出
+    if [ -n "$error_output" ]; then
+        echo -e "\n${YELLOW}錯誤輸出詳情:${NC}"
+        echo "$error_output" | while IFS= read -r line; do
+            echo "  $line"
+            
+            # 常見錯誤模式分析
+            if echo "$line" | grep -q "InvalidParameterValue"; then
+                echo -e "  ${RED}→ 檢查建議: 驗證所有參數值是否正確${NC}"
+            elif echo "$line" | grep -q "InvalidParameter"; then
+                echo -e "  ${RED}→ 檢查建議: 驗證參數格式和語法${NC}"
+            elif echo "$line" | grep -q "AccessDenied"; then
+                echo -e "  ${RED}→ 檢查建議: 檢查 IAM 權限${NC}"
+            elif echo "$line" | grep -q "ResourceNotFound"; then
+                echo -e "  ${RED}→ 檢查建議: 檢查資源 ID 是否存在且可訪問${NC}"
+            elif echo "$line" | grep -q "InvalidCertificate"; then
+                echo -e "  ${RED}→ 檢查建議: 檢查證書 ARN 和狀態${NC}"
+            elif echo "$line" | grep -q "InvalidVpc"; then
+                echo -e "  ${RED}→ 檢查建議: 檢查 VPC ID 和子網配置${NC}"
+            elif echo "$line" | grep -q "QuotaExceeded"; then
+                echo -e "  ${RED}→ 檢查建議: 檢查 AWS 服務配額限制${NC}"
+            fi
+        done
+    fi
+    
+    # 標準輸出（如果有的話）
+    if [ -n "$output" ]; then
+        echo -e "\n${YELLOW}命令輸出:${NC}"
+        echo "$output" | head -20 | while IFS= read -r line; do
+            echo "  $line"
+        done
+        
+        # 如果輸出太長，顯示提示
+        if [ "$(echo "$output" | wc -l)" -gt 20 ]; then
+            echo "  ..."
+            echo -e "  ${YELLOW}(輸出已截斷，完整輸出已記錄到日誌文件)${NC}"
+        fi
+    fi
+    
+    # 環境信息
+    echo -e "\n${YELLOW}環境信息:${NC}"
+    echo -e "  AWS CLI 版本: $(aws --version 2>&1 | head -1)"
+    echo -e "  當前區域: $(aws configure get region 2>/dev/null || echo '未設置')"
+    echo -e "  當前身份: $(aws sts get-caller-identity --query 'Arn' --output text 2>/dev/null || echo '無法獲取')"
+    
+    # 記錄到日誌文件
+    {
+        echo "═══ AWS CLI 錯誤診斷 $(date '+%Y-%m-%d %H:%M:%S') ═══"
+        echo "錯誤代碼: $exit_code"
+        echo "失敗命令: $command"
+        echo "錯誤輸出:"
+        echo "$error_output"
+        echo "標準輸出:"
+        echo "$output"
+        echo "環境信息:"
+        echo "  AWS CLI 版本: $(aws --version 2>&1 | head -1)"
+        echo "  當前區域: $(aws configure get region 2>/dev/null || echo '未設置')"
+        echo "  當前身份: $(aws sts get-caller-identity --query 'Arn' --output text 2>/dev/null || echo '無法獲取')"
+        echo "════════════════════════════════════════════════════"
+    } >> "${LOG_FILE:-vpn_error.log}"
+    
+    echo -e "\n${YELLOW}完整錯誤信息已記錄到: ${LOG_FILE:-vpn_error.log}${NC}"
+    echo -e "${RED}═══════════════════════════════════════${NC}"
+}
+
+# 增強的參數驗證函數
+validate_vpn_parameters_enhanced() {
+    local client_cidr="$1"
+    local server_cert_arn="$2" 
     local client_cert_arn="$3"
-    local vpn_name="$4"
-    local aws_region="$5"
+    local vpc_id="$4"
+    local subnet_id="$5"
+    local vpn_name="$6"
+    local aws_region="$7"
     
-    echo -e "${CYAN}=== AWS CLI 參數調試 ===${NC}"
-    echo -e "VPN CIDR: $vpn_cidr"
-    echo -e "伺服器憑證 ARN: $server_cert_arn"
-    echo -e "客戶端憑證 ARN: $client_cert_arn"
-    echo -e "VPN 名稱: $vpn_name"
-    echo -e "AWS 區域: $aws_region"
+    echo -e "${BLUE}執行增強參數驗證...${NC}"
     
-    # 測試 AWS 連線
-    echo -e "\n${BLUE}測試 AWS 連線...${NC}"
-    if aws sts get-caller-identity --region "$aws_region" >/dev/null 2>&1; then
-        echo -e "${GREEN}✓ AWS 連線正常${NC}"
+    local validation_errors=()
+    
+    # 1. 驗證 CIDR 格式
+    if ! echo "$client_cidr" | grep -E '^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$' > /dev/null; then
+        validation_errors+=("CIDR 格式無效: $client_cidr")
     else
-        echo -e "${RED}✗ AWS 連線失敗${NC}"
-        return 1
+        echo -e "${GREEN}✓ CIDR 格式有效: $client_cidr${NC}"
     fi
     
-    # 驗證憑證 ARN
-    echo -e "\n${BLUE}驗證伺服器憑證...${NC}"
-    if aws acm describe-certificate --certificate-arn "$server_cert_arn" --region "$aws_region" >/dev/null 2>&1; then
-        echo -e "${GREEN}✓ 伺服器憑證有效${NC}"
+    # 2. 驗證證書 ARN 格式
+    if ! echo "$server_cert_arn" | grep -E '^arn:aws:acm:[^:]+:[^:]+:certificate/.+$' > /dev/null; then
+        validation_errors+=("伺服器證書 ARN 格式無效: $server_cert_arn")
     else
-        echo -e "${RED}✗ 伺服器憑證無效或無權限訪問${NC}"
-        return 1
+        echo -e "${GREEN}✓ 伺服器證書 ARN 格式有效${NC}"
     fi
     
-    echo -e "\n${BLUE}驗證客戶端憑證...${NC}"
-    if aws acm describe-certificate --certificate-arn "$client_cert_arn" --region "$aws_region" >/dev/null 2>&1; then
-        echo -e "${GREEN}✓ 客戶端憑證有效${NC}"
+    if ! echo "$client_cert_arn" | grep -E '^arn:aws:acm:[^:]+:[^:]+:certificate/.+$' > /dev/null; then
+        validation_errors+=("客戶端證書 ARN 格式無效: $client_cert_arn")
     else
-        echo -e "${RED}✗ 客戶端憑證無效或無權限訪問${NC}"
-        return 1
+        echo -e "${GREEN}✓ 客戶端證書 ARN 格式有效${NC}"
     fi
     
-    # 測試 VPC 端點創建權限
-    echo -e "\n${BLUE}測試 Client VPN 權限...${NC}"
-    if aws ec2 describe-client-vpn-endpoints --region "$aws_region" >/dev/null 2>&1; then
-        echo -e "${GREEN}✓ Client VPN 讀取權限正常${NC}"
+    # 3. 檢查證書狀態
+    echo -e "${BLUE}檢查證書狀態...${NC}"
+    
+    if ! server_cert_status=$(aws acm describe-certificate --certificate-arn "$server_cert_arn" --region "$aws_region" --query 'Certificate.Status' --output text 2>/dev/null); then
+        validation_errors+=("無法檢查伺服器證書狀態: $server_cert_arn")
+    elif [ "$server_cert_status" != "ISSUED" ]; then
+        validation_errors+=("伺服器證書狀態錯誤: $server_cert_status (應為 ISSUED)")
     else
-        echo -e "${RED}✗ Client VPN 權限不足${NC}"
-        return 1
+        echo -e "${GREEN}✓ 伺服器證書狀態: $server_cert_status${NC}"
     fi
     
-    return 0
+    if ! client_cert_status=$(aws acm describe-certificate --certificate-arn "$client_cert_arn" --region "$aws_region" --query 'Certificate.Status' --output text 2>/dev/null); then
+        validation_errors+=("無法檢查客戶端證書狀態: $client_cert_arn")
+    elif [ "$client_cert_status" != "ISSUED" ]; then
+        validation_errors+=("客戶端證書狀態錯誤: $client_cert_status (應為 ISSUED)")
+    else
+        echo -e "${GREEN}✓ 客戶端證書狀態: $client_cert_status${NC}"
+    fi
+    
+    # 4. 檢查 VPC 存在性
+    echo -e "${BLUE}檢查 VPC 可用性...${NC}"
+    if ! aws ec2 describe-vpcs --vpc-ids "$vpc_id" --region "$aws_region" >/dev/null 2>&1; then
+        validation_errors+=("VPC 不存在或無法訪問: $vpc_id")
+    else
+        echo -e "${GREEN}✓ VPC 可用: $vpc_id${NC}"
+    fi
+    
+    # 5. 檢查子網存在性和狀態
+    echo -e "${BLUE}檢查子網可用性...${NC}"
+    if ! subnet_info=$(aws ec2 describe-subnets --subnet-ids "$subnet_id" --region "$aws_region" --query 'Subnets[0].[State,AvailabilityZone,VpcId]' --output text 2>/dev/null); then
+        validation_errors+=("子網不存在或無法訪問: $subnet_id")
+    else
+        read -r subnet_state subnet_az subnet_vpc <<< "$subnet_info"
+        if [ "$subnet_state" != "available" ]; then
+            validation_errors+=("子網狀態錯誤: $subnet_state (應為 available)")
+        elif [ "$subnet_vpc" != "$vpc_id" ]; then
+            validation_errors+=("子網不屬於指定的 VPC: $subnet_id (VPC: $subnet_vpc, 期望: $vpc_id)")
+        else
+            echo -e "${GREEN}✓ 子網可用: $subnet_id (AZ: $subnet_az, 狀態: $subnet_state)${NC}"
+        fi
+    fi
+    
+    # 6. 檢查現有端點衝突
+    echo -e "${BLUE}檢查現有端點衝突...${NC}"
+    if existing_endpoint=$(aws ec2 describe-client-vpn-endpoints --region "$aws_region" --query "ClientVpnEndpoints[?Tags[?Key=='Name' && Value=='$vpn_name']].[ClientVpnEndpointId,State.Code]" --output text 2>/dev/null) && [ -n "$existing_endpoint" ]; then
+        echo -e "${YELLOW}⚠️ 發現同名端點:${NC}"
+        echo "$existing_endpoint"
+        echo -e "${YELLOW}建議: 刪除現有端點或使用不同名稱${NC}"
+    else
+        echo -e "${GREEN}✓ 沒有發現同名端點衝突${NC}"
+    fi
+    
+    # 7. 檢查配額限制
+    echo -e "${BLUE}檢查 VPN 端點配額...${NC}"
+    if current_count=$(aws ec2 describe-client-vpn-endpoints --region "$aws_region" --query 'length(ClientVpnEndpoints)' --output text 2>/dev/null); then
+        echo -e "${GREEN}✓ 當前 VPN 端點數量: $current_count${NC}"
+        if [ "$current_count" -ge 5 ]; then
+            echo -e "${YELLOW}⚠️ 接近默認配額限制 (5 個端點)${NC}"
+        fi
+    fi
+    
+    # 報告驗證結果
+    if [ ${#validation_errors[@]} -eq 0 ]; then
+        echo -e "${GREEN}✓ 所有參數驗證通過${NC}"
+        return 0
+    else
+        echo -e "${RED}❌ 發現 ${#validation_errors[@]} 個驗證錯誤:${NC}"
+        for error in "${validation_errors[@]}"; do
+            echo -e "${RED}  • $error${NC}"
+        done
+        return 1
+    fi
 }

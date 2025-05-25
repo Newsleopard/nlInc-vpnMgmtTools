@@ -147,14 +147,58 @@ generate_server_certificate_lib() {
 
     log_message_core "開始生成伺服器憑證 (lib) - 名稱: $server_name, 目錄: $easyrsa_dir, Config: $env_config_file"
 
+    # 確定VPN域名（根據環境自動選擇）
+    local vpn_domain
+    if [[ "$env_config_file" == *"staging"* ]]; then
+        vpn_domain="vpn.staging.newsleopard.de"
+    elif [[ "$env_config_file" == *"production"* ]]; then
+        vpn_domain="vpn.prod.newsleopard.de"
+    else
+        vpn_domain="vpn.staging.newsleopard.de"  # 預設為 staging
+    fi
+    
+    echo -e "${BLUE}將為伺服器證書使用域名: $vpn_domain${NC}"
+    log_message_core "伺服器證書域名: $vpn_domain"
+
+    # 創建或更新 vars 文件以設置域名
+    echo -e "${BLUE}設置 EasyRSA 變數文件...${NC}"
+    cat > "$easyrsa_dir/pki/vars" << EOF
+# Easy-RSA 3.x vars file for Client VPN
+# 自動生成於 $(date)
+
+# 設置證書信息
+set_var EASYRSA_REQ_COUNTRY     "TW"
+set_var EASYRSA_REQ_PROVINCE    "Taiwan"
+set_var EASYRSA_REQ_CITY        "Taipei"
+set_var EASYRSA_REQ_ORG         "NewsLeopard"
+set_var EASYRSA_REQ_EMAIL       "admin@newsleopard.de"
+set_var EASYRSA_REQ_OU          "IT Department"
+
+# 關鍵設置：為伺服器證書指定域名
+set_var EASYRSA_REQ_CN          "$vpn_domain"
+
+# 設置證書有效期
+set_var EASYRSA_CA_EXPIRE       3650
+set_var EASYRSA_CERT_EXPIRE     365
+
+# 密鑰大小
+set_var EASYRSA_KEY_SIZE        2048
+
+# 演算法
+set_var EASYRSA_ALGO            rsa
+set_var EASYRSA_DIGEST          sha256
+EOF
+
     # 生成伺服器證書
     if [ ! -f "$easyrsa_dir/pki/issued/server.crt" ]; then
-        echo -e "${BLUE}生成伺服器證書...${NC}"
+        echo -e "${BLUE}生成帶域名的伺服器證書...${NC}"
         # 檢查 CA 證書是否存在
         if [ ! -f "$easyrsa_dir/pki/ca.crt" ] || [ ! -f "$easyrsa_dir/pki/private/ca.key" ]; then
             handle_error "無法生成伺服器證書，因為 CA 證書 (pki/ca.crt 或 pki/private/ca.key) 不存在。" "" 1
         fi
-        if ! (yes "" | "$easyrsa_dir/easyrsa" --batch build-server-full server nopass); then
+        
+        # 使用 --req-cn 參數強制設置域名
+        if ! (yes "" | "$easyrsa_dir/easyrsa" --batch --req-cn="$vpn_domain" build-server-full server nopass); then
             handle_error "生成伺服器證書失敗。" "$?" 1
         fi
         # 驗證伺服器證書檔案是否已生成
