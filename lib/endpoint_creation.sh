@@ -1608,9 +1608,6 @@ terminate_vpn_endpoint_lib() {
         # 提取所有CIDR並處理
         if command -v jq >/dev/null 2>&1; then
             echo "$auth_rules_json" | jq -r '.AuthorizationRules[].DestinationCidr' | while IFS= read -r cidr; do
-        # 提取所有CIDR並處理
-        if command -v jq >/dev/null 2>&1; then
-            echo "$auth_rules_json" | jq -r '.AuthorizationRules[].DestinationCidr' | while IFS= read -r cidr; do
                 echo -e "${BLUE}  正在撤銷對 CIDR $cidr 的授權...${NC}"
                 if aws ec2 revoke-client-vpn-ingress \
                     --client-vpn-endpoint-id "$arg_endpoint_id" \

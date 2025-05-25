@@ -73,7 +73,7 @@ create_vpn_endpoint() {
             return 1
         fi
     else
-        setup_aws_config "$CONFIG_FILE" # 傳遞 CONFIG_FILE 給函式
+        setup_aws_config_lib "$CONFIG_FILE" # 使用庫函數避免衝突
         if ! load_config_core "$CONFIG_FILE"; then
             echo -e "${RED}設定後載入配置文件失敗${NC}"
             return 1
@@ -85,18 +85,18 @@ create_vpn_endpoint() {
         return 1
     fi
     
-    # 1. 生成證書 (如果不存在)
-    if [ ! -f "$SCRIPT_DIR/certificates/pki/ca.crt" ]; then
-        generate_certificates_lib "$SCRIPT_DIR"
+    # 1. 生成證書 (如果不存在) - 使用環境感知路徑
+    if [ ! -f "$VPN_CERT_DIR/pki/ca.crt" ]; then
+        generate_certificates_lib "$VPN_CERT_DIR"
         if [ $? -ne 0 ]; then
             echo -e "${RED}證書生成失敗。中止操作。${NC}"
             return 1
         fi
     fi
     
-    # 2. 導入證書到 ACM
+    # 2. 導入證書到 ACM - 使用環境感知路徑
     local acm_arns_result
-    acm_arns_result=$(import_certificates_to_acm_lib "$SCRIPT_DIR" "$AWS_REGION")
+    acm_arns_result=$(import_certificates_to_acm_lib "$VPN_CERT_DIR" "$AWS_REGION")
     if [ $? -ne 0 ]; then
         echo -e "${RED}導入證書到 ACM 失敗。中止操作。${NC}"
         return 1
@@ -274,8 +274,8 @@ create_vpn_endpoint() {
     # 主端點創建和額外 VPC 關聯完成後，日誌和管理員配置生成仍然需要
     log_message "VPN 端點 $ENDPOINT_ID 相關操作完成 (主體創建和額外 VPC 關聯由 lib 完成)"
     
-    # 生成管理員配置檔案 (使用庫函式)
-    generate_admin_config_lib "$SCRIPT_DIR" "$CONFIG_FILE"
+    # 生成管理員配置檔案 (使用庫函式) - 使用環境感知路徑
+    generate_admin_config_lib "$VPN_CERT_DIR" "$CONFIG_FILE"
     local admin_config_result=$?
     log_operation_result "生成管理員配置檔案" "$admin_config_result" "aws_vpn_admin.sh"
     
@@ -857,8 +857,8 @@ main() {
     # CONFIG_FILE 變數在腳本頂部定義
     if [ ! -f "$CONFIG_FILE" ]; then
         echo -e "${YELLOW}未找到配置文件 ($CONFIG_FILE)。正在引導初始設定...${NC}"
-        # setup_aws_config 來自 aws_setup.sh, 它會創建 CONFIG_FILE
-        if ! setup_aws_config "$CONFIG_FILE"; then
+        # setup_aws_config_lib 來自 aws_setup.sh, 它會創建 CONFIG_FILE
+        if ! setup_aws_config_lib "$CONFIG_FILE"; then
             echo -e "${RED}AWS 配置設定失敗。無法繼續。${NC}"
             exit 1
         fi
@@ -874,7 +874,7 @@ main() {
         # 例如，詢問用戶是否要重新設定
         read -p "是否要嘗試重新設定 AWS 配置? (y/n): " reconfigure_choice
         if [[ "$reconfigure_choice" == "y" || "$reconfigure_choice" == "Y" ]]; then
-            if ! setup_aws_config "$CONFIG_FILE"; then
+            if ! setup_aws_config_lib "$CONFIG_FILE"; then
                 echo -e "${RED}AWS 配置設定失敗。無法繼續。${NC}"
                 exit 1
             fi

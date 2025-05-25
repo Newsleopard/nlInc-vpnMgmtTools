@@ -162,7 +162,7 @@ generate_admin_config_lib() {
         return 1
     fi
     
-    local cert_dir="$script_dir/certificates"
+    local cert_dir="$VPN_CERT_DIR" # 使用環境感知路徑
     
     # 檢查證書文件是否存在
     if [ ! -f "$cert_dir/pki/issued/admin.crt" ] || [ ! -f "$cert_dir/pki/private/admin.key" ]; then
@@ -241,16 +241,16 @@ export_team_config_lib() {
         return 1
     fi
     
-    # 檢查證書文件是否存在
-    if [ ! -f "$script_dir/certificates/pki/ca.crt" ] || [ ! -f "$script_dir/certificates/pki/private/ca.key" ]; then
+    # 檢查證書文件是否存在 - 使用環境感知路徑
+    if [ ! -f "$VPN_CERT_DIR/pki/ca.crt" ] || [ ! -f "$VPN_CERT_DIR/pki/private/ca.key" ]; then
         echo -e "${RED}錯誤: CA 證書文件不存在，請先生成證書${NC}"
         log_message_core "錯誤: CA 證書文件不存在"
         return 1
     fi
     
-    # 複製 CA 證書到 team-configs 目錄
-    cp "$script_dir/certificates/pki/ca.crt" "$script_dir/team-configs/"
-    cp "$script_dir/certificates/pki/private/ca.key" "$script_dir/team-configs/"
+    # 複製 CA 證書到 team-configs 目錄 - 使用環境感知路徑
+    cp "$VPN_CERT_DIR/pki/ca.crt" "$script_dir/team-configs/"
+    cp "$VPN_CERT_DIR/pki/private/ca.key" "$script_dir/team-configs/"
     
     # 創建團隊成員資訊文件
     cat > "$script_dir/team-configs/team-setup-info.txt" << EOF

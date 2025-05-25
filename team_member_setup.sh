@@ -312,8 +312,8 @@ generate_client_certificate() {
     # 檢查當前目錄
     if [ -f "$SCRIPT_DIR/ca.crt" ]; then
         ca_cert_path="$SCRIPT_DIR/ca.crt"
-    elif [ -f "$SCRIPT_DIR/certificates/ca.crt" ]; then
-        ca_cert_path="$SCRIPT_DIR/certificates/ca.crt"
+    elif [ -f "$VPN_CERT_DIR/ca.crt" ]; then
+        ca_cert_path="$VPN_CERT_DIR/ca.crt"
     else
         echo -e "${YELLOW}未找到 CA 證書文件。${NC}"
         if read_secure_input "請輸入 CA 證書文件的完整路徑: " ca_cert_path "validate_file_path"; then

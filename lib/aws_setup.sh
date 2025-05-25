@@ -3,9 +3,9 @@
 # 載入核心函式庫以使用顏色和日誌
 source "$(dirname "${BASH_SOURCE[0]}")/core_functions.sh"
 
-# 設定 AWS 配置 (已棄用，建議使用 configure_aws_cli_lib)
+# 設定 AWS 配置 (庫函數版本，避免函數名稱衝突)
 # 需要主腳本傳遞 CONFIG_FILE 變數
-setup_aws_config() {
+setup_aws_config_lib() {
     local main_config_file="$1" # 接收主腳本的 CONFIG_FILE 路徑
 
     echo -e "\\n${YELLOW}設定 AWS 配置...${NC}"
@@ -89,11 +89,12 @@ EOF
     # 只有在成功獲取或設定 aws_region 後才保存
     if [ -n "$aws_region" ]; then
         echo "AWS_REGION=${aws_region}" > "$main_config_file"
-        # Bug fix item 6: Add missing config variables
+        # Bug fix item 6: Add missing config variables - 使用環境感知路徑
         local main_script_dir
         main_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" # SCRIPT_DIR of the script calling this lib function
         echo "EASYRSA_DIR=/usr/local/share/easy-rsa" >> "$main_config_file"
-        echo "CERT_OUTPUT_DIR=${main_script_dir}/certificates" >> "$main_config_file"
+        # 使用環境變數而不是硬編碼路徑
+        echo "CERT_OUTPUT_DIR=${VPN_CERT_DIR:-$main_script_dir/certificates}" >> "$main_config_file"
         echo "SERVER_CERT_NAME_PREFIX=server" >> "$main_config_file"
         echo "CLIENT_CERT_NAME_PREFIX=client" >> "$main_config_file"
         log_message_core "AWS 配置已更新，區域: ${aws_region} 及其他預設配置。"

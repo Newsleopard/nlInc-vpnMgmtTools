@@ -399,17 +399,17 @@ import_crl_to_vpn_endpoint_lib() {
 }
 
 # 匯入多個憑證到 ACM 並返回 JSON 格式的 ARN (庫函式版本)
-# 參數: $1 = SCRIPT_DIR, $2 = AWS_REGION
+# 參數: $1 = VPN_CERT_DIR, $2 = AWS_REGION
 # 返回: JSON 格式 {"server_cert_arn": "arn1", "client_cert_arn": "arn2"}
 import_certificates_to_acm_lib() {
-    local script_dir="$1"
+    local cert_dir="$1" # 改為使用 cert_dir 而不是 script_dir
     local aws_region="$2"
-    local easyrsa_dir="$script_dir/certificates"
+    local easyrsa_dir="$cert_dir" # 直接使用傳入的證書目錄
 
     # 參數驗證
-    if [ -z "$script_dir" ] || [ ! -d "$script_dir" ]; then
-        echo -e "${RED}錯誤: 腳本目錄參數無效${NC}" >&2
-        log_message_core "錯誤: import_certificates_to_acm_lib - 腳本目錄無效: $script_dir"
+    if [ -z "$cert_dir" ] || [ ! -d "$cert_dir" ]; then
+        echo -e "${RED}錯誤: 證書目錄參數無效${NC}" >&2
+        log_message_core "錯誤: import_certificates_to_acm_lib - 證書目錄無效: $cert_dir"
         return 1
     fi
     if ! validate_aws_region "$aws_region"; then
@@ -519,14 +519,14 @@ import_certificates_to_acm_lib() {
 # 參數: $1 = SCRIPT_DIR
 # 功能: 初始化 EasyRSA、生成 CA、伺服器和客戶端證書
 generate_certificates_lib() {
-    local script_dir="$1"
-    local easyrsa_dir="$script_dir/certificates"
+    local cert_dir="$1" # 改為使用 cert_dir 而不是 script_dir
+    local easyrsa_dir="$cert_dir" # 直接使用證書目錄
     local original_dir="$PWD"  # 記錄原始目錄
 
     # 參數驗證
-    if [ -z "$script_dir" ] || [ ! -d "$script_dir" ]; then
-        echo -e "${RED}錯誤: 腳本目錄參數無效${NC}" >&2
-        log_message_core "錯誤: generate_certificates_lib - 腳本目錄無效: $script_dir"
+    if [ -z "$cert_dir" ] || [ ! -d "$(dirname "$cert_dir")" ]; then
+        echo -e "${RED}錯誤: 證書目錄參數無效${NC}" >&2
+        log_message_core "錯誤: generate_certificates_lib - 證書目錄無效: $cert_dir"
         return 1
     fi
 

@@ -137,10 +137,10 @@ env_load_config() {
     if [[ -f "$env_file" ]]; then
         source "$env_file"
         
-        # 設定環境特定的目錄路徑
-        export VPN_CERT_DIR="$PROJECT_ROOT/$CERT_DIR"
-        export VPN_CONFIG_DIR="$PROJECT_ROOT/$CONFIG_DIR"
-        export VPN_LOG_DIR="$PROJECT_ROOT/$LOG_DIR"
+        # 設定環境特定的目錄路徑 - 正規化路徑
+        export VPN_CERT_DIR="$(cd "$PROJECT_ROOT" && readlink -f "$CERT_DIR" 2>/dev/null || echo "$PROJECT_ROOT/${CERT_DIR#./}")"
+        export VPN_CONFIG_DIR="$(cd "$PROJECT_ROOT" && readlink -f "$CONFIG_DIR" 2>/dev/null || echo "$PROJECT_ROOT/${CONFIG_DIR#./}")"
+        export VPN_LOG_DIR="$(cd "$PROJECT_ROOT" && readlink -f "$LOG_DIR" 2>/dev/null || echo "$PROJECT_ROOT/${LOG_DIR#./}")"
         
         # 建立必要的目錄
         mkdir -p "$VPN_CERT_DIR" "$VPN_CONFIG_DIR" "$VPN_LOG_DIR"
