@@ -31,6 +31,29 @@ validate_vpc_id() {
     return 0
 }
 
+# Validate date format (YYYY-MM-DD) - Portable
+# Returns 0 if valid, 1 if invalid
+validate_date_format_yyyy_mm_dd() {
+    local date_string="$1"
+    # Check basic YYYY-MM-DD structure
+    if [[ ! "$date_string" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+        return 1
+    fi
+
+    # Attempt to parse with GNU date (common on Linux)
+    if date -d "$date_string" >/dev/null 2>&1; then
+        # Further check if the parsed date matches the input string format
+        if [ "$(date -d "$date_string" +"%Y-%m-%d" 2>/dev/null)" == "$date_string" ]; then
+            return 0
+        fi
+    # Attempt to parse with BSD date (common on macOS)
+    # date -j -f "%format" "date" is strict implicitly
+    elif date -j -f "%Y-%m-%d" "$date_string" >/dev/null 2>&1; then
+        return 0
+    fi
+    return 1
+}
+
 validate_subnet_id() {
     local subnet_id="$1"
     if [[ ! "$subnet_id" =~ ^subnet-[0-9a-f]{8,17}$ ]]; then
