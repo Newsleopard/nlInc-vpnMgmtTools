@@ -94,7 +94,7 @@ EOF
         main_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" # SCRIPT_DIR of the script calling this lib function
         echo "EASYRSA_DIR=/usr/local/share/easy-rsa" >> "$main_config_file"
         # 使用環境變數而不是硬編碼路徑
-        echo "CERT_OUTPUT_DIR=${VPN_CERT_DIR:-$main_script_dir/certificates}" >> "$main_config_file"
+        update_config "$main_config_file" "CERT_OUTPUT_DIR" "$VPN_CERT_DIR"
         echo "SERVER_CERT_NAME_PREFIX=server" >> "$main_config_file"
         echo "CLIENT_CERT_NAME_PREFIX=client" >> "$main_config_file"
         log_message_core "AWS 配置已更新，區域: ${aws_region} 及其他預設配置。"

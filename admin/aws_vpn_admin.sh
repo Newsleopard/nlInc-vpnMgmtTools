@@ -9,7 +9,7 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # 載入環境管理器 (必須第一個載入)
-source "$SCRIPT_DIR/lib/env_manager.sh"
+source "$SCRIPT_DIR/../lib/env_manager.sh"
 
 # 初始化環境
 if ! env_init_for_script "aws_vpn_admin.sh"; then
@@ -25,11 +25,11 @@ CONFIG_FILE="$VPN_ENDPOINT_CONFIG_FILE"
 LOG_FILE="$VPN_ADMIN_LOG_FILE"
 
 # 載入核心函式庫
-source "$SCRIPT_DIR/lib/core_functions.sh"
-source "$SCRIPT_DIR/lib/aws_setup.sh"
-source "$SCRIPT_DIR/lib/cert_management.sh"
-source "$SCRIPT_DIR/lib/endpoint_creation.sh"
-source "$SCRIPT_DIR/lib/endpoint_management.sh"
+source "$SCRIPT_DIR/../lib/core_functions.sh"
+source "$SCRIPT_DIR/../lib/aws_setup.sh"
+source "$SCRIPT_DIR/../lib/cert_management.sh"
+source "$SCRIPT_DIR/../lib/endpoint_creation.sh"
+source "$SCRIPT_DIR/../lib/endpoint_management.sh"
 
 # 阻止腳本在出錯時繼續執行
 set -e
@@ -87,7 +87,7 @@ create_vpn_endpoint() {
     
     # 1. 生成證書 (如果不存在) - 使用環境感知路徑
     if [ ! -f "$VPN_CERT_DIR/pki/ca.crt" ]; then
-        generate_certificates_lib "$VPN_CERT_DIR"
+        generate_certificates_lib "$VPN_CERT_DIR" "$CONFIG_FILE"
         if [ $? -ne 0 ]; then
             echo -e "${RED}證書生成失敗。中止操作。${NC}"
             return 1
@@ -921,7 +921,7 @@ main() {
                 ;;
             E|e)
                 echo -e "\n${CYAN}=== 環境管理 ===${NC}"
-                "$SCRIPT_DIR/vpn_env.sh"
+                "$SCRIPT_DIR/../vpn_env.sh"
                 echo -e "\n${YELLOW}按任意鍵返回主選單...${NC}"
                 read -n 1
                 ;;
