@@ -23,6 +23,7 @@ env_setup_paths
 OFFBOARDING_LOG_DIR="$ENV_LOG_DIR/offboarding"
 LOG_FILE="$OFFBOARDING_LOG_DIR/offboarding.log"
 CHECKLIST_FILE=""
+IAM_CLEANUP_PARTIAL_ERRORS="" # Global variable to store IAM cleanup partial errors
 
 # 載入核心函式庫
 source "$SCRIPT_DIR/../lib/core_functions.sh"
@@ -110,8 +111,8 @@ check_system_readiness() {
     echo -e "${BLUE}檢查 AWS 配置和權限...${NC}"
     
     if [ ! -f ~/.aws/credentials ] || [ ! -f ~/.aws/config ]; then
-        echo -e "${RED}未找到 AWS 配置${NC}"
-        exit 1
+        handle_error "未找到 AWS 配置"
+        return 1 # Ensure function returns on error, consistent with other checks
     fi
     
     # 測試管理員權限
@@ -192,7 +193,7 @@ collect_employee_info() {
     read termination_date
     
     # 驗證日期格式
-    if ! date -j -f "%Y-%m-%d" "$termination_date" >/dev/null 2>&1; then
+    if ! validate_date_format_yyyy_mm_dd "$termination_date"; then
         handle_error "日期格式錯誤，請使用 YYYY-MM-DD 格式"
         return 1
     fi
@@ -277,7 +278,8 @@ execute_emergency_measures() {
               --region "$aws_region" 2>/dev/null || continue)
             
             # 搜索員工的連接
-            if ! employee_connections=$(echo "$connections" | jq -r --arg id "$employee_id" '.Connections[] | select(.CommonName | contains($id)) | .ConnectionId' 2>/dev/null); then
+            employee_connections=$(echo "$connections" | jq -r --arg id "$employee_id" '.Connections[] | select(.CommonName | contains($id)) | .ConnectionId' 2>/dev/null)
+            if [ $? -ne 0 ] || [ -z "$employee_connections" ]; then
                 # 備用解析方法：使用 grep 和 sed
                 employee_connections=$(echo "$connections" | grep -o '"ConnectionId":"[^"]*"' | sed 's/"ConnectionId":"//g' | sed 's/"//g' | while read conn_id; do
                     if echo "$connections" | grep -A 5 -B 5 "$conn_id" | grep -q "\"$employee_id\""; then
@@ -295,11 +297,17 @@ execute_emergency_measures() {
             if [ ! -z "$employee_connections" ]; then
                 echo -e "${RED}發現員工在端點 \"$endpoint_id\" 的連接，立即斷開...${NC}"
                 echo "$employee_connections" | while read connection_id; do
-                    aws ec2 terminate-client-vpn-connections \\
-                      --client-vpn-endpoint-id "$endpoint_id" \\
-                      --connection-id "$connection_id" \\
-                      --region "$aws_region"
-                    echo -e "${GREEN}✓ 已斷開連接 \"$connection_id\"${NC}"
+                    terminate_output=$(aws ec2 terminate-client-vpn-connections \
+                      --client-vpn-endpoint-id "$endpoint_id" \
+                      --connection-id "$connection_id" \
+                      --region "$aws_region" 2>&1)
+                    terminate_status=$?
+                    if [ $terminate_status -ne 0 ]; then
+                        log_offboarding_message "錯誤: 無法斷開 VPN 連接 \"$connection_id\" (端點 \"$endpoint_id\"). 錯誤: $terminate_output"
+                        echo -e "${RED}✗ 無法斷開 VPN 連接 \"$connection_id\" (端點 \"$endpoint_id\"). 詳見日誌。${NC}"
+                    else
+                        echo -e "${GREEN}✓ 已斷開連接 \"$connection_id\"${NC}"
+                    fi
                 done
             fi
         done
@@ -314,8 +322,14 @@ execute_emergency_measures() {
                 access_keys=$(aws iam list-access-keys --user-name "$employee_id" --query 'AccessKeyMetadata[*].AccessKeyId' --output text)
                 
                 for key_id in $access_keys; do
-                    aws iam update-access-key --access-key-id "$key_id" --status Inactive --user-name "$employee_id"
-                    echo -e "${GREEN}✓ 已停用訪問密鑰 \"$key_id\"${NC}"
+                    update_key_output=$(aws iam update-access-key --access-key-id "$key_id" --status Inactive --user-name "$employee_id" 2>&1)
+                    update_key_status=$?
+                    if [ $update_key_status -ne 0 ]; then
+                        log_offboarding_message "錯誤: 無法停用訪問密鑰 \"$key_id\" 為用戶 \"$employee_id\". 錯誤: $update_key_output"
+                        echo -e "${RED}✗ 無法停用訪問密鑰 \"$key_id\". 詳見日誌。${NC}"
+                    else
+                        echo -e "${GREEN}✓ 已停用訪問密鑰 \"$key_id\"${NC}"
+                    fi
                 done
             fi
         fi
@@ -325,34 +339,36 @@ execute_emergency_measures() {
     fi
 }
 
-# 搜索和分析員工的 AWS 資源
-analyze_employee_resources() {
-    echo -e "\\n${YELLOW}[3/10] 分析員工的 AWS 資源...${NC}"
-    
-    echo -e "${BLUE}搜索員工相關的 VPN 證書...${NC}"
-    
+# Helper function to find employee ACM certificates
+find_employee_acm_certificates() {
+    local employee_id_param="$1"
+    local employee_name_param="$2"
+    local aws_region_param="$3"
+    local local_employee_cert_arns=()
+
     # 搜索 ACM 中的證書
-    certificates=$(aws acm list-certificates --region "$aws_region")
-    employee_cert_arns=()
+    local certificates
+    certificates=$(aws acm list-certificates --region "$aws_region_param")
     
     # 方法1: 通過域名搜索
     while IFS= read -r cert_arn; do
         if [ ! -z "$cert_arn" ]; then
-            cert_details=$(aws acm describe-certificate --certificate-arn "$cert_arn" --region "$aws_region")
-            if ! domain_name=$(echo "$cert_details" | jq -r '.Certificate.DomainName // ""' 2>/dev/null); then
-                # 備用解析方法：使用 grep 和 sed 提取域名
+            local cert_details
+            cert_details=$(aws acm describe-certificate --certificate-arn "$cert_arn" --region "$aws_region_param")
+            local domain_name
+            domain_name=$(echo "$cert_details" | jq -r '.Certificate.DomainName // ""' 2>/dev/null)
+            if [ $? -ne 0 ] || [ -z "$domain_name" ]; then
                 domain_name=$(echo "$cert_details" | grep -o '"DomainName":"[^"]*"' | sed 's/"DomainName":"//g' | sed 's/"//g' | head -1)
             fi
             
-            # 驗證解析結果
             if ! validate_json_parse_result "$domain_name" "證書域名" ""; then
-                log_offboarding_message "警告: 無法解析證書域名，跳過證書 $cert_arn"
+                log_offboarding_message "警告(find_employee_acm_certificates): 無法解析證書域名，跳過證書 $cert_arn"
                 continue
             fi
             
-            if [[ "$domain_name" == *"$employee_id"* ]] || [[ "$domain_name" == *"$employee_name"* ]]; then
-                employee_cert_arns+=("$cert_arn")
-                echo -e "${GREEN}✓ 找到證書 (域名): \"$cert_arn\"${NC}"
+            if [[ "$domain_name" == *"$employee_id_param"* ]] || [[ "$domain_name" == *"$employee_name_param"* ]]; then
+                local_employee_cert_arns+=("$cert_arn")
+                echo -e "${GREEN}✓ 找到證書 (域名): \"$cert_arn\"${NC}" # User feedback
             fi
         fi
     done <<< "$(echo "$certificates" | jq -r '.CertificateSummaryList[].CertificateArn' 2>/dev/null || echo "$certificates" | grep -o '"CertificateArn":"arn:aws:acm:[^"]*"' | sed 's/"CertificateArn":"//g' | sed 's/"//g')"
@@ -360,76 +376,297 @@ analyze_employee_resources() {
     # 方法2: 通過標籤搜索
     while IFS= read -r cert_arn; do
         if [ ! -z "$cert_arn" ]; then
-            tags=$(aws acm list-tags-for-certificate --certificate-arn "$cert_arn" --region "$aws_region" 2>/dev/null || echo '{"Tags":[]}')
-            if ! contains_employee=$(echo "$tags" | jq -r --arg id "$employee_id" --arg name "$employee_name" 'select(.Tags[] | select(.Key=="Name" or .Key=="User") | .Value | (contains($id) or contains($name))) | true' 2>/dev/null); then
-                # 備用解析方法：使用 grep 檢查標籤
-                if echo "$tags" | grep -q "\"$employee_id\"" || echo "$tags" | grep -q "\"$employee_name\""; then
+            local tags
+            tags=$(aws acm list-tags-for-certificate --certificate-arn "$cert_arn" --region "$aws_region_param" 2>/dev/null || echo '{"Tags":[]}')
+            local contains_employee
+            if ! contains_employee=$(echo "$tags" | jq -r --arg id "$employee_id_param" --arg name "$employee_name_param" 'select(.Tags[] | select(.Key=="Name" or .Key=="User") | .Value | (contains($id) or contains($name))) | true' 2>/dev/null); then
+                if echo "$tags" | grep -q "\"$employee_id_param\"" || echo "$tags" | grep -q "\"$employee_name_param\""; then
                     contains_employee="true"
                 else
                     contains_employee=""
                 fi
             fi
             
-            if [[ "$contains_employee" == "true" ]] && [[ ! " ${employee_cert_arns[@]} " =~ " ${cert_arn} " ]]; then
-                employee_cert_arns+=("$cert_arn")
-                echo -e "${GREEN}✓ 找到證書 (標籤): \"$cert_arn\"${NC}"
+            if [[ "$contains_employee" == "true" ]] && [[ ! " ${local_employee_cert_arns[@]} " =~ " ${cert_arn} " ]]; then
+                local_employee_cert_arns+=("$cert_arn")
+                echo -e "${GREEN}✓ 找到證書 (標籤): \"$cert_arn\"${NC}" # User feedback
             fi
         fi
     done <<< "$(echo "$certificates" | jq -r '.CertificateSummaryList[].CertificateArn' 2>/dev/null || echo "$certificates" | grep -o '"CertificateArn":"arn:aws:acm:[^"]*"' | sed 's/"CertificateArn":"//g' | sed 's/"//g')"
-    
-    echo -e "${BLUE}找到 ${#employee_cert_arns[@]} 個相關證書${NC}"
-    
-    # 搜索 VPN 連接歷史
-    echo -e "${BLUE}分析 VPN 連接歷史...${NC}"
-    
-    all_endpoints=$(aws ec2 describe-client-vpn-endpoints --region "$aws_region" --query 'ClientVpnEndpoints[].ClientVpnEndpointId' --output text)
-    total_connections=0
-    recent_connections=0
+
+    # Echo all found ARNs, one per line
+    for arn in "${local_employee_cert_arns[@]}"; do
+        echo "$arn"
+    done
+}
+
+# Helper function to analyze employee VPN connection history
+analyze_employee_vpn_connection_history() {
+    local employee_id_param="$1"
+    local aws_region_param="$2"
+    local local_total_connections=0
+    local local_recent_connections=0
+
+    local all_endpoints
+    all_endpoints=$(aws ec2 describe-client-vpn-endpoints --region "$aws_region_param" --query 'ClientVpnEndpoints[].ClientVpnEndpointId' --output text)
     
     for endpoint_id in $all_endpoints; do
         # 檢查當前連接
-        current_connections=$(aws ec2 describe-client-vpn-connections \\
-          --client-vpn-endpoint-id "$endpoint_id" \\
-          --region "$aws_region" 2>/dev/null || echo '{"Connections":[]}')
+        local current_connections
+        current_connections=$(aws ec2 describe-client-vpn-connections \
+          --client-vpn-endpoint-id "$endpoint_id" \
+          --region "$aws_region_param" 2>/dev/null || echo '{"Connections":[]}')
         
-        if ! employee_current=$(echo "$current_connections" | jq -r --arg id "$employee_id" '.Connections[] | select(.CommonName | contains($id)) | .ConnectionId' 2>/dev/null | wc -l); then
-            # 備用解析方法：使用 grep 統計連接數
-            employee_current=$(echo "$current_connections" | grep -c "\"$employee_id\"" || echo "0")
+        local employee_current
+        if ! employee_current=$(echo "$current_connections" | jq -r --arg id "$employee_id_param" '.Connections[] | select(.CommonName | contains($id)) | .ConnectionId' 2>/dev/null | wc -l); then
+            employee_current=$(echo "$current_connections" | grep -c "\"$employee_id_param\"" || echo "0")
         fi
-        total_connections=$((total_connections + employee_current))
+        local_total_connections=$((local_total_connections + employee_current))
         
         # 檢查最近連接 (需要 CloudWatch 日誌)
-        vpn_endpoint_info=$(aws ec2 describe-client-vpn-endpoints --client-vpn-endpoint-ids "$endpoint_id" --region "$aws_region")
-        if ! log_group=$(echo "$vpn_endpoint_info" | jq -r '.ClientVpnEndpoints[0].ConnectionLogOptions.CloudwatchLogGroup // ""' 2>/dev/null); then
-            # 備用解析方法：使用 grep 和 sed 提取日誌群組
+        local vpn_endpoint_info
+        vpn_endpoint_info=$(aws ec2 describe-client-vpn-endpoints --client-vpn-endpoint-ids "$endpoint_id" --region "$aws_region_param")
+        local log_group
+        log_group=$(echo "$vpn_endpoint_info" | jq -r '.ClientVpnEndpoints[0].ConnectionLogOptions.CloudwatchLogGroup // ""' 2>/dev/null)
+        if [ $? -ne 0 ] || [ -z "$log_group" ]; then
             log_group=$(echo "$vpn_endpoint_info" | grep -o '"CloudwatchLogGroup":"[^"]*"' | sed 's/"CloudwatchLogGroup":"//g' | sed 's/"//g' | head -1)
         fi
         
         if [ ! -z "$log_group" ] && [ "$log_group" != "null" ]; then
-            # 搜索最近 24 小時的連接日誌
+            local start_time
+            local end_time
             start_time=$(date -u -d '24 hours ago' +%s)000
             end_time=$(date -u +%s)000
             
-            recent_logs=$(aws logs filter-log-events \\
-              --log-group-name "$log_group" \\
-              --start-time "$start_time" \\
-              --end-time "$end_time" \\
-              --filter-pattern "$employee_id" \\
-              --region "$aws_region" 2>/dev/null || echo '{"events":[]}')
+            local recent_logs
+            recent_logs=$(aws logs filter-log-events \
+              --log-group-name "$log_group" \
+              --start-time "$start_time" \
+              --end-time "$end_time" \
+              --filter-pattern "$employee_id_param" \
+              --region "$aws_region_param" 2>/dev/null || echo '{"events":[]}')
             
+            local recent_count
             if ! recent_count=$(echo "$recent_logs" | jq '.events | length' 2>/dev/null); then
-                # 備用解析方法：使用 grep 統計事件數
                 recent_count=$(echo "$recent_logs" | grep -c '"timestamp"' || echo "0")
             fi
-            recent_connections=$((recent_connections + recent_count))
+            local_recent_connections=$((local_recent_connections + recent_count))
         fi
     done
+
+    echo "$local_total_connections"
+    echo "$local_recent_connections"
+}
+
+# 搜索和分析員工的 AWS 資源
+analyze_employee_resources() {
+    echo -e "\\n${YELLOW}[3/10] 分析員工的 AWS 資源...${NC}"
+    
+    echo -e "${BLUE}搜索員工相關的 VPN 證書...${NC}"
+    # Call helper to find certificates and populate employee_cert_arns
+    mapfile -t employee_cert_arns < <(find_employee_acm_certificates "$employee_id" "$employee_name" "$aws_region")
+    echo -e "${BLUE}找到 ${#employee_cert_arns[@]} 個相關證書${NC}"
+    
+    # 搜索 VPN 連接歷史
+    echo -e "${BLUE}分析 VPN 連接歷史...${NC}"
+    local vpn_history_output
+    vpn_history_output=$(analyze_employee_vpn_connection_history "$employee_id" "$aws_region")
+    
+    total_connections=$(echo "$vpn_history_output" | sed -n '1p')
+    recent_connections=$(echo "$vpn_history_output" | sed -n '2p')
     
     echo -e "${BLUE}連接分析結果:${NC}"
     echo -e "  當前活躍連接: ${YELLOW}\"$total_connections\"${NC}"
     echo -e "  最近 24 小時連接事件: ${YELLOW}\"$recent_connections\"${NC}"
     
     log_offboarding_message "資源分析完成 - 證書: ${#employee_cert_arns[@]}, 當前連接: \"$total_connections\", 最近連接: \"$recent_connections\""
+}
+
+# Helper function to cleanup IAM user access keys
+cleanup_iam_user_access_keys_internal() {
+    local username="$1"
+    local errors_found=()
+
+    echo -e "${BLUE}處理用戶 \"$username\" 的訪問密鑰...${NC}" # Feedback for main function
+    local access_keys
+    access_keys=$(aws iam list-access-keys --user-name "$username" --query 'AccessKeyMetadata[*].AccessKeyId' --output text)
+    
+    for key_id in $access_keys; do
+        echo -e "${BLUE}停用訪問密鑰: \"$key_id\" 為用戶 \"$username\"${NC}"
+        local update_output
+        update_output=$(aws iam update-access-key --access-key-id "$key_id" --status Inactive --user-name "$username" 2>&1)
+        local update_status=$?
+        if [ $update_status -ne 0 ]; then
+            log_offboarding_message "錯誤(cleanup_iam_user_access_keys_internal): 停用訪問密鑰 \"$key_id\" 失敗 (用戶: \"$username\"). 錯誤: $update_output"
+            echo -e "${RED}✗ 停用訪問密鑰 \"$key_id\" 失敗. 詳見日誌.${NC}" # User feedback
+            errors_found+=("Failed to deactivate access key $key_id for user $username")
+        else
+            echo -e "${GREEN}✓ 訪問密鑰 \"$key_id\" 已停用 (用戶 \"$username\")${NC}" # User feedback
+        fi
+        
+        sleep 2 # Keep existing sleep
+        
+        echo -e "${BLUE}刪除訪問密鑰: \"$key_id\" 為用戶 \"$username\"${NC}"
+        local delete_output
+        delete_output=$(aws iam delete-access-key --access-key-id "$key_id" --user-name "$username" 2>&1)
+        local delete_status=$?
+        if [ $delete_status -ne 0 ]; then
+            log_offboarding_message "錯誤(cleanup_iam_user_access_keys_internal): 刪除訪問密鑰 \"$key_id\" 失敗 (用戶: \"$username\"). 錯誤: $delete_output"
+            echo -e "${RED}✗ 刪除訪問密鑰 \"$key_id\" 失敗. 詳見日誌.${NC}" # User feedback
+            errors_found+=("Failed to delete access key $key_id for user $username")
+        else
+            echo -e "${GREEN}✓ 訪問密鑰 \"$key_id\" 已刪除 (用戶 \"$username\")${NC}" # User feedback
+        fi
+    done
+
+    if [ ${#errors_found[@]} -gt 0 ]; then
+        printf '%s\n' "${errors_found[@]}"
+    fi
+    return 0
+}
+
+# Helper function to cleanup IAM user policies
+cleanup_iam_user_policies_internal() {
+    local username="$1"
+    local errors_found=()
+
+    echo -e "${BLUE}處理用戶 \"$username\" 的 IAM 政策...${NC}" # Feedback for main function
+
+    # 分離管理政策
+    echo -e "${BLUE}分離用戶 \"$username\" 的管理政策...${NC}"
+    local attached_policies
+    attached_policies=$(aws iam list-attached-user-policies --user-name "$username" --query 'AttachedPolicies[*].PolicyArn' --output text)
+    for policy in $attached_policies; do
+        echo -e "${BLUE}分離政策: \"$policy\" 為用戶 \"$username\"${NC}"
+        local detach_output
+        detach_output=$(aws iam detach-user-policy --user-name "$username" --policy-arn "$policy" 2>&1)
+        local detach_status=$?
+        if [ $detach_status -ne 0 ]; then
+            log_offboarding_message "錯誤(cleanup_iam_user_policies_internal): 分離政策 \"$policy\" 失敗 (用戶: \"$username\"). 錯誤: $detach_output"
+            echo -e "${RED}✗ 分離政策 \"$policy\" 失敗. 詳見日誌.${NC}" # User feedback
+            errors_found+=("Failed to detach policy $policy for user $username")
+        else
+            echo -e "${GREEN}✓ 政策 \"$policy\" 已分離 (用戶 \"$username\")${NC}" # User feedback
+        fi
+    done
+    
+    # 刪除內嵌政策
+    echo -e "${BLUE}刪除用戶 \"$username\" 的內嵌政策...${NC}"
+    local inline_policies
+    inline_policies=$(aws iam list-user-policies --user-name "$username" --query 'PolicyNames' --output text)
+    for policy in $inline_policies; do
+        echo -e "${BLUE}刪除內嵌政策: \"$policy\" 為用戶 \"$username\"${NC}"
+        local delete_inline_output
+        delete_inline_output=$(aws iam delete-user-policy --user-name "$username" --policy-name "$policy" 2>&1)
+        local delete_inline_status=$?
+        if [ $delete_inline_status -ne 0 ]; then
+            log_offboarding_message "錯誤(cleanup_iam_user_policies_internal): 刪除內嵌政策 \"$policy\" 失敗 (用戶: \"$username\"). 錯誤: $delete_inline_output"
+            echo -e "${RED}✗ 刪除內嵌政策 \"$policy\" 失敗. 詳見日誌.${NC}" # User feedback
+            errors_found+=("Failed to delete inline policy $policy for user $username")
+        else
+            echo -e "${GREEN}✓ 內嵌政策 \"$policy\" 已刪除 (用戶 \"$username\")${NC}" # User feedback
+        fi
+    done
+
+    if [ ${#errors_found[@]} -gt 0 ]; then
+        printf '%s\n' "${errors_found[@]}"
+    fi
+    return 0
+}
+
+# Helper function to cleanup IAM user group memberships
+cleanup_iam_user_group_memberships_internal() {
+    local username="$1"
+    local errors_found=()
+
+    echo -e "${BLUE}處理用戶 \"$username\" 的群組成員身份...${NC}" # Feedback for main function
+
+    # 從群組中移除
+    echo -e "${BLUE}從群組中移除用戶 \"$username\"...${NC}"
+    local user_groups
+    user_groups=$(aws iam list-groups-for-user --user-name "$username" --query 'Groups[*].GroupName' --output text)
+    for group in $user_groups; do
+        echo -e "${BLUE}從群組 \"$group\" 移除用戶 \"$username\"${NC}"
+        local remove_group_output
+        remove_group_output=$(aws iam remove-user-from-group --user-name "$username" --group-name "$group" 2>&1)
+        local remove_group_status=$?
+        if [ $remove_group_status -ne 0 ]; then
+            log_offboarding_message "錯誤(cleanup_iam_user_group_memberships_internal): 從群組 \"$group\" 移除用戶 \"$username\" 失敗. 錯誤: $remove_group_output"
+            echo -e "${RED}✗ 從群組 \"$group\" 移除失敗. 詳見日誌.${NC}" # User feedback
+            errors_found+=("Failed to remove user $username from group $group")
+        else
+            echo -e "${GREEN}✓ 已從群組 \"$group\" 移除用戶 \"$username\"${NC}" # User feedback
+        fi
+    done
+
+    if [ ${#errors_found[@]} -gt 0 ]; then
+        printf '%s\n' "${errors_found[@]}"
+    fi
+    return 0
+}
+
+# Helper function to cleanup IAM user login profile and MFA devices
+cleanup_iam_user_login_mfa_internal() {
+    local username="$1"
+    local errors_found=()
+
+    echo -e "${BLUE}處理用戶 \"$username\" 的登入設定檔和 MFA...${NC}" # Feedback for main function
+
+    # 刪除登入設定檔
+    echo -e "${BLUE}檢查用戶 \"$username\" 的登入設定檔...${NC}"
+    local login_profile
+    login_profile=$(aws iam get-login-profile --user-name "$username" 2>/dev/null || echo "not_found")
+    if [[ "$login_profile" != "not_found" ]]; then
+        # Attempt to delete login profile - this command can fail if user has virtual MFA
+        # We don't add to errors_found here as delete-user will likely fail later if this is problematic
+        aws iam delete-login-profile --user-name "$username" 2>/dev/null
+        local delete_profile_status=$?
+        if [ $delete_profile_status -eq 0 ]; then
+            echo -e "${GREEN}✓ 登入設定檔已刪除 (用戶 \"$username\")${NC}" # User feedback
+        else
+            # Log and echo, but don't add to errors_found for now, as MFA deactivation might be needed first.
+            # The final delete-user will be the ultimate test.
+            log_offboarding_message "資訊(cleanup_iam_user_login_mfa_internal): 無法立即刪除登入設定檔為用戶 \"$username\" (可能由於 MFA). 嘗試停用 MFA 後，將由 delete-user 最終處理。"
+            echo -e "${YELLOW}⚠ 無法立即刪除登入設定檔為用戶 \"$username\" (可能由於 MFA). 將在 MFA 停用後重試。${NC}"
+        fi
+    else
+        echo -e "${BLUE}用戶 \"$username\" 無登入設定檔.${NC}"
+    fi
+    
+    # 刪除 MFA 設備
+    echo -e "${BLUE}檢查用戶 \"$username\" 的 MFA 設備...${NC}"
+    local mfa_devices
+    mfa_devices=$(aws iam list-mfa-devices --user-name "$username" --query 'MFADevices[*].SerialNumber' --output text)
+    for device in $mfa_devices; do
+        echo -e "${BLUE}停用 MFA 設備: \"$device\" 為用戶 \"$username\"${NC}"
+        local deactivate_mfa_output
+        deactivate_mfa_output=$(aws iam deactivate-mfa-device --user-name "$username" --serial-number "$device" 2>&1)
+        local deactivate_mfa_status=$?
+        if [ $deactivate_mfa_status -ne 0 ]; then
+            log_offboarding_message "錯誤(cleanup_iam_user_login_mfa_internal): 停用 MFA 設備 \"$device\" 失敗 (用戶: \"$username\"). 錯誤: $deactivate_mfa_output"
+            echo -e "${RED}✗ 停用 MFA 設備 \"$device\" 失敗. 詳見日誌.${NC}" # User feedback
+            errors_found+=("Failed to deactivate MFA device $device for user $username")
+        else
+            echo -e "${GREEN}✓ MFA 設備 \"$device\" 已停用 (用戶 \"$username\")${NC}" # User feedback
+            # Attempt to delete login profile again after MFA deactivation
+            if [[ "$login_profile" != "not_found" ]] && [ $delete_profile_status -ne 0 ]; then
+                 aws iam delete-login-profile --user-name "$username" 2>/dev/null
+                 if [ $? -eq 0 ]; then
+                     echo -e "${GREEN}✓ 登入設定檔在 MFA 停用後已刪除 (用戶 \"$username\")${NC}"
+                 else
+                     log_offboarding_message "錯誤(cleanup_iam_user_login_mfa_internal): 在 MFA 停用後仍無法刪除登入設定檔為用戶 \"$username\"."
+                     echo -e "${RED}✗ 在 MFA 停用後仍無法刪除登入設定檔為用戶 \"$username\". 詳見日誌.${NC}"
+                     # This is a more significant error for the final delete-user
+                     errors_found+=("Failed to delete login profile for user $username even after MFA deactivation")
+                 fi
+            fi
+        fi
+    done
+
+    if [ ${#errors_found[@]} -gt 0 ]; then
+        printf '%s\n' "${errors_found[@]}"
+    fi
+    return 0
 }
 
 # 撤銷 VPN 訪問權限
@@ -456,10 +693,12 @@ revoke_vpn_access() {
           --region "$aws_region" 2>/dev/null || true
         
         # 嘗試刪除證書
-        delete_result=$(aws acm delete-certificate --certificate-arn "$cert_arn" --region "$aws_region" 2>&1 || echo "failed")
+        delete_output=$(aws acm delete-certificate --certificate-arn "$cert_arn" --region "$aws_region" 2>&1)
+        delete_exit_code=$?
         
-        if [[ "$delete_result" == "failed" ]] || [[ "$delete_result" == *"error"* ]]; then
+        if [ $delete_exit_code -ne 0 ]; then
             echo -e "${RED}✗ 無法刪除證書 \"$cert_arn\"${NC}"
+            echo -e "錯誤訊息: $delete_output" # Log or echo the actual error
             failed_certs+=("$cert_arn")
         else
             echo -e "${GREEN}✓ 成功撤銷證書 \"$cert_arn\"${NC}"
@@ -514,7 +753,8 @@ cleanup_iam_permissions() {
         fi
     else
         echo -e "${GREEN}找到員工的 IAM 用戶: \"$employee_id\"${NC}"
-        cleanup_single_iam_user "$employee_id"
+        # Capture stdout of cleanup_single_iam_user to store potential partial errors
+        IAM_CLEANUP_PARTIAL_ERRORS=$(cleanup_single_iam_user "$employee_id")
     fi
     
     log_offboarding_message "IAM 權限清理完成"
@@ -523,66 +763,70 @@ cleanup_iam_permissions() {
 # 清理單個 IAM 用戶
 cleanup_single_iam_user() {
     local username="$1"
-    echo -e "${BLUE}清理 IAM 用戶: \"$username\"${NC}"
+    local user_cleanup_errors=() # This array will store errors from helper functions
     
-    # 停用並刪除訪問密鑰
-    echo -e "${BLUE}處理訪問密鑰...${NC}"
-    access_keys=$(aws iam list-access-keys --user-name "$username" --query 'AccessKeyMetadata[*].AccessKeyId' --output text)
-    
-    for key_id in $access_keys; do
-        echo -e "${BLUE}停用訪問密鑰: \"$key_id\"${NC}"
-        aws iam update-access-key --access-key-id "$key_id" --status Inactive --user-name "$username"
-        
-        sleep 2
-        
-        echo -e "${BLUE}刪除訪問密鑰: \"$key_id\"${NC}"
-        aws iam delete-access-key --access-key-id "$key_id" --user-name "$username"
-    done
-    
-    # 分離管理政策
-    echo -e "${BLUE}分離管理政策...${NC}"
-    attached_policies=$(aws iam list-attached-user-policies --user-name "$username" --query 'AttachedPolicies[*].PolicyArn' --output text)
-    for policy in $attached_policies; do
-        echo -e "${BLUE}分離政策: \"$policy\"${NC}"
-        aws iam detach-user-policy --user-name "$username" --policy-arn "$policy"
-    done
-    
-    # 刪除內嵌政策
-    echo -e "${BLUE}刪除內嵌政策...${NC}"
-    inline_policies=$(aws iam list-user-policies --user-name "$username" --query 'PolicyNames' --output text)
-    for policy in $inline_policies; do
-        echo -e "${BLUE}刪除內嵌政策: \"$policy\"${NC}"
-        aws iam delete-user-policy --user-name "$username" --policy-name "$policy"
-    done
-    
-    # 從群組中移除
-    echo -e "${BLUE}從群組中移除...${NC}"
-    user_groups=$(aws iam list-groups-for-user --user-name "$username" --query 'Groups[*].GroupName' --output text)
-    for group in $user_groups; do
-        echo -e "${BLUE}從群組移除: \"$group\"${NC}"
-        aws iam remove-user-from-group --user-name "$username" --group-name "$group"
-    done
-    
-    # 刪除登入設定檔
-    echo -e "${BLUE}檢查登入設定檔...${NC}"
-    login_profile=$(aws iam get-login-profile --user-name "$username" 2>/dev/null || echo "not_found")
-    if [[ "$login_profile" != "not_found" ]]; then
-        aws iam delete-login-profile --user-name "$username"
-        echo -e "${GREEN}✓ 登入設定檔已刪除${NC}"
+    echo -e "${BLUE}開始全面清理 IAM 用戶: \"$username\"...${NC}"
+
+    local helper_errors
+
+    # Cleanup Access Keys
+    helper_errors=$(cleanup_iam_user_access_keys_internal "$username")
+    if [ -n "$helper_errors" ]; then
+        while IFS= read -r error_line; do
+            user_cleanup_errors+=("$error_line")
+        done <<< "$helper_errors"
+    fi
+
+    # Cleanup Policies
+    helper_errors=$(cleanup_iam_user_policies_internal "$username")
+    if [ -n "$helper_errors" ]; then
+        while IFS= read -r error_line; do
+            user_cleanup_errors+=("$error_line")
+        done <<< "$helper_errors"
+    fi
+
+    # Cleanup Group Memberships
+    helper_errors=$(cleanup_iam_user_group_memberships_internal "$username")
+    if [ -n "$helper_errors" ]; then
+        while IFS= read -r error_line; do
+            user_cleanup_errors+=("$error_line")
+        done <<< "$helper_errors"
     fi
     
-    # 刪除 MFA 設備
-    echo -e "${BLUE}檢查 MFA 設備...${NC}"
-    mfa_devices=$(aws iam list-mfa-devices --user-name "$username" --query 'MFADevices[*].SerialNumber' --output text)
-    for device in $mfa_devices; do
-        echo -e "${BLUE}停用 MFA 設備: \"$device\"${NC}"
-        aws iam deactivate-mfa-device --user-name "$username" --serial-number "$device"
-    done
+    # Cleanup Login Profile and MFA
+    helper_errors=$(cleanup_iam_user_login_mfa_internal "$username")
+    if [ -n "$helper_errors" ]; then
+        while IFS= read -r error_line; do
+            user_cleanup_errors+=("$error_line")
+        done <<< "$helper_errors"
+    fi
+
+    # Final critical step: Delete the user
+    # This step's success heavily depends on the previous steps (especially MFA and login profile)
+    echo -e "${BLUE}嘗試刪除 IAM 用戶: \"$username\" (最終步驟)...${NC}"
+    local delete_user_output
+    delete_user_output=$(aws iam delete-user --user-name "$username" 2>&1)
+    local delete_user_status=$?
+    if [ $delete_user_status -ne 0 ]; then
+        log_offboarding_message "關鍵錯誤: 刪除 IAM 用戶 \"$username\" 失敗. 錯誤: $delete_user_output"
+        echo -e "${RED}✗ 關鍵錯誤: 刪除 IAM 用戶 \"$username\" 失敗. 詳見日誌. ($LOG_FILE)${NC}"
+        user_cleanup_errors+=("CRITICAL: Failed to delete IAM user $username. Error: $delete_user_output")
+        # Unlike helpers, if delete-user fails, we might want the script to halt if not for set -e
+        # However, we are already collecting errors. The global error handling or `set -e` will manage script termination.
+    else
+        echo -e "${GREEN}✓ IAM 用戶 \"$username\" 已成功刪除.${NC}"
+    fi
+
+    # Echo accumulated partial errors to stdout for capture by the calling function (cleanup_iam_permissions)
+    if [ ${#user_cleanup_errors[@]} -gt 0 ]; then
+        echo "IAM 清理完成，但用戶 '$username' 出現以下問題:"
+        printf '  - %s\n' "${user_cleanup_errors[@]}"
+    fi
     
-    # 刪除用戶
-    echo -e "${BLUE}刪除 IAM 用戶: \"$username\"${NC}"
-    aws iam delete-user --user-name "$username"
-    echo -e "${GREEN}✓ IAM 用戶已刪除${NC}"
+    # Return 0 to ensure that if this function is called in a subshell (e.g. via `var=$(func)`),
+    # and `set -e` is active, the subshell doesn't exit prematurely if a helper logs an error but returns 0.
+    # The actual success/failure is determined by the content of user_cleanup_errors and the final delete_user_status.
+    return 0
 }
 
 # 審計訪問日誌
@@ -604,8 +848,12 @@ audit_access_logs() {
     # 搜索 CloudTrail 事件
     echo -e "${BLUE}搜索 API 調用記錄...${NC}"
     
+    # Define the CloudTrail log group, using environment variable or default
+    EFFECTIVE_CLOUDTRAIL_LOG_GROUP="${ENV_CLOUDTRAIL_LOG_GROUP_NAME:-"CloudTrail/VPCFlowLogs"}"
+    log_offboarding_message "Auditing CloudTrail logs from group: $EFFECTIVE_CLOUDTRAIL_LOG_GROUP"
+    
     cloudtrail_events=$(aws logs filter-log-events \\
-      --log-group-name CloudTrail/VPCFlowLogs \\
+      --log-group-name "$EFFECTIVE_CLOUDTRAIL_LOG_GROUP" \\
       --start-time "$(date -u -d "$start_date" +%s)000" \\
       --end-time "$(date -u -d "$end_date" +%s)000" \\
       --filter-pattern "$employee_id" \\
@@ -798,16 +1046,36 @@ EOF
     if [[ "$iam_permissions" == true ]]; then
         cat >> "$security_report_file" << EOF
 處理的 IAM 用戶: "$employee_id"
-權限撤銷: 已完成
-用戶刪除: 已完成
+EOF
+        if [ -n "$IAM_CLEANUP_PARTIAL_ERRORS" ]; then
+            cat >> "$security_report_file" << EOF
+IAM 清理過程中記錄了以下問題:
+$IAM_CLEANUP_PARTIAL_ERRORS
+EOF
+        else
+            cat >> "$security_report_file" << EOF
+所有 IAM 清理子步驟均已成功執行 (基於腳本內日誌)。
+EOF
+        fi
+        cat >> "$security_report_file" << EOF
+主要用戶刪除操作已嘗試執行。請參閱操作日誌 ("$LOG_FILE") 以獲取最完整的執行細節。
+(Key user deletion operations were attempted. Please refer to the operation log ("$LOG_FILE") for the most complete execution details.)
 EOF
     fi
     
     cat >> "$security_report_file" << EOF
 
+=== 殘留資源檢查 ===
+S3 存儲桶和 EC2 實例的自動化發現基於特定的命名慣例 (包含員工 ID 或姓名) 和標籤 (例如 EC2 的 'Owner' 標籤)。
+此檢查僅限於 AWS 區域: "$aws_region"。
+建議進行手動檢查以確保所有相關資源都得到處理。
+發現的可能相關 S3 存儲桶: "$employee_buckets"
+發現的可能相關 EC2 實例: "$ec2_instances"
+發現的殘留證書: "$remaining_employee_certs"
+
 === 訪問日誌審計 ===
 審計期間: "$start_date" 至 "$end_date"
-CloudTrail 事件: "$events_count" 個
+CloudTrail 事件: "$events_count" 個 (來自日誌組: "$EFFECTIVE_CLOUDTRAIL_LOG_GROUP")
 VPN 連接事件: "$total_vpn_events" 個
 審計檔案位置: "$audit_dir"
 
@@ -869,6 +1137,8 @@ generate_offboarding_checklist() {
 [✓] 移除 IAM 用戶權限
 [✓] 記錄訪問日誌審計
 [✓] 生成安全報告
+(註：請參閱安全報告以獲取上述自動化操作的詳細狀態。)
+((Note: Please refer to the Security Report for the detailed status of the automated actions listed above.))
 
 === 需要手動處理的項目 ===
 [ ] 通知 IT 部門員工離職
@@ -1044,6 +1314,7 @@ show_completion_summary() {
     echo -e "  ${RED}•${NC} 請完成離職檢查清單中的手動項目"
     echo -e "  ${RED}•${NC} 持續監控系統日誌 30 天"
     echo -e "  ${RED}•${NC} 保留所有報告和日誌用於審計"
+    echo -e "  ${RED}•${NC} 自動化資源發現基於命名慣例和標籤，且限於區域 $aws_region。建議手動檢查以確保全面清理。"
     echo -e "  ${RED}•${NC} 如發現異常活動，立即聯繫安全團隊"
     echo -e ""
     echo -e "${GREEN}離職安全處理程序已完成！${NC}"
