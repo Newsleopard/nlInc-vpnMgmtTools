@@ -335,7 +335,6 @@ _create_aws_client_vpn_endpoint_ec() {
           --region "$aws_region" \
           --tag-specifications "$tag_specs" 2>&1)
     fi
-      --tag-specifications "$tag_specs" 2>&1)
     exit_code=$?
     
     # 檢查 AWS CLI 命令是否成功執行
