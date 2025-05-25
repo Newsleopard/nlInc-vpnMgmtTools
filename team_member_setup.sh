@@ -5,10 +5,10 @@
 # 版本：1.2 (環境感知版本)
 
 # 全域變數
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TEAM_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # 載入環境管理器 (必須第一個載入)
-source "$SCRIPT_DIR/lib/env_manager.sh"
+source "$TEAM_SCRIPT_DIR/lib/env_manager.sh"
 
 # 初始化環境
 if ! env_init_for_script "team_member_setup.sh"; then
@@ -24,7 +24,7 @@ USER_CONFIG_FILE="$USER_VPN_CONFIG_FILE"
 LOG_FILE="$TEAM_SETUP_LOG_FILE"
 
 # 載入核心函式庫
-source "$SCRIPT_DIR/lib/core_functions.sh"
+source "$TEAM_SCRIPT_DIR/lib/core_functions.sh"
 
 # 執行兼容性檢查
 check_macos_compatibility
@@ -55,12 +55,26 @@ show_welcome() {
     press_any_key_to_continue
 }
 
-# 檢查必要工具（重新命名避免衝突）
+# 檢查必要工具（跨平台版本）
 check_team_prerequisites() {
     echo -e "\\n${YELLOW}[1/6] 檢查必要工具...${NC}"
     
-    local tools=("brew" "aws" "jq" "openssl")
+    local tools=("aws" "jq" "openssl")
     local missing_tools=()
+    local os_type=$(uname -s)
+    
+    # 根據作業系統添加包管理器
+    case "$os_type" in
+        "Darwin")
+            tools+=("brew")
+            ;;
+        "Linux")
+            # Linux 系統通常使用系統包管理器，不需要額外檢查
+            ;;
+        *)
+            echo -e "${YELLOW}⚠ 檢測到非常見作業系統: $os_type${NC}"
+            ;;
+    esac
     
     for tool in "${tools[@]}"; do
         if ! command -v "$tool" &> /dev/null; then
@@ -72,35 +86,103 @@ check_team_prerequisites() {
     
     if [ ${#missing_tools[@]} -gt 0 ]; then
         echo -e "${RED}缺少必要工具: ${missing_tools[*]}${NC}"
-        echo -e "${YELLOW}正在安裝缺少的工具...${NC}"
+        echo -e "${YELLOW}正在嘗試安裝缺少的工具...${NC}"
         
-        # 安裝 Homebrew
-        if [[ " ${missing_tools[*]} " =~ " brew " ]]; then
-            echo -e "${BLUE}安裝 Homebrew...${NC}"
-            /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install.sh)"
-        fi
-        
-        # 安裝其他工具
-        for tool in "${missing_tools[@]}"; do
-            if [[ "$tool" != "brew" ]]; then
-                echo -e "${BLUE}安裝 $tool...${NC}"
-                case "$tool" in
-                    "aws")
-                        brew install awscli
-                        ;;
-                    "jq")
-                        brew install jq
-                        ;;
-                    "openssl")
-                        echo -e "${GREEN}OpenSSL 通常已預安裝在 macOS${NC}"
-                        ;;
-                esac
-            fi
-        done
+        case "$os_type" in
+            "Darwin")
+                install_tools_macos "${missing_tools[@]}"
+                ;;
+            "Linux")
+                install_tools_linux "${missing_tools[@]}"
+                ;;
+            *)
+                echo -e "${RED}不支援的作業系統自動安裝。請手動安裝以下工具: ${missing_tools[*]}${NC}"
+                return 1
+                ;;
+        esac
     fi
     
     echo -e "${GREEN}所有必要工具已準備就緒！${NC}"
     log_team_setup_message "必要工具檢查完成"
+}
+
+# macOS 工具安裝
+install_tools_macos() {
+    local tools=("$@")
+    
+    # 安裝 Homebrew
+    if [[ " ${tools[*]} " =~ " brew " ]]; then
+        echo -e "${BLUE}安裝 Homebrew...${NC}"
+        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install.sh)"
+    fi
+    
+    # 安裝其他工具
+    for tool in "${tools[@]}"; do
+        if [[ "$tool" != "brew" ]]; then
+            echo -e "${BLUE}安裝 $tool...${NC}"
+            case "$tool" in
+                "aws")
+                    brew install awscli
+                    ;;
+                "jq")
+                    brew install jq
+                    ;;
+                "openssl")
+                    echo -e "${GREEN}OpenSSL 通常已預安裝在 macOS${NC}"
+                    ;;
+            esac
+        fi
+    done
+}
+
+# Linux 工具安裝
+install_tools_linux() {
+    local tools=("$@")
+    
+    # 檢測 Linux 發行版
+    if command -v apt-get &> /dev/null; then
+        # Debian/Ubuntu
+        sudo apt-get update
+        for tool in "${tools[@]}"; do
+            case "$tool" in
+                "aws")
+                    echo -e "${BLUE}安裝 AWS CLI...${NC}"
+                    curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+                    unzip awscliv2.zip
+                    sudo ./aws/install
+                    rm -rf awscliv2.zip aws/
+                    ;;
+                "jq")
+                    sudo apt-get install -y jq
+                    ;;
+                "openssl")
+                    sudo apt-get install -y openssl
+                    ;;
+            esac
+        done
+    elif command -v yum &> /dev/null; then
+        # RHEL/CentOS
+        for tool in "${tools[@]}"; do
+            case "$tool" in
+                "aws")
+                    echo -e "${BLUE}安裝 AWS CLI...${NC}"
+                    curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+                    unzip awscliv2.zip
+                    sudo ./aws/install
+                    rm -rf awscliv2.zip aws/
+                    ;;
+                "jq")
+                    sudo yum install -y jq
+                    ;;
+                "openssl")
+                    sudo yum install -y openssl
+                    ;;
+            esac
+        done
+    else
+        echo -e "${RED}無法檢測 Linux 包管理器。請手動安裝: ${tools[*]}${NC}"
+        return 1
+    fi
 }
 
 # 設定 AWS 配置
@@ -309,8 +391,10 @@ generate_client_certificate() {
     
     local ca_cert_path=""
     
-    # 檢查當前目錄
-    if [ -f "$SCRIPT_DIR/ca.crt" ]; then
+    # 優先檢查環境特定的 CA 證書路徑
+    if [ -f "$VPN_CA_CERT_FILE" ]; then
+        ca_cert_path="$VPN_CA_CERT_FILE"
+    elif [ -f "$SCRIPT_DIR/ca.crt" ]; then
         ca_cert_path="$SCRIPT_DIR/ca.crt"
     elif [ -f "$VPN_CERT_DIR/ca.crt" ]; then
         ca_cert_path="$VPN_CERT_DIR/ca.crt"
@@ -356,8 +440,8 @@ generate_client_certificate() {
         fi
     fi
     
-    # 創建證書目錄
-    local cert_dir="$SCRIPT_DIR/user-certificates"
+    # 創建環境特定的用戶證書目錄
+    local cert_dir="$USER_CERT_DIR"
     mkdir -p "$cert_dir"
     chmod 700 "$cert_dir"
     
@@ -499,7 +583,7 @@ import_certificate() {
         return 1
     fi
     
-    local cert_dir="$SCRIPT_DIR/user-certificates"
+    local cert_dir="$USER_CERT_DIR"
     
     # 檢查證書文件
     local required_files=(
@@ -562,11 +646,11 @@ setup_vpn_client() {
         return 1
     fi
     
-    local cert_dir="$SCRIPT_DIR/user-certificates"
+    local cert_dir="$USER_CERT_DIR"
     
     # 下載 VPN 配置
     echo -e "${BLUE}下載 VPN 配置文件...${NC}"
-    local config_dir="$SCRIPT_DIR/vpn-config"
+    local config_dir="$USER_VPN_CONFIG_DIR"
     mkdir -p "$config_dir"
     chmod 700 "$config_dir"
     
@@ -604,9 +688,34 @@ setup_vpn_client() {
     
     echo -e "${GREEN}✓ 個人配置文件已建立${NC}"
     
-    # 下載並安裝 AWS VPN 客戶端
+    # 下載並安裝 AWS VPN 客戶端（跨平台）
     echo -e "${BLUE}設置 AWS VPN 客戶端...${NC}"
     
+    local os_type=$(uname -s)
+    case "$os_type" in
+        "Darwin")
+            setup_vpn_client_macos
+            ;;
+        "Linux")
+            setup_vpn_client_linux
+            ;;
+        *)
+            echo -e "${YELLOW}⚠ 未支援的作業系統自動安裝 VPN 客戶端${NC}"
+            echo -e "${BLUE}請手動下載並安裝 AWS VPN 客戶端：${NC}"
+            echo -e "  macOS: https://d20adtppz83p9s.cloudfront.net/OSX/latest/AWS_VPN_Client.pkg"
+            echo -e "  Windows: https://d20adtppz83p9s.cloudfront.net/WIN/latest/AWS_VPN_Client.msi"
+            echo -e "  Linux: 請使用 OpenVPN 客戶端"
+            ;;
+    esac
+    
+    echo -e "${GREEN}VPN 客戶端設置完成！${NC}"
+    echo -e "您的配置文件: ${BLUE}$config_dir/${USERNAME}-config.ovpn${NC}"
+    
+    log_team_setup_message "VPN 客戶端設置完成"
+}
+
+# macOS VPN 客戶端安裝
+setup_vpn_client_macos() {
     # 檢查是否已安裝
     if [ ! -d "/Applications/AWS VPN Client.app" ]; then
         echo -e "${BLUE}下載 AWS VPN 客戶端...${NC}"
@@ -632,11 +741,30 @@ setup_vpn_client() {
     else
         echo -e "${GREEN}✓ AWS VPN 客戶端已存在${NC}"
     fi
+}
+
+# Linux VPN 客戶端設置
+setup_vpn_client_linux() {
+    echo -e "${BLUE}設置 OpenVPN 客戶端...${NC}"
     
-    echo -e "${GREEN}VPN 客戶端設置完成！${NC}"
-    echo -e "您的配置文件: ${BLUE}$config_dir/${USERNAME}-config.ovpn${NC}"
+    # 檢查 OpenVPN 是否已安裝
+    if ! command -v openvpn &> /dev/null; then
+        echo -e "${YELLOW}正在安裝 OpenVPN...${NC}"
+        
+        if command -v apt-get &> /dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y openvpn
+        elif command -v yum &> /dev/null; then
+            sudo yum install -y openvpn
+        else
+            echo -e "${RED}無法自動安裝 OpenVPN。請手動安裝後重新執行腳本。${NC}"
+            return 1
+        fi
+    fi
     
-    log_team_setup_message "VPN 客戶端設置完成"
+    echo -e "${GREEN}✓ OpenVPN 客戶端已準備就緒${NC}"
+    echo -e "${BLUE}Linux 用戶可以使用以下命令連接 VPN：${NC}"
+    echo -e "${YELLOW}sudo openvpn --config $config_dir/${USERNAME}-config.ovpn${NC}"
 }
 
 # 顯示連接指示
@@ -644,21 +772,35 @@ show_connection_instructions() {
     # 載入配置
     source "$USER_CONFIG_FILE"
     
+    # 載入環境配置以獲取環境資訊
+    env_load_config "$CURRENT_ENVIRONMENT"
+    
     echo -e "\\n${GREEN}=============================================${NC}"
     echo -e "${GREEN}       AWS Client VPN 設置完成！      ${NC}"
     echo -e "${GREEN}=============================================${NC}"
     echo -e ""
-    echo -e "${CYAN}連接說明：${NC}"
-    echo -e "${BLUE}1.${NC} 開啟 AWS VPN 客戶端 (在應用程式文件夾中)"
-    echo -e "${BLUE}2.${NC} 點擊「檔案」>「管理設定檔」"
-    echo -e "${BLUE}3.${NC} 點擊「添加設定檔」"
-    echo -e "${BLUE}4.${NC} 選擇您的配置文件：${YELLOW}$SCRIPT_DIR/vpn-config/${USERNAME}-config.ovpn${NC}"
-    echo -e "${BLUE}5.${NC} 輸入設定檔名稱：${YELLOW}Production Debug - ${USERNAME}${NC}"
-    echo -e "${BLUE}6.${NC} 點擊「添加設定檔」完成添加"
-    echo -e "${BLUE}7.${NC} 選擇剛添加的設定檔並點擊「連接」"
+    echo -e "${CYAN}環境資訊：${NC}"
+    echo -e "  目標環境: ${ENV_ICON} ${ENV_DISPLAY_NAME}"
+    echo -e "  用戶名稱: ${USERNAME}"
+    echo -e "  配置文件: ${USER_VPN_CONFIG_DIR}/${USERNAME}-config.ovpn"
+    echo -e ""
+    
+    local os_type=$(uname -s)
+    case "$os_type" in
+        "Darwin")
+            show_macos_instructions
+            ;;
+        "Linux")
+            show_linux_instructions
+            ;;
+        *)
+            show_generic_instructions
+            ;;
+    esac
+    
     echo -e ""
     echo -e "${CYAN}測試連接：${NC}"
-    echo -e "連接成功後，嘗試 ping 生產環境中的某個私有 IP："
+    echo -e "連接成功後，嘗試 ping ${ENV_DISPLAY_NAME}環境中的某個私有 IP："
     echo -e "  ${YELLOW}ping 10.0.x.x${NC}  # 請向管理員詢問測試 IP"
     echo -e ""
     echo -e "${CYAN}故障排除：${NC}"
@@ -666,7 +808,7 @@ show_connection_instructions() {
     echo -e "${BLUE}1.${NC} 檢查您的網路連接"
     echo -e "${BLUE}2.${NC} 確認配置文件路徑正確"
     echo -e "${BLUE}3.${NC} 聯繫管理員檢查授權設置"
-    echo -e "${BLUE}4.${NC} 查看 AWS VPN 客戶端的連接日誌"
+    echo -e "${BLUE}4.${NC} 查看 VPN 客戶端的連接日誌"
     echo -e ""
     echo -e "${CYAN}重要提醒：${NC}"
     echo -e "${RED}•${NC} 僅在需要時連接 VPN"
@@ -675,6 +817,38 @@ show_connection_instructions() {
     echo -e "${RED}•${NC} 如有問題請聯繫 IT 管理員"
     echo -e ""
     echo -e "${GREEN}設置完成！祝您除錯順利！${NC}"
+}
+
+# macOS 連接指示
+show_macos_instructions() {
+    echo -e "${CYAN}macOS 連接說明：${NC}"
+    echo -e "${BLUE}1.${NC} 開啟 AWS VPN 客戶端 (在應用程式文件夾中)"
+    echo -e "${BLUE}2.${NC} 點擊「檔案」>「管理設定檔」"
+    echo -e "${BLUE}3.${NC} 點擊「添加設定檔」"
+    echo -e "${BLUE}4.${NC} 選擇您的配置文件：${YELLOW}$USER_VPN_CONFIG_DIR/${USERNAME}-config.ovpn${NC}"
+    echo -e "${BLUE}5.${NC} 輸入設定檔名稱：${YELLOW}${ENV_DISPLAY_NAME:-$CURRENT_ENVIRONMENT} VPN - ${USERNAME}${NC}"
+    echo -e "${BLUE}6.${NC} 點擊「添加設定檔」完成添加"
+    echo -e "${BLUE}7.${NC} 選擇剛添加的設定檔並點擊「連接」"
+}
+
+# Linux 連接指示
+show_linux_instructions() {
+    echo -e "${CYAN}Linux 連接說明：${NC}"
+    echo -e "${BLUE}使用 OpenVPN 命令連接：${NC}"
+    echo -e "${YELLOW}sudo openvpn --config $USER_VPN_CONFIG_DIR/${USERNAME}-config.ovpn${NC}"
+    echo -e ""
+    echo -e "${BLUE}或使用 NetworkManager (如果可用)：${NC}"
+    echo -e "${YELLOW}sudo nmcli connection import type openvpn file $USER_VPN_CONFIG_DIR/${USERNAME}-config.ovpn${NC}"
+    echo -e "${YELLOW}nmcli connection up '${ENV_DISPLAY_NAME:-$CURRENT_ENVIRONMENT} VPN - ${USERNAME}'${NC}"
+}
+
+# 通用連接指示
+show_generic_instructions() {
+    echo -e "${CYAN}通用連接說明：${NC}"
+    echo -e "${BLUE}1.${NC} 安裝相容的 OpenVPN 客戶端"
+    echo -e "${BLUE}2.${NC} 導入配置文件：${YELLOW}$USER_VPN_CONFIG_DIR/${USERNAME}-config.ovpn${NC}"
+    echo -e "${BLUE}3.${NC} 使用設定檔名稱：${YELLOW}${ENV_DISPLAY_NAME:-$CURRENT_ENVIRONMENT} VPN - ${USERNAME}${NC}"
+    echo -e "${BLUE}4.${NC} 連接到 VPN"
 }
 
 # 清理和測試函數
@@ -747,5 +921,7 @@ main() {
 # 記錄腳本啟動
 log_team_setup_message "團隊成員 VPN 設置腳本已啟動"
 
-# 執行主程序
-main
+# 只有在腳本直接執行時才執行主程序（不是被 source 時）
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main
+fi

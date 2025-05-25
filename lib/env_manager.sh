@@ -137,10 +137,10 @@ env_load_config() {
     if [[ -f "$env_file" ]]; then
         source "$env_file"
         
-        # 設定環境特定的目錄路徑 - 正規化路徑
-        export VPN_CERT_DIR="$(cd "$PROJECT_ROOT" && readlink -f "$CERT_DIR" 2>/dev/null || echo "$PROJECT_ROOT/${CERT_DIR#./}")"
-        export VPN_CONFIG_DIR="$(cd "$PROJECT_ROOT" && readlink -f "$CONFIG_DIR" 2>/dev/null || echo "$PROJECT_ROOT/${CONFIG_DIR#./}")"
-        export VPN_LOG_DIR="$(cd "$PROJECT_ROOT" && readlink -f "$LOG_DIR" 2>/dev/null || echo "$PROJECT_ROOT/${LOG_DIR#./}")"
+        # 設定環境特定的目錄路徑 - 跨平台兼容
+        export VPN_CERT_DIR="$PROJECT_ROOT/${CERT_DIR#./}"
+        export VPN_CONFIG_DIR="$PROJECT_ROOT/${CONFIG_DIR#./}"
+        export VPN_LOG_DIR="$PROJECT_ROOT/${LOG_DIR#./}"
         
         # 建立必要的目錄
         mkdir -p "$VPN_CERT_DIR" "$VPN_CONFIG_DIR" "$VPN_LOG_DIR"
@@ -461,8 +461,14 @@ env_setup_paths() {
     export VPN_ADMIN_LOG_FILE="$VPN_LOG_DIR/vpn_admin.log"
     export VPN_USER_LOG_FILE="$VPN_LOG_DIR/user_vpn_setup.log"
     
+    # 團隊成員設定專用路徑
+    export USER_VPN_CONFIG_FILE="$VPN_CONFIG_DIR/user_vpn.conf"
+    export TEAM_SETUP_LOG_FILE="$VPN_LOG_DIR/team_member_setup.log"
+    export USER_CERT_DIR="$VPN_CERT_DIR/user-certificates"
+    export USER_VPN_CONFIG_DIR="$VPN_CONFIG_DIR/user-configs"
+    
     # 確保目錄存在
-    mkdir -p "$VPN_CERT_DIR" "$VPN_CONFIG_DIR" "$VPN_LOG_DIR"
+    mkdir -p "$VPN_CERT_DIR" "$VPN_CONFIG_DIR" "$VPN_LOG_DIR" "$USER_CERT_DIR" "$USER_VPN_CONFIG_DIR"
 }
 
 # 顯示環境感知的標題
