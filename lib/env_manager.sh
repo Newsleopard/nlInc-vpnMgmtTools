@@ -134,6 +134,9 @@ env_load_config() {
     fi
     
     local env_file="$PROJECT_ROOT/configs/${env_name}/${env_name}.env"
+    local vpn_endpoint_file="$PROJECT_ROOT/configs/${env_name}/vpn_endpoint.conf"
+    
+    # 載入環境基本配置
     if [[ -f "$env_file" ]]; then
         source "$env_file"
         
@@ -144,6 +147,11 @@ env_load_config() {
         
         # 建立必要的目錄
         mkdir -p "$VPN_CERT_DIR" "$VPN_CONFIG_DIR" "$VPN_LOG_DIR"
+        
+        # 載入 VPN 端點配置（如果存在）
+        if [[ -f "$vpn_endpoint_file" ]]; then
+            source "$vpn_endpoint_file"
+        fi
         
         echo -e "${GREEN}✅ 已載入 $env_name 環境配置${NC}"
         return 0
