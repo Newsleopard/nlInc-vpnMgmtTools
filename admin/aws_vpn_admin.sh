@@ -930,7 +930,7 @@ main() {
                 ;;
             E|e)
                 echo -e "\n${CYAN}=== 環境管理 ===${NC}"
-                "$SCRIPT_DIR/vpn_env.sh"
+                "$SCRIPT_DIR/../vpn_env.sh"
                 echo -e "\n${YELLOW}按任意鍵返回主選單...${NC}"
                 read -n 1
                 ;;
