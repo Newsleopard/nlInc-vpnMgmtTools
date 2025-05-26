@@ -815,6 +815,57 @@ _setup_authorization_and_routes_ec() {
     return 0
 }
 
+# 等待 VPN 端點變為可用狀態的輔助函數
+# 參數: endpoint_id, aws_region
+# 返回: 0 如果成功，1 如果失敗或超時
+_wait_for_client_vpn_endpoint_available() {
+    local endpoint_id="$1"
+    local aws_region="$2"
+    local max_wait_time=300  # 最大等待時間（秒）
+    local wait_interval=15   # 檢查間隔（秒）
+    local elapsed_time=0
+    
+    echo -e "${BLUE}等待端點 $endpoint_id 變為可用狀態...${NC}"
+    
+    while [ $elapsed_time -lt $max_wait_time ]; do
+        local endpoint_status
+        endpoint_status=$(aws ec2 describe-client-vpn-endpoints \
+            --client-vpn-endpoint-ids "$endpoint_id" \
+            --region "$aws_region" \
+            --query 'ClientVpnEndpoints[0].Status.Code' \
+            --output text 2>/dev/null)
+        
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}無法查詢端點狀態${NC}"
+            return 1
+        fi
+        
+        case "$endpoint_status" in
+            "available")
+                echo -e "${GREEN}✓ 端點已可用${NC}"
+                return 0
+                ;;
+            "pending-associate"|"pending")
+                echo -e "${YELLOW}端點狀態: $endpoint_status，合埋，因為可能沒有VPC，繼續往下走...${NC}"
+                return 0
+                ;;
+            "deleted"|"deleting")
+                echo -e "${RED}端點已被刪除或正在刪除${NC}"
+                return 1
+                ;;
+            *)
+                echo -e "${YELLOW}端點狀態: $endpoint_status，繼續等待... (${elapsed_time}s/${max_wait_time}s)${NC}"
+                ;;
+        esac
+        
+        sleep $wait_interval
+        elapsed_time=$((elapsed_time + wait_interval))
+    done
+    
+    echo -e "${RED}等待端點可用超時 (${max_wait_time}秒)${NC}"
+    return 1
+}
+
 # 主要的端點創建函式
 # 參數: main_config_file, aws_region, vpc_id, subnet_id, vpn_cidr, server_cert_arn, client_cert_arn, vpn_name
 create_vpn_endpoint_lib() {
@@ -1192,6 +1243,8 @@ EOF
         echo -e "${RED}詳細錯誤信息已記錄到: $auth_error_log_file${NC}"
         return 1 
     fi
+    
+
     
     echo -e "${BLUE}創建路由 (允許所有流量通過 VPN 到主要子網路)...${NC}"
     log_message_core "開始創建路由: 端點 ID=$endpoint_id, 子網路 ID=$subnet_id, 區域=$aws_region"
