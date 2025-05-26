@@ -402,3 +402,85 @@ associate_single_vpc_lib() {
     log_message_core "VPC 關聯成功完成"
     return 0
 }
+
+# 關聯額外的 VPC 到現有端點 (庫函式版本)
+# 參數: $1 = CONFIG_FILE, $2 = AWS_REGION, $3 = ENDPOINT_ID
+associate_additional_vpc_lib() {
+    local config_file="$1"
+    local aws_region="$2"
+    local endpoint_id="$3"
+    
+    # 參數驗證
+    if [ -z "$config_file" ] || [ ! -f "$config_file" ]; then
+        echo -e "${RED}錯誤: 配置文件不存在或路徑為空${NC}"
+        log_message_core "錯誤: associate_additional_vpc_lib 調用時配置文件不存在: $config_file"
+        return 1
+    fi
+    
+    if ! validate_aws_region "$aws_region"; then
+        return 1
+    fi
+    
+    if ! validate_endpoint_id "$endpoint_id"; then
+        return 1
+    fi
+    
+    log_message_core "開始關聯額外 VPC 到端點 (lib) - Endpoint: $endpoint_id, Region: $aws_region"
+    
+    echo -e "\\n${CYAN}=== 關聯額外 VPC 到 VPN 端點 ===${NC}"
+    echo -e "${BLUE}端點 ID: $endpoint_id${NC}"
+    echo -e "${BLUE}AWS 區域: $aws_region${NC}"
+    
+    # 顯示當前已關聯的網絡
+    echo -e "\\n${YELLOW}當前已關聯的網絡:${NC}"
+    view_associated_networks_lib "$aws_region" "$endpoint_id"
+    
+    # 詢問用戶是否要添加額外的 VPC
+    echo -e "\\n${YELLOW}是否要關聯額外的 VPC? (y/n)${NC}"
+    read -r add_more_vpcs
+    
+    local additional_vpc_count=0
+    
+    while [[ "$add_more_vpcs" =~ ^[Yy]$ ]]; do
+        echo -e "\\n${BLUE}關聯第 $((additional_vpc_count + 1)) 個額外 VPC...${NC}"
+        
+        # 確保已載入 endpoint_creation.sh 函數庫
+        local script_dir_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        if ! command -v _associate_one_vpc_to_endpoint_lib >/dev/null 2>&1; then
+            if [ -f "$script_dir_lib/endpoint_creation.sh" ]; then
+                source "$script_dir_lib/endpoint_creation.sh"
+            else
+                echo -e "${RED}錯誤: 無法找到 endpoint_creation.sh 函數庫${NC}"
+                log_message_core "錯誤: associate_additional_vpc_lib 無法載入 endpoint_creation.sh"
+                return 1
+            fi
+        fi
+        
+        # 調用內部函數進行單個 VPC 關聯
+        if _associate_one_vpc_to_endpoint_lib "$config_file" "$aws_region" "$endpoint_id"; then
+            additional_vpc_count=$((additional_vpc_count + 1))
+            echo -e "${GREEN}✓ 第 $additional_vpc_count 個 VPC 關聯成功${NC}"
+            
+            # 更新配置文件中的額外 VPC 計數
+            update_config "$config_file" "MULTI_VPC_COUNT" "$additional_vpc_count"
+            
+        else
+            echo -e "${RED}✗ VPC 關聯失敗${NC}"
+            log_message_core "錯誤: associate_additional_vpc_lib - 第 $((additional_vpc_count + 1)) 個 VPC 關聯失敗"
+        fi
+        
+        # 詢問是否繼續添加更多 VPC
+        echo -e "\\n${YELLOW}是否要關聯更多 VPC? (y/n)${NC}"
+        read -r add_more_vpcs
+    done
+    
+    if [ $additional_vpc_count -gt 0 ]; then
+        echo -e "\\n${GREEN}✓ 總共成功關聯了 $additional_vpc_count 個額外 VPC${NC}"
+        log_message_core "額外 VPC 關聯完成，總計: $additional_vpc_count"
+    else
+        echo -e "\\n${YELLOW}未關聯任何額外 VPC${NC}"
+        log_message_core "用戶選擇不關聯額外 VPC"
+    fi
+    
+    return 0
+}

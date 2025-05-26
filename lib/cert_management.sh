@@ -105,16 +105,8 @@ generate_ca_certificate_lib() {
         echo -e "${YELLOW}CA 證書 (pki/ca.crt) 已存在。${NC}"
     fi
 
-    # 更新配置文件中的 CA ARN
-    local ca_arn_value
-    ca_arn_value=$(aws acm import-certificate --certificate "fileb://$easyrsa_dir/pki/ca.crt" --private-key "fileb://$easyrsa_dir/pki/private/ca.key" --region "$AWS_REGION" --output text --query CertificateArn 2>&1)
-    if [ $? -ne 0 ] || [ -z "$ca_arn_value" ] || [[ "$ca_arn_value" == "null" ]]; then
-        log_message_core "錯誤: 從 AWS ACM 獲取 CA_CERT_ARN 失敗。輸出: $ca_arn_value"
-        echo -e "${RED}錯誤: 無法獲取 CA 憑證 ARN。請檢查日誌。${NC}"
-        return 1
-    fi
-    update_config "$env_config_file" "CA_CERT_ARN" "$ca_arn_value"
-    log_message_core "CA 憑證 ARN 已更新到配置文件: $env_config_file"
+    # 注意：CA 證書將在 import_certificates_to_acm_lib 中統一導入，此處不重複導入
+    log_message_core "CA 證書生成完成，將由 import_certificates_to_acm_lib 統一導入到 ACM"
 
     echo -e "${GREEN}CA 憑證生成流程完成！${NC}"
     log_message "VPN CA 證書已生成"
@@ -210,16 +202,8 @@ EOF
         echo -e "${YELLOW}伺服器證書 (pki/issued/server.crt) 已存在。${NC}"
     fi
 
-    # 更新配置文件中的伺服器憑證 ARN
-    local server_arn_value
-    server_arn_value=$(aws acm import-certificate --certificate "fileb://$easyrsa_dir/pki/issued/server.crt" --private-key "fileb://$easyrsa_dir/pki/private/server.key" --certificate-chain "fileb://$easyrsa_dir/pki/ca.crt" --region "$AWS_REGION" --output text --query CertificateArn 2>&1)
-    if [ $? -ne 0 ] || [ -z "$server_arn_value" ] || [[ "$server_arn_value" == "null" ]]; then
-        log_message_core "錯誤: 從 AWS ACM 獲取 SERVER_CERT_ARN 失敗。輸出: $server_arn_value"
-        echo -e "${RED}錯誤: 無法獲取伺服器憑證 ARN。請檢查日誌。${NC}"
-        return 1
-    fi
-    update_config "$env_config_file" "SERVER_CERT_ARN" "$server_arn_value"
-    log_message_core "伺服器憑證 ARN 已更新到配置文件: $env_config_file"
+    # 注意：服務器證書將在 import_certificates_to_acm_lib 中統一導入，此處不重複導入
+    log_message_core "服務器證書生成完成，將由 import_certificates_to_acm_lib 統一導入到 ACM"
 
     echo -e "${GREEN}伺服器憑證生成流程完成！${NC}"
     log_message "VPN 伺服器證書已生成"
@@ -277,14 +261,9 @@ generate_client_certificate_lib() {
 
     # 更新配置文件中的客戶端憑證 ARN
     local client_arn_value
-    client_arn_value=$(aws acm import-certificate --certificate "fileb://$easyrsa_dir/pki/issued/$client_name.crt" --private-key "fileb://$easyrsa_dir/pki/private/$client_name.key" --region "$AWS_REGION" --output text --query CertificateArn 2>&1)
-    if [ $? -ne 0 ] || [ -z "$client_arn_value" ] || [[ "$client_arn_value" == "null" ]]; then
-        log_message_core "錯誤: 從 AWS ACM 獲取 CLIENT_CERT_ARN_${client_name} 失敗。輸出: $client_arn_value"
-        echo -e "${RED}錯誤: 無法獲取客戶端憑證 ARN。請檢查日誌。${NC}"
-        return 1
-    fi
-    update_config "$env_config_file" "CLIENT_CERT_ARN_${client_name}" "$client_arn_value"
-    log_message_core "客戶端憑證 ARN 已更新到配置文件: $env_config_file"
+    # 注意：客戶端證書通常不需要導入到 ACM，VPN 使用 CA 證書進行驗證
+    # 個人客戶端證書由團隊成員在 team_member_setup.sh 中自行導入
+    log_message_core "客戶端證書生成完成，無需導入到 ACM（使用 CA 驗證）"
 
     echo -e "${GREEN}客戶端憑證生成流程完成！${NC}"
     log_message "VPN 客戶端證書已生成"
