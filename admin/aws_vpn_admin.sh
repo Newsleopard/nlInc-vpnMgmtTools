@@ -533,8 +533,8 @@ system_health_check() {
     fi
     
     echo -e "${BLUE}檢查 VPN 端點狀態...${NC}"
-    endpoint_status=$(aws ec2 describe-client-vpn-endpoints \\
-      --client-vpn-endpoint-ids "$ENDPOINT_ID" \\
+    endpoint_status=$(aws ec2 describe-client-vpn-endpoints \
+      --client-vpn-endpoint-ids "$ENDPOINT_ID" \
       --region "$AWS_REGION" | jq -r '.ClientVpnEndpoints[0].Status.Code')
     
     if [ "$endpoint_status" == "available" ]; then
@@ -544,8 +544,8 @@ system_health_check() {
     fi
     
     echo -e "${BLUE}檢查關聯的網絡...${NC}"
-    target_networks_json=$(aws ec2 describe-client-vpn-target-networks \\
-      --client-vpn-endpoint-id "$ENDPOINT_ID" \\
+    target_networks_json=$(aws ec2 describe-client-vpn-target-networks \
+      --client-vpn-endpoint-id "$ENDPOINT_ID" \
       --region "$AWS_REGION")
     
     if ! network_count=$(echo "$target_networks_json" | jq '.ClientVpnTargetNetworks | length' 2>/dev/null); then
@@ -562,8 +562,8 @@ system_health_check() {
     fi
     
     echo -e "\\n${BLUE}檢查授權規則...${NC}"
-    auth_rules_json=$(aws ec2 describe-client-vpn-authorization-rules \\
-      --client-vpn-endpoint-id "$ENDPOINT_ID" \\
+    auth_rules_json=$(aws ec2 describe-client-vpn-authorization-rules \
+      --client-vpn-endpoint-id "$ENDPOINT_ID" \
       --region "$AWS_REGION")
     
     if ! auth_count=$(echo "$auth_rules_json" | jq '.AuthorizationRules | length' 2>/dev/null); then
@@ -579,8 +579,8 @@ system_health_check() {
     echo -e "${GREEN}✓ 授權規則數量: $auth_count${NC}"
     
     echo -e "${BLUE}檢查連接統計...${NC}"
-    connections_json=$(aws ec2 describe-client-vpn-connections \\
-      --client-vpn-endpoint-id "$ENDPOINT_ID" \\
+    connections_json=$(aws ec2 describe-client-vpn-connections \
+      --client-vpn-endpoint-id "$ENDPOINT_ID" \
       --region "$AWS_REGION")
     
     if ! connections=$(echo "$connections_json" | jq '.Connections | length' 2>/dev/null); then
@@ -597,8 +597,8 @@ system_health_check() {
     
     echo -e "${BLUE}檢查證書狀態...${NC}"
     if [ ! -z "$SERVER_CERT_ARN" ]; then
-        cert_status=$(aws acm describe-certificate \\
-          --certificate-arn "$SERVER_CERT_ARN" \\
+        cert_status=$(aws acm describe-certificate \
+          --certificate-arn "$SERVER_CERT_ARN" \
           --region "$AWS_REGION" | jq -r '.Certificate.Status')
         echo -e "${GREEN}✓ 伺服器證書狀態: $cert_status${NC}"
     fi

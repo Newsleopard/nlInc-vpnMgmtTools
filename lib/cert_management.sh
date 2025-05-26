@@ -347,18 +347,18 @@ import_certificate_to_acm_lib() {
 
     if [ "$cert_type" == "server" ]; then
         echo -e "${BLUE}正在導入伺服器證書 (server.crt) 到 ACM...${NC}"
-        import_output=$(aws acm import-certificate \\
-          --certificate "fileb://$cert_file" \\
-          --private-key "fileb://$key_file" \\
-          --certificate-chain "fileb://$ca_cert_file" \\
-          --region "$aws_region" \\
+        import_output=$(aws acm import-certificate \
+          --certificate "fileb://$cert_file" \
+          --private-key "fileb://$key_file" \
+          --certificate-chain "fileb://$ca_cert_file" \
+          --region "$aws_region" \
           --tags Key=Name,Value="VPN-Server-Cert-${SERVER_CERT_NAME_PREFIX:-default}" Key=Purpose,Value="ClientVPN" Key=ManagedBy,Value="nlInc-vpnMgmtTools" 2>&1)
     else
         echo -e "${BLUE}正在導入客戶端 CA 證書 (ca.crt) 到 ACM...${NC}"
-        import_output=$(aws acm import-certificate \\
-          --certificate "fileb://$cert_file" \\
-          --private-key "fileb://$key_file" \\
-          --region "$aws_region" \\
+        import_output=$(aws acm import-certificate \
+          --certificate "fileb://$cert_file" \
+          --private-key "fileb://$key_file" \
+          --region "$aws_region" \
           --tags Key=Name,Value="VPN-Client-CA-${SERVER_CERT_NAME_PREFIX:-default}" Key=Purpose,Value="ClientVPN" Key=ManagedBy,Value="nlInc-vpnMgmtTools" 2>&1)
     fi
 

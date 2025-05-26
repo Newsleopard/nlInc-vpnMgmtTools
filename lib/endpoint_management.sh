@@ -264,9 +264,9 @@ export_team_config_lib() {
     fi
     
     # 下載基本配置
-    if ! aws ec2 export-client-vpn-client-configuration \\
-      --client-vpn-endpoint-id "$ENDPOINT_ID" \\
-      --region "$AWS_REGION" \\
+    if ! aws ec2 export-client-vpn-client-configuration \
+      --client-vpn-endpoint-id "$ENDPOINT_ID" \
+      --region "$AWS_REGION" \
       --output text > "$script_dir/team-configs/team-config-base.ovpn" 2>/dev/null; then
         echo -e "${RED}錯誤: 無法下載 VPN 客戶端配置${NC}"
         log_message_core "錯誤: AWS CLI 調用失敗 - export-client-vpn-client-configuration"

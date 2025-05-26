@@ -309,8 +309,8 @@ check_current_connections() {
     
     # 獲取當前連接
     local connections user_connections
-    connections=$(aws ec2 describe-client-vpn-connections \\
-      --client-vpn-endpoint-id "$endpoint_id" \\
+    connections=$(aws ec2 describe-client-vpn-connections \
+      --client-vpn-endpoint-id "$endpoint_id" \
       --region "$aws_region")
     
     # 搜索用戶的連接
@@ -341,9 +341,9 @@ check_current_connections() {
         if [[ "$disconnect_choice" =~ ^[Yy]$ ]]; then
             echo "$user_connections" | while read connection_id; do
                 echo -e "${BLUE}斷開連接 $connection_id...${NC}"
-                aws ec2 terminate-client-vpn-connections \\
-                  --client-vpn-endpoint-id "$endpoint_id" \\
-                  --connection-id "$connection_id" \\
+                aws ec2 terminate-client-vpn-connections \
+                  --client-vpn-endpoint-id "$endpoint_id" \
+                  --connection-id "$connection_id" \
                   --region "$aws_region"
             done
             echo -e "${GREEN}✓ 已斷開用戶的所有連接${NC}"
@@ -468,9 +468,9 @@ revoke_certificates() {
             
             # 嘗試標記證書為已撤銷
             local tag_result
-            tag_result=$(aws acm add-tags-to-certificate \\
-              --certificate-arn "$cert_arn" \\
-              --tags Key=Status,Value=Revoked Key=RevokedBy,Value="$(whoami)" Key=RevokedDate,Value="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \\
+            tag_result=$(aws acm add-tags-to-certificate \
+              --certificate-arn "$cert_arn" \
+              --tags Key=Status,Value=Revoked Key=RevokedBy,Value="$(whoami)" Key=RevokedDate,Value="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
               --region "$aws_region" 2>&1 || echo "tag_failed")
             
             if [[ "$tag_result" != "tag_failed" ]]; then

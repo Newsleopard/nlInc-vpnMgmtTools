@@ -844,8 +844,7 @@ discover_available_vpcs_core() {
         return 0
     fi
     
-    echo -e "${GREEN}找到 $vpc_count 個 VPC(s)：${NC}\\
-" # $vpc_count is a number, safe
+    echo -e "${GREEN}找到 $vpc_count 個 VPC(s)：${NC}"
     
     # 顯示 VPC 詳細資訊
     echo "$vpcs_json" | jq -r '.Vpcs[] | 

@@ -273,8 +273,8 @@ execute_emergency_measures() {
             echo -e "${BLUE}檢查端點 \"$endpoint_id\"...${NC}"
             
             # 檢查此端點的連接
-            connections=$(aws ec2 describe-client-vpn-connections \\
-              --client-vpn-endpoint-id "$endpoint_id" \\
+            connections=$(aws ec2 describe-client-vpn-connections \
+              --client-vpn-endpoint-id "$endpoint_id" \
               --region "$aws_region" 2>/dev/null || continue)
             
             # 搜索員工的連接
@@ -687,9 +687,9 @@ revoke_vpn_access() {
         echo -e "${BLUE}處理證書: \"$cert_arn\"${NC}"
         
         # 先標記證書為已撤銷
-        aws acm add-tags-to-certificate \\
-          --certificate-arn "$cert_arn" \\
-          --tags Key=Status,Value=Revoked Key=RevokedBy,Value="$(whoami)" Key=RevokedDate,Value="$(date -u +%Y-%m-%dT%H:%M:%SZ)" Key=Employee,Value="$employee_name" Key=Reason,Value="Employee Termination" \\
+        aws acm add-tags-to-certificate \
+          --certificate-arn "$cert_arn" \
+          --tags Key=Status,Value=Revoked Key=RevokedBy,Value="$(whoami)" Key=RevokedDate,Value="$(date -u +%Y-%m-%dT%H:%M:%SZ)" Key=Employee,Value="$employee_name" Key=Reason,Value="Employee Termination" \
           --region "$aws_region" 2>/dev/null || true
         
         # 嘗試刪除證書
@@ -852,11 +852,11 @@ audit_access_logs() {
     EFFECTIVE_CLOUDTRAIL_LOG_GROUP="${ENV_CLOUDTRAIL_LOG_GROUP_NAME:-"CloudTrail/VPCFlowLogs"}"
     log_offboarding_message "Auditing CloudTrail logs from group: $EFFECTIVE_CLOUDTRAIL_LOG_GROUP"
     
-    cloudtrail_events=$(aws logs filter-log-events \\
-      --log-group-name "$EFFECTIVE_CLOUDTRAIL_LOG_GROUP" \\
-      --start-time "$(date -u -d "$start_date" +%s)000" \\
-      --end-time "$(date -u -d "$end_date" +%s)000" \\
-      --filter-pattern "$employee_id" \\
+    cloudtrail_events=$(aws logs filter-log-events \
+      --log-group-name "$EFFECTIVE_CLOUDTRAIL_LOG_GROUP" \
+      --start-time "$(date -u -d "$start_date" +%s)000" \
+      --end-time "$(date -u -d "$end_date" +%s)000" \
+      --filter-pattern "$employee_id" \
       --region "$aws_region" 2>/dev/null || echo '{"events":[]}')
     
     if ! events_count=$(echo "$cloudtrail_events" | jq '.events | length' 2>/dev/null); then
@@ -880,11 +880,11 @@ audit_access_logs() {
         log_group=$(echo "$vpn_endpoint_info" | jq -r '.ClientVpnEndpoints[0].ConnectionLogOptions.CloudwatchLogGroup // ""')
         
         if [ ! -z "$log_group" ] && [ "$log_group" != "null" ]; then
-            vpn_events=$(aws logs filter-log-events \\
-              --log-group-name "$log_group" \\
-              --start-time "$(date -u -d "$start_date" +%s)000" \\
-              --end-time "$(date -u -d "$end_date" +%s)000" \\
-              --filter-pattern "$employee_id" \\
+            vpn_events=$(aws logs filter-log-events \
+              --log-group-name "$log_group" \
+              --start-time "$(date -u -d "$start_date" +%s)000" \
+              --end-time "$(date -u -d "$end_date" +%s)000" \
+              --filter-pattern "$employee_id" \
               --region "$aws_region" 2>/dev/null || echo '{"events":[]}')
             
             if ! endpoint_events=$(echo "$vpn_events" | jq '.events | length' 2>/dev/null); then
@@ -954,9 +954,9 @@ check_residual_resources() {
     
     # 檢查 EC2 實例
     echo -e "${BLUE}檢查 EC2 實例...${NC}"
-    ec2_instances=$(aws ec2 describe-instances \\
-      --filters "Name=tag:Owner,Values=*$employee_id*" "Name=instance-state-name,Values=running,stopped" \\
-      --region "$aws_region" \\
+    ec2_instances=$(aws ec2 describe-instances \
+      --filters "Name=tag:Owner,Values=*$employee_id*" "Name=instance-state-name,Values=running,stopped" \
+      --region "$aws_region" \
       --query 'Reservations[*].Instances[*].InstanceId' --output text 2>/dev/null || echo "")
     
     if [ ! -z "$ec2_instances" ]; then
@@ -1253,8 +1253,8 @@ final_confirmation_and_cleanup() {
     
     active_connections=0
     for endpoint_id in $all_endpoints; do
-        connections=$(aws ec2 describe-client-vpn-connections \\
-          --client-vpn-endpoint-id "$endpoint_id" \\
+        connections=$(aws ec2 describe-client-vpn-connections \
+          --client-vpn-endpoint-id "$endpoint_id" \
           --region "$aws_region" 2>/dev/null || continue)
         
         employee_connections=$(echo "$connections" | jq -r --arg id "$employee_id" '.Connections[] | select(.CommonName | contains($id)) | .ConnectionId' | wc -l)
