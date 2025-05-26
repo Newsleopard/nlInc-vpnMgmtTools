@@ -178,7 +178,7 @@ get_revocation_info() {
     echo -e "\\n${BLUE}可用的 Client VPN 端點：${NC}"
     local endpoints
     endpoints=$(aws ec2 describe-client-vpn-endpoints --region "$aws_region")
-    echo "$endpoints" | jq -r '.ClientVpnEndpoints[] | "端點 ID: \\(.ClientVpnEndpointId), 狀態: \\(.Status.Code), 名稱: \\(.Tags[]? | select(.Key=="Name") | .Value // "無名稱")"'
+    echo "$endpoints" | jq -r '.ClientVpnEndpoints[] | "端點 ID: \(.ClientVpnEndpointId), 狀態: \(.Status.Code), 名稱: \(.Tags[]? | select(.Key=="Name") | .Value // "無名稱")"'
     
     read_secure_input "請輸入 Client VPN 端點 ID: " endpoint_id "validate_endpoint_id" || exit 1
     

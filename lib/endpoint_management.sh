@@ -10,6 +10,17 @@ if [ -z "$LOG_FILE_CORE" ]; then
     exit 1
 fi
 
+# 確保已載入憑證管理函式庫 (需要 generate_admin_certificate_lib)
+if ! command -v generate_admin_certificate_lib >/dev/null 2>&1; then
+    SCRIPT_DIR_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [ -f "$SCRIPT_DIR_LIB/cert_management.sh" ]; then
+        source "$SCRIPT_DIR_LIB/cert_management.sh"
+    else
+        echo "錯誤: 憑證管理函式庫未載入且無法找到 cert_management.sh"
+        exit 1
+    fi
+fi
+
 # 查看現有 VPN 端點 (庫函式版本)
 # 參數: $1 = AWS_REGION, $2 = CONFIG_FILE
 list_vpn_endpoints_lib() {
@@ -81,7 +92,7 @@ list_vpn_endpoints_lib() {
             
             if [ "$associated_subnets_count" -gt 0 ]; then
                 echo -e "  ${YELLOW}關聯的子網路 ($associated_subnets_count):${NC}"
-                echo "$target_networks_json" | jq -r '.ClientVpnTargetNetworks[] | "    - 子網路 ID: \\(.TargetNetworkId), VPC ID: \\(.VpcId), 狀態: \\(.Status.Code)"'
+                echo "$target_networks_json" | jq -r '.ClientVpnTargetNetworks[] | "    - 子網路 ID: \(.TargetNetworkId), VPC ID: \(.VpcId), 狀態: \(.Status.Code)"'
             else
                 echo -e "  ${YELLOW}未關聯任何子網路${NC}"
             fi
@@ -119,7 +130,24 @@ generate_admin_config_lib() {
     # 載入配置
     source "$config_file"
     
+    # 調試輸出
+    echo -e "${BLUE}調試: 配置文件已載入${NC}"
+    echo -e "${BLUE}調試: ENDPOINT_ID = '$ENDPOINT_ID'${NC}"
+    echo -e "${BLUE}調試: AWS_REGION = '$AWS_REGION'${NC}"
+    
     # 檢查必要變數
+    if [ -z "$ENDPOINT_ID" ]; then
+        echo -e "${RED}錯誤: ENDPOINT_ID 變數為空${NC}"
+        log_message_core "錯誤: generate_admin_config_lib - ENDPOINT_ID 變數為空"
+        return 1
+    fi
+    
+    if [ -z "$AWS_REGION" ]; then
+        echo -e "${RED}錯誤: AWS_REGION 變數為空${NC}"
+        log_message_core "錯誤: generate_admin_config_lib - AWS_REGION 變數為空"
+        return 1
+    fi
+    
     if ! validate_endpoint_id "$ENDPOINT_ID"; then
         log_message_core "錯誤: generate_admin_config_lib - 來自配置文件的 ENDPOINT_ID 無效: '$ENDPOINT_ID'"
         # validate_endpoint_id 應已處理特定錯誤的記錄和輸出
@@ -142,12 +170,16 @@ generate_admin_config_lib() {
     fi
     
     # 下載基本配置
-    if ! aws ec2 export-client-vpn-client-configuration \\
-      --client-vpn-endpoint-id "$ENDPOINT_ID" \\
-      --region "$AWS_REGION" \\
+    echo -e "${BLUE}下載 VPN 客戶端配置... (Endpoint: $ENDPOINT_ID, Region: $AWS_REGION)${NC}"
+    log_message_core "嘗試下載 VPN 客戶端配置 - Endpoint: $ENDPOINT_ID, Region: $AWS_REGION"
+    
+    if ! aws ec2 export-client-vpn-client-configuration \
+      --client-vpn-endpoint-id "$ENDPOINT_ID" \
+      --region "$AWS_REGION" \
       --output text > "$script_dir/configs/admin-config-base.ovpn" 2>/dev/null; then
         echo -e "${RED}錯誤: 無法下載 VPN 客戶端配置${NC}"
-        log_message_core "錯誤: AWS CLI 調用失敗 - export-client-vpn-client-configuration"
+        echo -e "${RED}檢查 ENDPOINT_ID ($ENDPOINT_ID) 和 AWS_REGION ($AWS_REGION) 是否正確${NC}"
+        log_message_core "錯誤: AWS CLI 調用失敗 - export-client-vpn-client-configuration, Endpoint: $ENDPOINT_ID, Region: $AWS_REGION"
         return 1
     fi
     
@@ -320,5 +352,53 @@ EOF
     echo -e "  - 端點 ID: $ENDPOINT_ID"
     
     log_message_core "團隊設定檔匯出成功: $script_dir/team-configs/"
+    return 0
+}
+
+# 關聯單一 VPC 到現有端點 (庫函式版本)
+# 參數: $1 = CONFIG_FILE, $2 = AWS_REGION, $3 = ENDPOINT_ID
+associate_single_vpc_lib() {
+    local config_file="$1"
+    local aws_region="$2"
+    local endpoint_id="$3"
+    
+    # 參數驗證
+    if [ -z "$config_file" ] || [ ! -f "$config_file" ]; then
+        echo -e "${RED}錯誤: 配置文件不存在或路徑為空${NC}"
+        log_message_core "錯誤: associate_single_vpc_lib 調用時配置文件不存在: $config_file"
+        return 1
+    fi
+    
+    if ! validate_aws_region "$aws_region"; then
+        return 1
+    fi
+    
+    if ! validate_endpoint_id "$endpoint_id"; then
+        return 1
+    fi
+    
+    log_message_core "開始關聯單一 VPC 到端點 (lib) - Endpoint: $endpoint_id, Region: $aws_region"
+    
+    # 確保已載入 endpoint_creation.sh 函數庫
+    local script_dir_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if ! command -v _associate_one_vpc_to_endpoint_lib >/dev/null 2>&1; then
+        if [ -f "$script_dir_lib/endpoint_creation.sh" ]; then
+            source "$script_dir_lib/endpoint_creation.sh"
+        else
+            echo -e "${RED}錯誤: 無法找到 endpoint_creation.sh 函數庫${NC}"
+            log_message_core "錯誤: associate_single_vpc_lib 無法載入 endpoint_creation.sh"
+            return 1
+        fi
+    fi
+    
+    # 調用內部函數進行 VPC 關聯
+    if ! _associate_one_vpc_to_endpoint_lib "$config_file" "$aws_region" "$endpoint_id"; then
+        echo -e "${RED}錯誤: VPC 關聯失敗${NC}"
+        log_message_core "錯誤: associate_single_vpc_lib - _associate_one_vpc_to_endpoint_lib 調用失敗"
+        return 1
+    fi
+    
+    echo -e "${GREEN}✓ VPC 關聯成功完成${NC}"
+    log_message_core "VPC 關聯成功完成"
     return 0
 }

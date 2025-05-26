@@ -31,8 +31,7 @@ source "$SCRIPT_DIR/../lib/cert_management.sh"
 source "$SCRIPT_DIR/../lib/endpoint_creation.sh"
 source "$SCRIPT_DIR/../lib/endpoint_management.sh"
 
-# 阻止腳本在出錯時繼續執行
-set -e
+# 不使用 set -e，改用手動錯誤處理以避免程式意外退出
 
 # 顯示主選單
 show_menu() {
@@ -491,7 +490,7 @@ view_connection_logs() {
       --log-group-name "$log_group_name" \
       --start-time "$start_time" \
       --end-time "$end_time" \
-      --region "$AWS_REGION" | jq -r '.events[] | "\\(.timestamp | strftime("%Y-%m-%d %H:%M:%S")): \\(.message)"' | tail -20
+      --region "$AWS_REGION" | jq -r '.events[] | "\(.timestamp | strftime("%Y-%m-%d %H:%M:%S")): \(.message)"' | tail -20
     
     echo -e "\\n${YELLOW}按任意鍵繼續...${NC}"
     read -n 1

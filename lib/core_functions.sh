@@ -849,11 +849,11 @@ discover_available_vpcs_core() {
     
     # 顯示 VPC 詳細資訊
     echo "$vpcs_json" | jq -r '.Vpcs[] | 
-    "VPC ID: \\(.VpcId)
-CIDR: \\(.CidrBlock)
-名稱: \\(.Tags[]? | select(.Key=="Name") | .Value // "未命名")
-狀態: \\(.State)
-預設: \\(if .IsDefault then "是" else "否" end)
+    "VPC ID: \(.VpcId)
+CIDR: \(.CidrBlock)
+名稱: \(.Tags[]? | select(.Key=="Name") | .Value // "未命名")
+狀態: \(.State)
+預設: \(if .IsDefault then "是" else "否" end)
 ----------------------------------------"'
     
     return 0

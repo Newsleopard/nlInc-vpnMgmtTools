@@ -763,3 +763,69 @@ generate_certificates_lib() {
     log_message_core "完整證書集合生成完成"
     return 0
 }
+
+# 生成管理員證書 (專用函式)
+# 參數: $1 = script_dir (腳本目錄，用於確定證書目錄)
+generate_admin_certificate_lib() {
+    local script_dir="$1"
+    
+    # 參數驗證
+    if [ -z "$script_dir" ] || [ ! -d "$script_dir" ]; then
+        echo -e "${RED}錯誤: 腳本目錄參數無效${NC}"
+        log_message_core "錯誤: generate_admin_certificate_lib 調用時腳本目錄參數無效: $script_dir"
+        return 1
+    fi
+    
+    log_message_core "開始生成管理員證書 (lib)"
+    
+    # 確定證書目錄和配置文件
+    local cert_dir="$VPN_CERT_DIR"
+    local easyrsa_dir="$cert_dir"
+    local env_config_file=""
+    
+    # 根據當前環境確定配置文件 - 使用項目根目錄路徑
+    if [ "$VPN_ENV" = "production" ]; then
+        env_config_file="$PROJECT_ROOT/configs/production/production.env"
+    else
+        env_config_file="$PROJECT_ROOT/configs/staging/staging.env"
+    fi
+    
+    # 檢查配置文件是否存在
+    if [ ! -f "$env_config_file" ]; then
+        echo -e "${RED}錯誤: 環境配置文件不存在: $env_config_file${NC}"
+        log_message_core "錯誤: generate_admin_certificate_lib - 環境配置文件不存在: $env_config_file"
+        return 1
+    fi
+    
+    # 檢查 EasyRSA 目錄是否已初始化
+    if [ ! -d "$easyrsa_dir/pki" ]; then
+        echo -e "${RED}錯誤: EasyRSA PKI 目錄未初始化${NC}"
+        log_message_core "錯誤: generate_admin_certificate_lib - PKI 目錄未初始化: $easyrsa_dir/pki"
+        return 1
+    fi
+    
+    # 檢查管理員證書是否已存在
+    if [ -f "$easyrsa_dir/pki/issued/admin.crt" ] && [ -f "$easyrsa_dir/pki/private/admin.key" ]; then
+        echo -e "${YELLOW}管理員證書已存在，跳過生成步驟${NC}"
+        log_message_core "管理員證書已存在，跳過生成"
+        return 0
+    fi
+    
+    # 使用現有的客戶端證書生成函數生成管理員證書
+    if ! generate_client_certificate_lib "$easyrsa_dir" "admin" "$env_config_file"; then
+        echo -e "${RED}錯誤: 管理員證書生成失敗${NC}"
+        log_message_core "錯誤: generate_admin_certificate_lib - 調用 generate_client_certificate_lib 失敗"
+        return 1
+    fi
+    
+    # 驗證證書文件是否正確生成
+    if [ ! -f "$easyrsa_dir/pki/issued/admin.crt" ] || [ ! -f "$easyrsa_dir/pki/private/admin.key" ]; then
+        echo -e "${RED}錯誤: 管理員證書文件生成失敗${NC}"
+        log_message_core "錯誤: generate_admin_certificate_lib - 證書文件未正確生成"
+        return 1
+    fi
+    
+    echo -e "${GREEN}✓ 管理員證書生成成功${NC}"
+    log_message_core "管理員證書生成成功"
+    return 0
+}
