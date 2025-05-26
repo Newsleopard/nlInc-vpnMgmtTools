@@ -21,6 +21,49 @@ if ! command -v generate_admin_certificate_lib >/dev/null 2>&1; then
     fi
 fi
 
+# 查看端點關聯的網絡 (庫函式版本)
+# 參數: $1 = AWS_REGION, $2 = ENDPOINT_ID
+view_associated_networks_lib() {
+    local aws_region="$1"
+    local endpoint_id="$2"
+    
+    if [ -z "$aws_region" ] || [ -z "$endpoint_id" ]; then
+        echo -e "${RED}錯誤: AWS 區域和端點 ID 不能為空${NC}"
+        return 1
+    fi
+    
+    # 獲取關聯的網絡
+    local target_networks_json associated_subnets_count
+    target_networks_json=$(aws ec2 describe-client-vpn-target-networks --client-vpn-endpoint-id "$endpoint_id" --region "$aws_region" 2>/dev/null)
+    
+    if [ $? -eq 0 ] && [ -n "$target_networks_json" ]; then
+        if command -v jq >/dev/null 2>&1; then
+            # 使用 jq 解析
+            if ! associated_subnets_count=$(echo "$target_networks_json" | jq '.ClientVpnTargetNetworks | length' 2>/dev/null); then
+                # 備用解析方法：使用 grep 統計子網數
+                associated_subnets_count=$(echo "$target_networks_json" | grep -c '"TargetNetworkId"' || echo "0")
+            fi
+            
+            if [ "$associated_subnets_count" -gt 0 ]; then
+                echo "$target_networks_json" | jq -r '.ClientVpnTargetNetworks[] | "  - 子網路 ID: \(.TargetNetworkId), VPC ID: \(.VpcId), 狀態: \(.Status.Code)"'
+            else
+                echo "  未關聯任何子網路"
+            fi
+        else
+            # 無 jq 時的備用解析方法
+            if echo "$target_networks_json" | grep -q '"TargetNetworkId"'; then
+                echo "$target_networks_json" | grep -o '"TargetNetworkId":"[^"]*"' | sed 's/"TargetNetworkId":"\([^"]*\)"/  - 子網路 ID: \1/'
+            else
+                echo "  未關聯任何子網路"
+            fi
+        fi
+    else
+        echo "  無法獲取關聯網絡資訊或端點不存在"
+    fi
+    
+    return 0
+}
+
 # 查看現有 VPN 端點 (庫函式版本)
 # 參數: $1 = AWS_REGION, $2 = CONFIG_FILE
 list_vpn_endpoints_lib() {
