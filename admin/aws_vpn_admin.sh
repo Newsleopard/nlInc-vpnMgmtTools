@@ -555,8 +555,15 @@ system_health_check() {
     echo -e "${GREEN}✓ 總關聯的網絡數量: $network_count${NC}"
 
     if [ "$network_count" -gt 0 ]; then
-        echo "$target_networks_json" | jq -r '.ClientVpnTargetNetworks[] | 
-        "  - 子網路 ID: \\(.TargetNetworkId)\n    VPC ID: \\(.VpcId)\n    狀態: \\(.Status.Code) \\(if .Status.Code != "associated" then "(問題!)" else "" end)"'
+        echo "$target_networks_json" | jq -r '
+          .ClientVpnTargetNetworks[] |
+          (
+            "  - 子網路 ID: " + (.TargetNetworkId | tostring) + "\n" +
+            "    VPC ID: " + (.VpcId | tostring) + "\n" +
+            "    狀態: " + (.Status.Code | tostring) +
+            (if (.Status.Code | tostring) != "associated" then " (問題!)" else "" end)
+          )
+        '
     else
         echo -e "  ${YELLOW}未關聯任何子網路${NC}"
     fi
