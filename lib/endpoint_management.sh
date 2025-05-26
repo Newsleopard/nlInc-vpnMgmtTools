@@ -730,3 +730,165 @@ associate_additional_vpc_lib() {
     
     return 0
 }
+
+# 顯示多 VPC 拓撲 (庫函式版本)
+# 參數: $1 = CONFIG_FILE, $2 = AWS_REGION, $3 = ENDPOINT_ID, $4 = VPN_CIDR (主), $5 = VPC_ID (主), $6 = VPC_CIDR (主), $7 = SUBNET_ID (主)
+show_multi_vpc_topology_lib() {
+    local config_file="$1"
+    local aws_region="$2"
+    local endpoint_id="$3"
+    local main_vpn_cidr="$4" # 主 VPN CIDR (來自配置)
+    local main_vpc_id="$5"   # 主 VPC ID (來自配置)
+    local main_vpc_cidr="$6" # 主 VPC CIDR (來自配置)
+    local main_subnet_id="$7" # 主 Subnet ID (來自配置)
+
+    log_message_core "開始顯示多 VPC 拓撲 (lib) - Endpoint: $endpoint_id, Region: $aws_region"
+
+    # 參數驗證
+    if [ -z "$config_file" ] || [ ! -f "$config_file" ]; then
+        echo -e "${RED}錯誤: 配置文件不存在或路徑為空: $config_file${NC}"
+        log_message_core "錯誤: show_multi_vpc_topology_lib - 配置文件不存在: $config_file"
+        return 1
+    fi
+    if ! validate_aws_region "$aws_region"; then return 1; fi
+    if ! validate_endpoint_id "$endpoint_id"; then return 1; fi
+    if ! validate_cidr_block "$main_vpn_cidr"; then echo -e "${RED}錯誤: 主 VPN CIDR 無效: $main_vpn_cidr${NC}"; return 1; fi
+    if ! validate_vpc_id "$main_vpc_id"; then echo -e "${RED}錯誤: 主 VPC ID 無效: $main_vpc_id${NC}"; return 1; fi
+    if ! validate_cidr_block "$main_vpc_cidr"; then echo -e "${RED}錯誤: 主 VPC CIDR 無效: $main_vpc_cidr${NC}"; return 1; fi
+    if ! validate_subnet_id "$main_subnet_id"; then echo -e "${RED}錯誤: 主 Subnet ID 無效: $main_subnet_id${NC}"; return 1; fi
+
+    echo -e "\\n${CYAN}=== VPN 端點 ($endpoint_id) 網路拓撲 ===${NC}"
+    echo -e "${BLUE}AWS 區域: $aws_region${NC}"
+    echo -e "${BLUE}VPN 用戶端 CIDR: $main_vpn_cidr${NC}"
+
+    # 顯示主 VPC 資訊
+    echo -e "\\n${YELLOW}--- 主 VPC (來自配置) ---${NC}"
+    local main_vpc_name
+    main_vpc_name=$(aws ec2 describe-vpcs --vpc-ids "$main_vpc_id" --region "$aws_region" --query "Vpcs[0].Tags[?Key=='Name'].Value" --output text 2>/dev/null || echo "N/A")
+    echo -e "  VPC ID: ${GREEN}$main_vpc_id${NC} (名稱: ${main_vpc_name:-未命名})"
+    echo -e "  VPC CIDR: $main_vpc_cidr"
+    echo -e "  關聯子網路 (主): ${GREEN}$main_subnet_id${NC}"
+    local main_subnet_cidr main_subnet_az
+    main_subnet_cidr=$(aws ec2 describe-subnets --subnet-ids "$main_subnet_id" --region "$aws_region" --query "Subnets[0].CidrBlock" --output text 2>/dev/null || echo "N/A")
+    main_subnet_az=$(aws ec2 describe-subnets --subnet-ids "$main_subnet_id" --region "$aws_region" --query "Subnets[0].AvailabilityZone" --output text 2>/dev/null || echo "N/A")
+    echo -e "    子網路 CIDR: $main_subnet_cidr"
+    echo -e "    可用區域: $main_subnet_az"
+
+    # 獲取並顯示所有與此端點關聯的目標網絡
+    echo -e "\\n${YELLOW}--- 所有已關聯的目標網路 (來自 AWS API) ---${NC}"
+    local target_networks_json
+    target_networks_json=$(aws ec2 describe-client-vpn-target-networks --client-vpn-endpoint-id "$endpoint_id" --region "$aws_region" 2>/dev/null)
+
+    if [ $? -ne 0 ] || [ -z "$target_networks_json" ]; then
+        echo -e "${RED}無法獲取端點關聯的目標網路資訊。${NC}"
+        log_message_core "錯誤: show_multi_vpc_topology_lib - 無法獲取 describe-client-vpn-target-networks"
+        # 即使無法獲取 API 的關聯網路，也繼續執行，因為主 VPC 資訊已顯示
+    else
+        local associated_networks_count
+        associated_networks_count=$(echo "$target_networks_json" | jq '.ClientVpnTargetNetworks | length' 2>/dev/null || echo "$target_networks_json" | grep -c '"TargetNetworkId"')
+
+        if [ "$associated_networks_count" -eq 0 ]; then
+            echo -e "${YELLOW}此 VPN 端點目前未直接關聯任何目標網路 (除了可能的主 VPC 配置)。${NC}"
+        else
+            echo -e "${BLUE}找到 $associated_networks_count 個已關聯的目標網路:${NC}"
+            echo -e "  ----------------------------------------"
+            
+            # 使用簡化的 jq 處理，逐個字段提取
+            echo "$target_networks_json" | jq -c '.ClientVpnTargetNetworks[]' | while read -r network; do
+                local association_id vpc_id target_network_id status_code status_message security_groups
+                
+                association_id=$(echo "$network" | jq -r '.AssociationId // "N/A"')
+                vpc_id=$(echo "$network" | jq -r '.VpcId // "N/A"')
+                target_network_id=$(echo "$network" | jq -r '.TargetNetworkId // "N/A"')
+                status_code=$(echo "$network" | jq -r '.Status.Code // "N/A"')
+                status_message=$(echo "$network" | jq -r '.Status.Message // "N/A"')
+                
+                # 處理安全群組
+                if echo "$network" | jq -e '.SecurityGroupIds' >/dev/null 2>&1; then
+                    security_groups=$(echo "$network" | jq -r '.SecurityGroupIds | join(", ")')
+                else
+                    security_groups="N/A"
+                fi
+                
+                echo -e "  關聯 ID: $association_id"
+                echo -e "  VPC ID: $vpc_id"
+                echo -e "  目標子網路 ID: $target_network_id"
+                echo -e "  狀態: $status_code (訊息: $status_message)"
+                echo -e "  安全群組: $security_groups"
+                
+                # 獲取 VPC 詳細資訊
+                if validate_vpc_id "$vpc_id" && [ "$vpc_id" != "N/A" ]; then
+                    local vpc_name_api vpc_cidr_api
+                    vpc_name_api=$(aws ec2 describe-vpcs --vpc-ids "$vpc_id" --region "$aws_region" --query "Vpcs[0].Tags[?Key=='Name'].Value" --output text 2>/dev/null || echo "N/A")
+                    vpc_cidr_api=$(aws ec2 describe-vpcs --vpc-ids "$vpc_id" --region "$aws_region" --query "Vpcs[0].CidrBlock" --output text 2>/dev/null || echo "N/A")
+                    echo -e "    VPC 名稱 (API): ${vpc_name_api:-未命名}"
+                    echo -e "    VPC CIDR (API): $vpc_cidr_api"
+                fi
+                
+                # 獲取子網路詳細資訊
+                if validate_subnet_id "$target_network_id" && [ "$target_network_id" != "N/A" ]; then
+                    local subnet_cidr_api subnet_az_api
+                    subnet_cidr_api=$(aws ec2 describe-subnets --subnet-ids "$target_network_id" --region "$aws_region" --query "Subnets[0].CidrBlock" --output text 2>/dev/null || echo "N/A")
+                    subnet_az_api=$(aws ec2 describe-subnets --subnet-ids "$target_network_id" --region "$aws_region" --query "Subnets[0].AvailabilityZone" --output text 2>/dev/null || echo "N/A")
+                    echo -e "    子網路 CIDR (API): $subnet_cidr_api"
+                    echo -e "    可用區域 (API): $subnet_az_api"
+                fi
+                
+                echo -e "  ----------------------------------------"
+            done
+        fi
+    fi
+    
+    # 檢查配置文件中是否有 MULTI_VPC_COUNT 和相關的 MULTI_VPC_X 變數
+    # 這部分可以顯示配置中定義的、但可能尚未通過 API 驗證的額外 VPC
+    if grep -q "MULTI_VPC_COUNT=" "$config_file"; then
+        local multi_vpc_count_config
+        multi_vpc_count_config=$(grep "MULTI_VPC_COUNT=" "$config_file" | head -n 1 | cut -d'=' -f2 | tr -d '"')
+        
+        if [[ "$multi_vpc_count_config" =~ ^[0-9]+$ ]] && [ "$multi_vpc_count_config" -gt 0 ]; then
+            echo -e "\\n${YELLOW}--- 配置文件中定義的額外 VPCs ---${NC}"
+            for ((i=1; i<=multi_vpc_count_config; i++)); do
+                local vpc_var_name="MULTI_VPC_${i}"
+                local vpc_info_line
+                # 從已 source 的環境中讀取變數值，而不是直接 grep 文件
+                # 這需要 config_file 已經被 source，或者在此函數開始時 source
+                # 假設 aws_vpn_admin.sh 在調用此 lib 函數前已 source 了 config_file
+                # 或者，我們可以在此函數開始時 source config_file，但要注意變數覆蓋
+                # 為了安全，我們還是 grep 文件，因為 lib 函數不應該假設外部狀態
+                vpc_info_line=$(grep "^${vpc_var_name}=" "$config_file" | head -n 1 | cut -d'=' -f2 | tr -d '"')
+
+                if [ -n "$vpc_info_line" ]; then
+                    local extra_vpc_id extra_vpc_cidr extra_subnet_id
+                    extra_vpc_id=$(echo "$vpc_info_line" | cut -d':' -f1)
+                    extra_vpc_cidr=$(echo "$vpc_info_line" | cut -d':' -f2)
+                    extra_subnet_id=$(echo "$vpc_info_line" | cut -d':' -f3)
+
+                    echo -e "  ${BLUE}額外 VPC $i (來自配置):${NC}"
+                    if validate_vpc_id "$extra_vpc_id"; then
+                        local extra_vpc_name_cfg
+                        extra_vpc_name_cfg=$(aws ec2 describe-vpcs --vpc-ids "$extra_vpc_id" --region "$aws_region" --query "Vpcs[0].Tags[?Key=='Name'].Value" --output text 2>/dev/null || echo "N/A")
+                        echo -e "    VPC ID: ${GREEN}$extra_vpc_id${NC} (名稱: ${extra_vpc_name_cfg:-未命名})"
+                    else
+                        echo -e "    VPC ID: ${RED}$extra_vpc_id (格式無效)${NC}"
+                    fi
+                    echo -e "    VPC CIDR: $extra_vpc_cidr"
+                    if validate_subnet_id "$extra_subnet_id"; then
+                        local extra_subnet_cidr_cfg extra_subnet_az_cfg
+                        extra_subnet_cidr_cfg=$(aws ec2 describe-subnets --subnet-ids "$extra_subnet_id" --region "$aws_region" --query "Subnets[0].CidrBlock" --output text 2>/dev/null || echo "N/A")
+                        extra_subnet_az_cfg=$(aws ec2 describe-subnets --subnet-ids "$extra_subnet_id" --region "$aws_region" --query "Subnets[0].AvailabilityZone" --output text 2>/dev/null || echo "N/A")
+                        echo -e "    關聯子網路: ${GREEN}$extra_subnet_id${NC}"
+                        echo -e "      子網路 CIDR: $extra_subnet_cidr_cfg"
+                        echo -e "      可用區域: $extra_subnet_az_cfg"
+                    else
+                         echo -e "    關聯子網路: ${RED}$extra_subnet_id (格式無效)${NC}"
+                    fi
+                else
+                    echo -e "  ${YELLOW}警告: 配置文件中 MULTI_VPC_$i 的條目格式不正確或為空。${NC}"
+                fi
+            done
+        fi
+    fi
+
+    log_message_core "顯示多 VPC 拓撲完成"
+    return 0
+}
