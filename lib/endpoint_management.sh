@@ -64,6 +64,209 @@ view_associated_networks_lib() {
     return 0
 }
 
+# 查看路由表 (庫函式版本)
+# 參數: $1 = AWS_REGION, $2 = ENDPOINT_ID
+view_route_table_lib() {
+    local aws_region="$1"
+    local endpoint_id="$2"
+    
+    if [ -z "$aws_region" ] || [ -z "$endpoint_id" ]; then
+        echo -e "${RED}錯誤: AWS 區域和端點 ID 不能為空${NC}"
+        return 1
+    fi
+    
+    # 參數驗證
+    if ! validate_aws_region "$aws_region"; then
+        return 1
+    fi
+    
+    if ! validate_endpoint_id "$endpoint_id"; then
+        return 1
+    fi
+    
+    log_message_core "開始查看路由表 (lib) - Endpoint: $endpoint_id, Region: $aws_region"
+    
+    echo -e "${BLUE}查看端點路由表...${NC}"
+    echo -e "${BLUE}端點 ID: $endpoint_id${NC}"
+    echo -e "${BLUE}AWS 區域: $aws_region${NC}"
+    
+    # 獲取路由表資訊
+    local routes_json
+    routes_json=$(aws ec2 describe-client-vpn-routes --client-vpn-endpoint-id "$endpoint_id" --region "$aws_region" 2>/dev/null)
+    
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}錯誤: 無法獲取路由表資訊。請檢查端點 ID 和 AWS 憑證。${NC}"
+        log_message_core "錯誤: AWS CLI 調用失敗 - describe-client-vpn-routes"
+        return 1
+    fi
+    
+    if [ -z "$routes_json" ]; then
+        echo -e "${YELLOW}目前沒有路由規則。${NC}"
+        log_message_core "查看路由表完成 - 無路由規則存在"
+        return 0
+    fi
+    
+    # 解析並顯示路由資訊
+    if command -v jq >/dev/null 2>&1; then
+        # 使用 jq 解析
+        local routes_count
+        routes_count=$(echo "$routes_json" | jq '.Routes | length' 2>/dev/null || echo "0")
+        
+        if [ "$routes_count" -gt 0 ]; then
+            echo -e "\n${GREEN}找到 $routes_count 個路由規則:${NC}"
+            echo "$routes_json" | jq -r '.Routes[] | "目的地 CIDR: \(.DestinationCidr), 目標子網路: \(.TargetSubnet // "N/A"), 狀態: \(.Status.Code), 描述: \(.Description // "無描述")"'
+        else
+            echo -e "${YELLOW}目前沒有路由規則。${NC}"
+        fi
+    else
+        # 無 jq 時的備用解析方法
+        if echo "$routes_json" | grep -q '"DestinationCidr"'; then
+            echo -e "\n${GREEN}路由規則:${NC}"
+            echo "$routes_json" | grep -o '"DestinationCidr":"[^"]*"' | sed 's/"DestinationCidr":"//g' | sed 's/"//g' | while read -r cidr; do
+                echo "  - 目的地 CIDR: $cidr"
+            done
+        else
+            echo -e "${YELLOW}目前沒有路由規則。${NC}"
+        fi
+    fi
+    
+    log_message_core "查看路由表完成"
+    return 0
+}
+
+# 添加路由 (庫函式版本)
+# 參數: $1 = AWS_REGION, $2 = ENDPOINT_ID
+add_route_lib() {
+    local aws_region="$1"
+    local endpoint_id="$2"
+    
+    if [ -z "$aws_region" ] || [ -z "$endpoint_id" ]; then
+        echo -e "${RED}錯誤: AWS 區域和端點 ID 不能為空${NC}"
+        return 1
+    fi
+    
+    # 參數驗證
+    if ! validate_aws_region "$aws_region"; then
+        return 1
+    fi
+    
+    if ! validate_endpoint_id "$endpoint_id"; then
+        return 1
+    fi
+    
+    log_message_core "開始添加路由 (lib) - Endpoint: $endpoint_id, Region: $aws_region"
+    
+    echo -e "${BLUE}添加新路由到端點...${NC}"
+    echo -e "${BLUE}端點 ID: $endpoint_id${NC}"
+    echo -e "${BLUE}AWS 區域: $aws_region${NC}"
+    
+    # 獲取端點關聯的子網路資訊
+    local target_networks_json
+    target_networks_json=$(aws ec2 describe-client-vpn-target-networks --client-vpn-endpoint-id "$endpoint_id" --region "$aws_region" 2>/dev/null)
+    
+    if [ $? -ne 0 ] || [ -z "$target_networks_json" ]; then
+        echo -e "${RED}錯誤: 無法獲取端點關聯的網絡資訊。${NC}"
+        log_message_core "錯誤: 無法獲取端點關聯的網絡資訊"
+        return 1
+    fi
+    
+    # 顯示可用的子網路
+    echo -e "\n${YELLOW}可用的目標子網路:${NC}"
+    if command -v jq >/dev/null 2>&1; then
+        echo "$target_networks_json" | jq -r '.ClientVpnTargetNetworks[] | "  - 子網路 ID: \(.TargetNetworkId), VPC ID: \(.VpcId)"'
+    else
+        echo "$target_networks_json" | grep -o '"TargetNetworkId":"[^"]*"' | sed 's/"TargetNetworkId":"//g' | sed 's/"//g' | while read -r subnet; do
+            echo "  - 子網路 ID: $subnet"
+        done
+    fi
+    
+    # 詢問路由詳細資訊
+    echo -e "\n${YELLOW}請輸入路由資訊:${NC}"
+    
+    local destination_cidr
+    while true; do
+        read -p "目的地 CIDR (例如: 10.0.0.0/16, 0.0.0.0/0): " destination_cidr
+        if [[ "$destination_cidr" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}$ ]]; then
+            break
+        else
+            echo -e "${RED}錯誤: 請輸入有效的 CIDR 格式 (例如: 10.0.0.0/16)${NC}"
+        fi
+    done
+    
+    local target_subnet_id
+    read -p "目標子網路 ID: " target_subnet_id
+    
+    if [ -z "$target_subnet_id" ]; then
+        echo -e "${RED}錯誤: 目標子網路 ID 不能為空${NC}"
+        return 1
+    fi
+    
+    # 可選的描述
+    local description
+    read -p "路由描述 (可選): " description
+    
+    # 檢查路由是否已存在
+    local existing_routes
+    existing_routes=$(aws ec2 describe-client-vpn-routes \
+        --client-vpn-endpoint-id "$endpoint_id" \
+        --region "$aws_region" \
+        --query "Routes[?DestinationCidr=='$destination_cidr'].DestinationCidr" \
+        --output text 2>/dev/null || echo "")
+    
+    if [ -n "$existing_routes" ] && [ "$existing_routes" != "None" ]; then
+        echo -e "${YELLOW}警告: 路由 ($destination_cidr) 已存在${NC}"
+        read -p "是否要繼續? (y/N): " confirm_add
+        if [[ ! "$confirm_add" =~ ^[Yy]$ ]]; then
+            echo -e "${YELLOW}操作已取消${NC}"
+            return 0
+        fi
+    fi
+    
+    # 創建路由
+    echo -e "\n${BLUE}創建路由...${NC}"
+    local route_cmd="aws ec2 create-client-vpn-route --client-vpn-endpoint-id $endpoint_id --destination-cidr-block $destination_cidr --target-vpc-subnet-id $target_subnet_id --region $aws_region"
+    
+    if [ -n "$description" ]; then
+        route_cmd="$route_cmd --description \"$description\""
+    fi
+    
+    log_message_core "執行路由創建命令: $route_cmd"
+    
+    local route_result
+    if [ -n "$description" ]; then
+        route_result=$(aws ec2 create-client-vpn-route \
+            --client-vpn-endpoint-id "$endpoint_id" \
+            --destination-cidr-block "$destination_cidr" \
+            --target-vpc-subnet-id "$target_subnet_id" \
+            --description "$description" \
+            --region "$aws_region" 2>&1)
+    else
+        route_result=$(aws ec2 create-client-vpn-route \
+            --client-vpn-endpoint-id "$endpoint_id" \
+            --destination-cidr-block "$destination_cidr" \
+            --target-vpc-subnet-id "$target_subnet_id" \
+            --region "$aws_region" 2>&1)
+    fi
+    
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}✓ 路由創建成功${NC}"
+        echo -e "  目的地 CIDR: $destination_cidr"
+        echo -e "  目標子網路: $target_subnet_id"
+        if [ -n "$description" ]; then
+            echo -e "  描述: $description"
+        fi
+        log_message_core "路由創建成功: $destination_cidr -> $target_subnet_id"
+    else
+        echo -e "${RED}✗ 路由創建失敗:${NC}"
+        echo "$route_result"
+        log_message_core "錯誤: 路由創建失敗 - $route_result"
+        return 1
+    fi
+    
+    log_message_core "添加路由完成"
+    return 0
+}
+
 # 查看現有 VPN 端點 (庫函式版本)
 # 參數: $1 = AWS_REGION, $2 = CONFIG_FILE
 list_vpn_endpoints_lib() {
