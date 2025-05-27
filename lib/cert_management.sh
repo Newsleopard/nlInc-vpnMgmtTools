@@ -522,11 +522,12 @@ import_certificates_to_acm_lib() {
     fi
 
     log_message_core "開始匯入憑證到 AWS ACM (lib) - Region: $aws_region"
-    log_message_core "注意：僅匯入必要的證書 - 伺服器證書(含私鑰)和客戶端CA證書(僅公鑰)"
+    log_message_core "注意：匯入伺服器證書和客戶端 CA 證書到 ACM"
 
     local server_cert_file="$easyrsa_dir/pki/issued/server.crt"
     local server_key_file="$easyrsa_dir/pki/private/server.key"
     local ca_cert_file="$easyrsa_dir/pki/ca.crt"
+    local ca_key_file="$easyrsa_dir/pki/private/ca.key"
 
     # 檢查必要的憑證檔案
     if [ ! -f "$server_cert_file" ]; then
@@ -542,6 +543,11 @@ import_certificates_to_acm_lib() {
     if [ ! -f "$ca_cert_file" ]; then
         echo -e "${RED}錯誤: CA 憑證檔案不存在: $ca_cert_file${NC}" >&2
         log_message_core "錯誤: CA 憑證檔案不存在: $ca_cert_file"
+        return 1
+    fi
+    if [ ! -f "$ca_key_file" ]; then
+        echo -e "${RED}錯誤: CA 私鑰檔案不存在: $ca_key_file${NC}" >&2
+        log_message_core "錯誤: CA 私鑰檔案不存在: $ca_key_file"
         return 1
     fi
 
@@ -564,10 +570,11 @@ import_certificates_to_acm_lib() {
     fi
 
     echo -e "${BLUE}正在匯入客戶端 CA 憑證到 ACM...${NC}" >&2
-    echo -e "${BLUE}注意: 客戶端 CA 僅匯入公鑰，私鑰保持本地安全存儲${NC}" >&2
+    echo -e "${YELLOW}注意: 匯入 CA 證書需要私鑰以驗證證書完整性${NC}" >&2
     local client_import_output
     client_import_output=$(aws acm import-certificate \
       --certificate "fileb://$ca_cert_file" \
+      --private-key "fileb://$ca_key_file" \
       --region "$aws_region" \
       --tags Key=Name,Value="VPN-Client-CA" Key=Purpose,Value="ClientVPN" Key=ManagedBy,Value="nlInc-vpnMgmtTools" 2>&1)
 
