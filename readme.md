@@ -118,42 +118,89 @@ logs/
 
 本套件包含一系列腳本工具，以支持雙環境 VPN 的管理：
 
+### 🌟 主要管理工具
+
 1.  **`vpn_env.sh`** - 環境管理入口工具。用於切換和查看 Staging/Production 環境狀態，以及執行環境健康檢查。
 2.  **`enhanced_env_selector.sh`** - 增強型互動式環境選擇器。提供一個控制台界面，方便用戶進行環境切換、狀態查看和比較等操作。
-3.  **`aws_vpn_admin.sh`** - 管理員主控台。核心管理工具，用於創建、查看、管理和刪除 VPN 端點，以及管理團隊設定等。此工具會根據當前選定的環境（Staging/Production）執行操作。
+3.  **`admin/aws_vpn_admin.sh`** - 管理員主控台。核心管理工具，用於創建、查看、管理和刪除 VPN 端點，以及管理團隊設定等。此工具會根據當前選定的環境（Staging/Production）執行操作。
 4.  **`team_member_setup.sh`** - 團隊成員設置工具。引導團隊成員完成 VPN 客戶端的配置，包括生成個人證書和 VPN 設定檔。
-5.  **`revoke_member_access.sh`** - 權限撤銷工具。用於安全地撤銷特定用戶的 VPN 訪問權限，包括註銷其證書和斷開現有連接。
-6.  **`employee_offboarding.sh`** - 員工離職處理系統。提供一個標準化流程，用於處理員工離職時的 VPN 訪問權限移除及相關安全審計。
+5.  **`admin/revoke_member_access.sh`** - 權限撤銷工具。用於安全地撤銷特定用戶的 VPN 訪問權限，包括註銷其證書和斷開現有連接。
+6.  **`admin/employee_offboarding.sh`** - 員工離職處理系統。提供一個標準化流程，用於處理員工離職時的 VPN 訪問權限移除及相關安全審計。
+
+### 🔧 診斷和修復工具 (admin/tools/)
+
+7.  **`fix_endpoint_id.sh`** - 自動修復 VPN 端點 ID 配置不匹配問題。自動檢測 AWS 認證狀態、列出可用端點並提供互動式選擇界面。
+8.  **`simple_endpoint_fix.sh`** - 簡化的診斷工具。提供詳細的手動修復指導步驟和常見診斷命令。
+9.  **`debug_vpn_creation.sh`** - VPN 端點創建診斷工具。全面診斷 VPN 端點創建問題，檢查 AWS 配置、網路資源、證書狀態和 JSON 格式。
+10. **`fix_vpn_config.sh`** - VPN 配置修復工具。自動修復常見配置問題，包括子網配置、證書替換和資源衝突清理。
+11. **`complete_vpn_setup.sh`** - 完整 VPN 設置工具。從 "pending-associate" 狀態繼續完成 VPN 端點設置流程。
+12. **`validate_config.sh`** - 配置驗證工具。驗證所有環境的配置正確性並自動修復簡單的配置問題。
+13. **`verify_config_update_fix.sh`** - 配置更新修復驗證工具。驗證配置文件更新修復是否正確工作。
+
+### 📚 核心庫文件 (lib/)
+
+本套件採用模組化設計，核心功能由以下庫文件提供：
+
+- **`core_functions.sh`** - 核心工具函式庫（顏色設定、日誌記錄、驗證函式）
+- **`env_manager.sh`** - 環境管理核心功能（雙環境支援）
+- **`aws_setup.sh`** - AWS 配置管理庫
+- **`cert_management.sh`** - 證書管理庫（Easy-RSA 初始化、證書生成、ACM 匯入）
+- **`endpoint_creation.sh`** - VPN 端點創建庫
+- **`endpoint_management.sh`** - VPN 端點管理庫（端點列表、配置生成、團隊設定）
+- **`enhanced_confirmation.sh`** - 增強版操作確認機制
 
 每個工具的詳細使用方法、參數說明和操作流程，請參閱 `vpn_connection_manual.md`。
 
+### 完整工具清單
+
+總共包含 **13個主要腳本** 和 **7個核心庫文件**，提供從環境管理、VPN 端點創建、團隊管理到故障診斷的完整解決方案。所有工具都支援雙環境（Staging/Production）架構，並提供自動備份和錯誤恢復功能。
+
+詳細的診斷和修復工具說明請參考: [`admin/tools/README.md`](admin/tools/README.md)
+
 ---
 
-## 診斷和修復工具
+## 快速使用指南
 
-### 故障排除工具
+### 常用操作流程
 
-在 `admin/tools/` 目錄中提供了專門的診斷和修復工具：
-
-#### 🔍 診斷工具 (`debug_vpn_creation.sh`)
-- **用途**: 全面診斷 VPN 端點創建問題
-- **功能**: 檢查 AWS 配置、網路資源、證書狀態、JSON 格式
-- **適用場景**: VPN 創建失敗、AWS CLI 錯誤代碼 254
-
-#### 🔧 修復工具 (`fix_vpn_config.sh`)  
-- **用途**: 自動修復常見配置問題
-- **功能**: 修復 subnet 配置、證書替換、資源衝突清理
-- **適用場景**: 配置過期、資源衝突、環境遷移
-
+#### 🚀 初始環境設置
 ```bash
+# 查看當前環境狀態
+./vpn_env.sh status
+
+# 切換到 staging 環境進行測試
+./vpn_env.sh switch staging
+
+# 啟動互動式環境選擇器
+./vpn_env.sh selector
+```
+
+#### 🔧 VPN 管理操作
+```bash
+# 啟動管理員控制台
+./admin/aws_vpn_admin.sh
+
+# 設置團隊成員 VPN 訪問
+./team_member_setup.sh
+
+# 撤銷用戶訪問權限
+./admin/revoke_member_access.sh
+```
+
+#### 🔍 故障診斷與修復
+```bash
+# 快速診斷端點 ID 問題
+./admin/tools/simple_endpoint_fix.sh
+
+# 自動修復端點 ID 配置
+./admin/tools/fix_endpoint_id.sh
+
 # 診斷 VPN 創建問題
 ./admin/tools/debug_vpn_creation.sh
 
-# 自動修復配置問題
-./admin/tools/fix_vpn_config.sh
+# 驗證配置正確性
+./admin/tools/validate_config.sh
 ```
-
-詳細說明請參考: [`admin/tools/README.md`](admin/tools/README.md)
 
 ---
 
@@ -208,7 +255,7 @@ logs/
 
 ---
 
-**最後更新：** YYYY年MM月DD日
-**文檔版本：** 2.1 (表示此為 readme 的新版本)
+**最後更新：** 2025年5月25日
+**文檔版本：** 2.2 (已同步所有腳本功能)
 **適用工具版本：** 2.0
 **架構：** 模組化函式庫設計
