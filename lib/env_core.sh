@@ -194,33 +194,335 @@ show_team_env_header() {
     echo -e "${CYAN}================================================${NC}"
 }
 
-# 驗證 AWS 配置
+# =======================================
+# Enhanced Profile Management Functions
+# =======================================
+
+# Map environment to suggested profile names
+map_environment_to_profiles() {
+    local environment="$1"
+    
+    case "$environment" in
+        staging)
+            echo "default staging stage"
+            ;;
+        production)
+            echo "production prod prd"
+            ;;
+        *)
+            echo ""
+            return 1
+            ;;
+    esac
+}
+
+# Get environment-specific profile preference
+get_env_profile() {
+    local environment="$1"
+    local config_file="configs/$environment/$environment.env"
+    
+    # Try to load from config file first
+    if [ -f "$config_file" ]; then
+        local env_profile
+        env_profile=$(grep "^ENV_AWS_PROFILE=" "$config_file" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+        if [ -n "$env_profile" ]; then
+            echo "$env_profile"
+            return 0
+        fi
+        
+        env_profile=$(grep "^AWS_PROFILE=" "$config_file" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+        if [ -n "$env_profile" ]; then
+            echo "$env_profile"
+            return 0
+        fi
+    fi
+    
+    # Fallback to default mapping
+    case "$environment" in
+        staging)
+            echo "default"
+            ;;
+        production)
+            echo "production"
+            ;;
+        *)
+            echo "default"
+            ;;
+    esac
+}
+
+# Get default profile for environment
+get_env_default_profile() {
+    local environment="$1"
+    
+    case "$environment" in
+        staging)
+            echo "default"
+            ;;
+        production)
+            echo "production"
+            ;;
+        *)
+            echo "default"
+            ;;
+    esac
+}
+
+# Validate profile matches environment account
+validate_profile_matches_environment() {
+    local profile="$1"
+    local environment="$2"
+    
+    # Get account ID from profile
+    local account_id
+    account_id=$(aws sts get-caller-identity --profile "$profile" --query Account --output text 2>/dev/null)
+    
+    if [ -z "$account_id" ] || [ "$account_id" = "None" ]; then
+        echo -e "${RED}無法取得 AWS 帳戶 ID，profile: $profile${NC}" >&2
+        return 1
+    fi
+    
+    # Load expected account ID from config if available
+    local config_file="configs/$environment/$environment.env"
+    local expected_account_var=""
+    case "$environment" in
+        staging) expected_account_var="STAGING_ACCOUNT_ID" ;;
+        production) expected_account_var="PRODUCTION_ACCOUNT_ID" ;;
+        *) expected_account_var="" ;;
+    esac
+    local expected_account=""
+    
+    if [ -f "$config_file" ]; then
+        expected_account=$(grep "^${expected_account_var}=" "$config_file" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+    fi
+    
+    # If we have expected account ID, validate it
+    if [ -n "$expected_account" ]; then
+        if [ "$account_id" != "$expected_account" ]; then
+            echo -e "${RED}帳戶 ID 不匹配 - Profile '$profile' 屬於帳戶 $account_id，但 $environment 環境期望帳戶 $expected_account${NC}" >&2
+            return 1
+        fi
+        echo -e "${GREEN}✓ Profile '$profile' 帳戶驗證通過 ($environment 環境)${NC}"
+    else
+        echo -e "${YELLOW}⚠ 無法驗證帳戶 ID - 環境配置中未設定 ${expected_account_var}${NC}" >&2
+    fi
+    
+    return 0
+}
+
+# Select AWS profile for environment with smart detection
+select_aws_profile_for_environment() {
+    local environment="$1"
+    local force_selection="${2:-false}"
+    
+    echo -e "${BLUE}為 $environment 環境選擇 AWS Profile...${NC}"
+    
+    # Check if already configured and not forcing selection
+    if [ "$force_selection" != "true" ]; then
+        local existing_profile
+        existing_profile=$(get_env_profile "$environment")
+        if [ -n "$existing_profile" ] && aws configure list-profiles | grep -q "^$existing_profile$"; then
+            if validate_aws_profile_config "$existing_profile"; then
+                echo -e "${GREEN}使用已配置的 profile: $existing_profile${NC}"
+                echo "$existing_profile"
+                return 0
+            fi
+        fi
+    fi
+    
+    # Get available profiles
+    local available_profiles
+    available_profiles=$(aws configure list-profiles 2>/dev/null)
+    
+    if [ -z "$available_profiles" ]; then
+        echo -e "${RED}未找到任何 AWS profiles${NC}"
+        return 1
+    fi
+    
+    # Get suggested profiles for environment
+    local suggested_profiles
+    suggested_profiles=$(map_environment_to_profiles "$environment")
+    
+    # Find matching profiles
+    local matching_profiles=()
+    local other_profiles=()
+    
+    while IFS= read -r profile; do
+        if echo "$suggested_profiles" | grep -q "$profile"; then
+            matching_profiles+=("$profile")
+        else
+            other_profiles+=("$profile")
+        fi
+    done <<< "$available_profiles"
+    
+    # Display options
+    echo -e "\n${CYAN}可用的 AWS Profiles:${NC}"
+    local i=1
+    local profile_array=()
+    
+    # Show matching profiles first
+    if [ ${#matching_profiles[@]} -gt 0 ]; then
+        echo -e "${GREEN}推薦用於 $environment 環境:${NC}"
+        for profile in "${matching_profiles[@]}"; do
+            if aws sts get-caller-identity --profile "$profile" &>/dev/null; then
+                echo -e "  $i) $profile ${GREEN}(有效, 推薦)${NC}"
+                profile_array+=("$profile")
+                ((i++))
+            fi
+        done
+    fi
+    
+    # Show other profiles
+    if [ ${#other_profiles[@]} -gt 0 ]; then
+        echo -e "${YELLOW}其他可用 profiles:${NC}"
+        for profile in "${other_profiles[@]}"; do
+            if aws sts get-caller-identity --profile "$profile" &>/dev/null; then
+                echo -e "  $i) $profile ${BLUE}(有效)${NC}"
+                profile_array+=("$profile")
+                ((i++))
+            else
+                echo -e "  $i) $profile ${RED}(需要重新配置)${NC}"
+                profile_array+=("$profile")
+                ((i++))
+            fi
+        done
+    fi
+    
+    # User selection
+    local choice
+    local max_choice=${#profile_array[@]}
+    
+    if [ $max_choice -eq 0 ]; then
+        echo -e "${RED}沒有可用的 AWS profiles${NC}"
+        return 1
+    fi
+    
+    while true; do
+        read -p "請選擇 AWS profile (1-$max_choice): " choice
+        if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "$max_choice" ]; then
+            local selected_profile="${profile_array[$((choice-1))]}"
+            
+            # Validate selected profile
+            if validate_aws_profile_config "$selected_profile"; then
+                # Cross-account validation if possible
+                validate_profile_matches_environment "$selected_profile" "$environment" || true
+                echo "$selected_profile"
+                return 0
+            else
+                echo -e "${RED}選擇的 profile 無效，請重新選擇${NC}"
+            fi
+        else
+            echo -e "${RED}請輸入有效的數字 (1-$max_choice)${NC}"
+        fi
+    done
+}
+
+# Load profile from config file
+load_profile_from_config() {
+    local environment="$1"
+    local config_file="configs/$environment/$environment.env"
+    
+    if [ ! -f "$config_file" ]; then
+        return 1
+    fi
+    
+    # Load environment-specific profile first
+    local env_profile
+    env_profile=$(grep "^ENV_AWS_PROFILE=" "$config_file" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+    
+    if [ -n "$env_profile" ]; then
+        export AWS_PROFILE="$env_profile"
+        export ENV_AWS_PROFILE="$env_profile"
+        return 0
+    fi
+    
+    # Fallback to AWS_PROFILE
+    local aws_profile
+    aws_profile=$(grep "^AWS_PROFILE=" "$config_file" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+    
+    if [ -n "$aws_profile" ]; then
+        export AWS_PROFILE="$aws_profile"
+        return 0
+    fi
+    
+    return 1
+}
+
+# Save profile to config file
+save_profile_to_config() {
+    local environment="$1"
+    local profile="$2"
+    local config_file="configs/$environment/$environment.env"
+    
+    # Ensure config directory exists
+    mkdir -p "configs/$environment"
+    
+    # Update or add AWS_PROFILE
+    if [ -f "$config_file" ]; then
+        # Use sed to update existing entry or add new one
+        if grep -q "^AWS_PROFILE=" "$config_file"; then
+            sed -i.bak "s/^AWS_PROFILE=.*/AWS_PROFILE=\"$profile\"/" "$config_file"
+        else
+            echo "AWS_PROFILE=\"$profile\"" >> "$config_file"
+        fi
+        
+        if grep -q "^ENV_AWS_PROFILE=" "$config_file"; then
+            sed -i.bak "s/^ENV_AWS_PROFILE=.*/ENV_AWS_PROFILE=\"$profile\"/" "$config_file"
+        else
+            echo "ENV_AWS_PROFILE=\"$profile\"" >> "$config_file"
+        fi
+        
+        # Remove backup file
+        rm -f "$config_file.bak"
+    else
+        # Create new config file
+        cat > "$config_file" << EOF
+# AWS Profile Configuration for $environment environment
+AWS_PROFILE="$profile"
+ENV_AWS_PROFILE="$profile"
+EOF
+    fi
+    
+    chmod 600 "$config_file"
+    echo -e "${GREEN}已保存 AWS Profile '$profile' 到 $environment 環境配置${NC}"
+    return 0
+}
+
+# Enhanced AWS profile validation
 validate_aws_profile_config() {
     local profile="$1"
+    local environment="${2:-}"
     
     echo -e "${BLUE}驗證 AWS profile '$profile' 配置...${NC}"
     
-    # 檢查 profile 是否存在
+    # Check if profile exists
     if ! aws configure list-profiles | grep -q "^$profile$"; then
         echo -e "${RED}AWS profile '$profile' 不存在${NC}"
         return 1
     fi
     
-    # 檢查是否可以獲取身份資訊
+    # Check authentication
     if ! aws sts get-caller-identity --profile "$profile" &>/dev/null; then
         echo -e "${RED}AWS profile '$profile' 無法通過身份驗證${NC}"
         echo -e "${YELLOW}請檢查 Access Key 和 Secret Key 是否正確${NC}"
         return 1
     fi
     
-    # 獲取配置資訊
-    local region output
+    # Get configuration information
+    local region output account_id
     region=$(aws configure get region --profile "$profile" 2>/dev/null)
     output=$(aws configure get output --profile "$profile" 2>/dev/null)
+    account_id=$(aws sts get-caller-identity --profile "$profile" --query Account --output text 2>/dev/null)
     
     echo -e "${GREEN}✓ AWS profile '$profile' 配置有效${NC}"
+    echo -e "  帳戶 ID: ${account_id:-未知}"
     echo -e "  區域: ${region:-預設}"
     echo -e "  輸出格式: ${output:-預設}"
+    
+    # Environment-specific validation if provided
+    if [ -n "$environment" ]; then
+        validate_profile_matches_environment "$profile" "$environment"
+    fi
     
     return 0
 }

@@ -560,67 +560,24 @@ setup_user_info() {
 
 # 生成個人客戶端證書
 generate_client_certificate() {
-    local original_dir="$PWD"  # 記錄原始目錄
-    echo -e "\\n${YELLOW}[5/6] 生成個人 VPN 客戶端證書...${NC}"
+    if [ "$RESUME_CERT_MODE" = true ]; then
+        echo -e "\\n${YELLOW}[5/6] 恢復模式：查找已簽署的證書...${NC}"
+        resume_with_signed_certificate
+    else
+        echo -e "\\n${YELLOW}[5/6] 生成 CSR 並等待管理員簽署...${NC}"
+        generate_csr_for_admin_signing
+    fi
+}
+
+# 新的安全 CSR 生成流程（不需要 CA 私鑰）
+generate_csr_for_admin_signing() {
+    local original_dir="$PWD"
     
     # 載入配置
     if ! source "$USER_CONFIG_FILE"; then
         echo -e "${RED}載入配置文件失敗${NC}"
         log_team_setup_message "載入配置文件失敗"
-        cd "$original_dir" || {
-            echo -e "${RED}警告: 無法恢復到原始目錄${NC}"
-        }
         return 1
-    fi
-    
-    # 檢查 USERNAME 是否已設定
-    if [ -z "$USERNAME" ]; then
-        echo -e "${RED}用戶名未設定，請先完成用戶資訊設定${NC}"
-        cd "$original_dir" || {
-            echo -e "${RED}警告: 無法恢復到原始目錄${NC}"
-        }
-        return 1
-    fi
-    
-    # 檢查 CA 證書
-    echo -e "${YELLOW}檢查 CA 證書文件...${NC}"
-    
-    local ca_cert_path="$USER_CERT_DIR/ca.crt"
-    
-    # 檢查是否存在 CA 證書
-    if [ ! -f "$ca_cert_path" ]; then
-        echo -e "${RED}未找到 CA 證書文件: $ca_cert_path${NC}"
-        echo -e "${YELLOW}請確保已完成環境設定步驟${NC}"
-        cd "$original_dir" || {
-            echo -e "${RED}警告: 無法恢復到原始目錄${NC}"
-        }
-        return 1
-    fi
-    
-    echo -e "${GREEN}✓ 找到 CA 證書文件: $ca_cert_path${NC}"
-    
-    # 檢查 CA 私鑰
-    local ca_key_path="$USER_CERT_DIR/ca.key"
-    local has_ca_key=false
-    
-    if [ -f "$ca_key_path" ]; then
-        has_ca_key=true
-        echo -e "${GREEN}✓ 找到 CA 私鑰文件: $ca_key_path${NC}"
-    else
-        echo -e "${YELLOW}未找到 CA 私鑰文件。${NC}"
-        echo -e "${YELLOW}如果您沒有 CA 私鑰，請聯繫管理員生成您的證書。${NC}"
-        if read_secure_input "請輸入 CA 私鑰文件的完整路徑 (或按 Enter 跳過自動生成): " ca_key_input "validate_file_path_allow_empty"; then
-            if [ -n "$ca_key_input" ] && [ -f "$ca_key_input" ]; then
-                # 複製 CA 私鑰到環境目錄
-                if cp "$ca_key_input" "$ca_key_path"; then
-                    chmod 600 "$ca_key_path"
-                    has_ca_key=true
-                    echo -e "${GREEN}✓ CA 私鑰已複製到: $ca_key_path${NC}"
-                else
-                    echo -e "${RED}複製 CA 私鑰失敗${NC}"
-                fi
-            fi
-        fi
     fi
     
     # 創建環境特定的用戶證書目錄
@@ -637,115 +594,148 @@ generate_client_certificate() {
         return 1
     fi
     
-    # CA 證書已在環境設定階段複製
-    # 確保當前目錄有 CA 證書的連結
-    if [ ! -f "./ca.crt" ]; then
-        ln -s "$ca_cert_path" ./ca.crt
-    fi
-    
-    if [ "$has_ca_key" = true ]; then
-        # 有 CA 私鑰，可以自動生成證書
-        echo -e "${BLUE}自動生成客戶端證書...${NC}"
-        
-        # 檢查是否存在現有證書文件
-        if [ -f "${USERNAME}.key" ] || [ -f "${USERNAME}.csr" ]; then
-            local overwrite_key
-            if read_secure_input "金鑰檔案 ${USERNAME}.key 或 ${USERNAME}.csr 已存在。是否覆蓋? (y/n): " overwrite_key "validate_yes_no"; then
-                if [[ "$overwrite_key" =~ ^[Yy]$ ]]; then
-                    rm -f "${USERNAME}.key" "${USERNAME}.csr" "${USERNAME}.crt"
-                else
-                    echo -e "${YELLOW}保留現有金鑰檔案。${NC}"
-                    # 確保現有檔案權限正確
-                    if [ -f "${USERNAME}.key" ]; then
-                        chmod 600 "${USERNAME}.key"
-                    fi
-                    if [ -f "${USERNAME}.crt" ]; then
-                        chmod 600 "${USERNAME}.crt"
-                    fi
-                    return 0
-                fi
+    # 檢查是否存在現有證書文件
+    if [ -f "${USERNAME}.key" ] || [ -f "${USERNAME}.csr" ]; then
+        local overwrite_key
+        if read_secure_input "金鑰檔案 ${USERNAME}.key 或 ${USERNAME}.csr 已存在。是否覆蓋? (y/n): " overwrite_key "validate_yes_no"; then
+            if [[ "$overwrite_key" =~ ^[Yy]$ ]]; then
+                rm -f "${USERNAME}.key" "${USERNAME}.csr" "${USERNAME}.crt"
             else
                 echo -e "${YELLOW}保留現有金鑰檔案。${NC}"
+                # 檢查是否已有簽署證書
+                if [ -f "${USERNAME}.crt" ]; then
+                    echo -e "${GREEN}✓ 發現已存在的簽署證書，將自動繼續${NC}"
+                    cd "$original_dir" || true
+                    return 0
+                fi
+                # 檢查是否需要等待簽署
+                if [ -f "${USERNAME}.csr" ]; then
+                    echo -e "${BLUE}發現現有 CSR，等待管理員簽署...${NC}"
+                    show_csr_instructions "$cert_dir/${USERNAME}.csr"
+                    cd "$original_dir" || true
+                    exit 0
+                fi
+                cd "$original_dir" || true
                 return 0
             fi
-        fi
-        
-        echo -e "${BLUE}正在為使用者 $USERNAME 產生私鑰和證書簽署請求 (CSR)...${NC}"
-        
-        # 生成私鑰
-        if ! openssl genrsa -out "${USERNAME}.key" 2048; then
-            echo -e "${RED}生成私鑰失敗${NC}"
-            cd "$original_dir" || {
-                echo -e "${RED}警告: 無法恢復到原始目錄${NC}"
-            }
-            return 1
-        fi
-        chmod 600 "${USERNAME}.key"
-        
-        # 生成 CSR
-        if ! openssl req -new -key "${USERNAME}.key" -out "${USERNAME}.csr" \
-          -subj "/CN=${USERNAME}/O=Client/C=TW"; then
-            echo -e "${RED}生成 CSR 失敗${NC}"
-            cd "$original_dir" || {
-                echo -e "${RED}警告: 無法恢復到原始目錄${NC}"
-            }
-            return 1
-        fi
-        
-        # 簽署證書
-        if ! openssl x509 -req -in "${USERNAME}.csr" -CA ./ca.crt -CAkey "$ca_key_path" \
-          -CAcreateserial -out "${USERNAME}.crt" -days 365; then
-            echo -e "${RED}簽署證書失敗${NC}"
-            cd "$original_dir" || {
-                echo -e "${RED}警告: 無法恢復到原始目錄${NC}"
-            }
-            return 1
-        fi
-        
-        # 設置證書文件權限
-        chmod 600 "${USERNAME}.crt"
-        
-        # 清理 CSR 文件
-        rm -f "${USERNAME}.csr"
-        
-        echo -e "${GREEN}✓ 客戶端證書生成完成${NC}"
-    else
-        # 沒有 CA 私鑰，需要手動處理
-        echo -e "${YELLOW}無法自動生成證書。${NC}"
-        echo -e "${YELLOW}請聯繫管理員為您生成客戶端證書，或提供以下資訊：${NC}"
-        echo -e "  用戶名: $USERNAME"
-        echo -e "  證書請求: 需要為此用戶生成客戶端證書"
-        
-        echo -e "\\n${BLUE}如果您已有客戶端證書，請將其放在以下位置：${NC}"
-        echo -e "  證書文件: $cert_dir/${USERNAME}.crt"
-        echo -e "  私鑰文件: $cert_dir/${USERNAME}.key"
-        
-        local cert_ready
-        if read_secure_input "證書文件已準備好？(y/n): " cert_ready "validate_yes_no"; then
-            if [[ ! "$cert_ready" =~ ^[Yy]$ ]]; then
-                echo -e "${YELLOW}請準備好證書文件後重新執行腳本${NC}"
-                return 1
-            fi
         else
-            echo -e "${YELLOW}請準備好證書文件後重新執行腳本${NC}"
-            exit 0
+            echo -e "${YELLOW}保留現有金鑰檔案。${NC}"
+            cd "$original_dir" || true
+            return 0
         fi
-        
-        # 檢查證書文件是否存在
-        if [ ! -f "$cert_dir/${USERNAME}.crt" ] || [ ! -f "$cert_dir/${USERNAME}.key" ]; then
-            echo -e "${RED}找不到證書文件。請確認文件位置正確。${NC}"
-            cd "$original_dir" || {
-                echo -e "${RED}警告: 無法恢復到原始目錄${NC}"
-            }
-            return 1
-        fi
-        
-        # 設置文件權限
-        chmod 600 "$cert_dir/${USERNAME}.crt"
-        chmod 600 "$cert_dir/${USERNAME}.key"
     fi
     
-    log_team_setup_message "客戶端證書已準備完成"
+    echo -e "${BLUE}正在為使用者 $USERNAME 產生私鑰和證書簽署請求 (CSR)...${NC}"
+    
+    # 生成私鑰
+    if ! openssl genrsa -out "${USERNAME}.key" 2048; then
+        echo -e "${RED}生成私鑰失敗${NC}"
+        cd "$original_dir" || {
+            echo -e "${RED}警告: 無法恢復到原始目錄${NC}"
+        }
+        return 1
+    fi
+    chmod 600 "${USERNAME}.key"
+    echo -e "${GREEN}✓ 私鑰已生成: ${USERNAME}.key${NC}"
+    
+    # 生成 CSR
+    if ! openssl req -new -key "${USERNAME}.key" -out "${USERNAME}.csr" \
+      -subj "/CN=${USERNAME}/O=VPN-Client/C=TW/L=Taipei/ST=Taiwan/OU=${TARGET_ENVIRONMENT}"; then
+        echo -e "${RED}生成 CSR 失敗${NC}"
+        cd "$original_dir" || {
+            echo -e "${RED}警告: 無法恢復到原始目錄${NC}"
+        }
+        return 1
+    fi
+    chmod 644 "${USERNAME}.csr"
+    echo -e "${GREEN}✓ CSR 已生成: ${USERNAME}.csr${NC}"
+    
+    # 顯示 CSR 上傳指示並退出
+    show_csr_instructions "$cert_dir/${USERNAME}.csr"
+    
+    log_team_setup_message "CSR 已生成，等待管理員簽署"
+    
+    # 在函數結束前恢復目錄
+    cd "$original_dir" || {
+        echo -e "${RED}警告: 無法恢復到原始目錄${NC}"
+    }
+    
+    # CSR 生成階段完成，退出腳本等待管理員簽署
+    exit 0
+}
+
+# 恢復模式：使用已簽署的證書繼續設定
+resume_with_signed_certificate() {
+    local original_dir="$PWD"
+    
+    # 載入配置
+    if ! source "$USER_CONFIG_FILE"; then
+        echo -e "${RED}載入配置文件失敗${NC}"
+        log_team_setup_message "載入配置文件失敗"
+        return 1
+    fi
+    
+    local cert_dir="$USER_CERT_DIR"
+    
+    # 檢查證書目錄
+    if [ ! -d "$cert_dir" ]; then
+        echo -e "${RED}證書目錄不存在: $cert_dir${NC}"
+        echo -e "${YELLOW}請先執行腳本生成 CSR${NC}"
+        return 1
+    fi
+    
+    # 安全地切換到證書目錄
+    if ! cd "$cert_dir"; then
+        echo -e "${RED}無法切換到證書目錄: $cert_dir${NC}"
+        return 1
+    fi
+    
+    # 檢查必要文件
+    if [ ! -f "${USERNAME}.key" ]; then
+        echo -e "${RED}找不到私鑰文件: ${USERNAME}.key${NC}"
+        echo -e "${YELLOW}請先執行腳本生成 CSR${NC}"
+        cd "$original_dir" || true
+        return 1
+    fi
+    
+    if [ ! -f "${USERNAME}.crt" ]; then
+        echo -e "${RED}找不到簽署證書: ${USERNAME}.crt${NC}"
+        echo -e "${YELLOW}請等待管理員簽署您的 CSR，或檢查證書是否已下載到正確位置${NC}"
+        echo -e "${BLUE}證書應放置在: $cert_dir/${USERNAME}.crt${NC}"
+        cd "$original_dir" || true
+        return 1
+    fi
+    
+    # 驗證證書
+    echo -e "${BLUE}驗證簽署證書...${NC}"
+    if ! openssl x509 -in "${USERNAME}.crt" -text -noout >/dev/null 2>&1; then
+        echo -e "${RED}證書格式無效${NC}"
+        cd "$original_dir" || true
+        return 1
+    fi
+    
+    # 驗證私鑰與證書匹配
+    local key_modulus cert_modulus
+    key_modulus=$(openssl rsa -in "${USERNAME}.key" -modulus -noout 2>/dev/null)
+    cert_modulus=$(openssl x509 -in "${USERNAME}.crt" -modulus -noout 2>/dev/null)
+    
+    if [ "$key_modulus" != "$cert_modulus" ]; then
+        echo -e "${RED}私鑰與證書不匹配${NC}"
+        cd "$original_dir" || true
+        return 1
+    fi
+    
+    # 設置正確權限
+    chmod 600 "${USERNAME}.key"
+    chmod 600 "${USERNAME}.crt"
+    
+    echo -e "${GREEN}✓ 證書驗證成功${NC}"
+    echo -e "${GREEN}✓ 私鑰與證書匹配${NC}"
+    
+    # 清理 CSR 文件
+    rm -f "${USERNAME}.csr"
+    
+    log_team_setup_message "使用已簽署證書繼續設定"
     
     # 在函數結束前恢復目錄
     cd "$original_dir" || {
@@ -753,6 +743,495 @@ generate_client_certificate() {
     }
 }
 
+# S3 零接觸功能
+# =====================================
+
+# 檢查 S3 存儲桶訪問權限
+check_s3_access() {
+    echo -e "${BLUE}檢查 S3 存儲桶訪問權限...${NC}"
+    
+    if ! aws s3 ls "s3://$S3_BUCKET/public/" --profile "$SELECTED_AWS_PROFILE" &>/dev/null; then
+        echo -e "${RED}無法訪問 S3 存儲桶: $S3_BUCKET${NC}"
+        echo -e "${YELLOW}請檢查：${NC}"
+        echo -e "  • 存儲桶是否存在"
+        echo -e "  • IAM 權限是否正確設置"
+        echo -e "  • AWS profile 是否有效"
+        return 1
+    fi
+    
+    echo -e "${GREEN}✓ S3 存儲桶訪問正常${NC}"
+    return 0
+}
+
+# 從 S3 下載 CA 證書
+download_ca_from_s3() {
+    echo -e "${BLUE}從 S3 下載 CA 證書...${NC}"
+    
+    local ca_cert_path="$USER_CERT_DIR/ca.crt"
+    local s3_ca_path="s3://$S3_BUCKET/public/ca.crt"
+    
+    if ! aws s3 cp "$s3_ca_path" "$ca_cert_path" --profile "$SELECTED_AWS_PROFILE"; then
+        echo -e "${RED}下載 CA 證書失敗${NC}"
+        return 1
+    fi
+    
+    # 驗證 CA 證書
+    if ! openssl x509 -in "$ca_cert_path" -text -noout >/dev/null 2>&1; then
+        echo -e "${RED}下載的 CA 證書格式無效${NC}"
+        rm -f "$ca_cert_path"
+        return 1
+    fi
+    
+    # 可選：驗證 SHA-256 哈希
+    if aws s3 cp "s3://$S3_BUCKET/public/ca.crt.sha256" "/tmp/ca.crt.sha256" --profile "$SELECTED_AWS_PROFILE" &>/dev/null; then
+        local expected_hash actual_hash
+        expected_hash=$(cat "/tmp/ca.crt.sha256" 2>/dev/null | tr -d '\n\r ')
+        actual_hash=$(openssl dgst -sha256 "$ca_cert_path" | awk '{print $2}')
+        
+        if [ -n "$expected_hash" ] && [ "$expected_hash" = "$actual_hash" ]; then
+            echo -e "${GREEN}✓ CA 證書哈希驗證成功${NC}"
+        elif [ -n "$expected_hash" ]; then
+            echo -e "${YELLOW}⚠ CA 證書哈希不匹配，但繼續執行${NC}"
+        fi
+        rm -f "/tmp/ca.crt.sha256"
+    fi
+    
+    chmod 600 "$ca_cert_path"
+    echo -e "${GREEN}✓ CA 證書下載完成: $ca_cert_path${NC}"
+    return 0
+}
+
+# 從 S3 下載 VPN 端點配置
+download_endpoints_from_s3() {
+    echo -e "${BLUE}從 S3 下載 VPN 端點配置...${NC}"
+    
+    local endpoints_path="/tmp/vpn_endpoints.json"
+    local s3_endpoints_path="s3://$S3_BUCKET/public/vpn_endpoints.json"
+    
+    if ! aws s3 cp "$s3_endpoints_path" "$endpoints_path" --profile "$SELECTED_AWS_PROFILE"; then
+        echo -e "${RED}下載端點配置失敗${NC}"
+        return 1
+    fi
+    
+    # 驗證 JSON 格式
+    if command -v jq >/dev/null 2>&1; then
+        if ! jq . "$endpoints_path" >/dev/null 2>&1; then
+            echo -e "${RED}下載的端點配置 JSON 格式無效${NC}"
+            rm -f "$endpoints_path"
+            return 1
+        fi
+    fi
+    
+    echo -e "${GREEN}✓ 端點配置下載完成${NC}"
+    ENDPOINTS_CONFIG_FILE="$endpoints_path"
+    return 0
+}
+
+# 從端點配置中選擇環境
+select_environment_from_config() {
+    echo -e "${BLUE}選擇 VPN 環境...${NC}"
+    
+    if [ ! -f "$ENDPOINTS_CONFIG_FILE" ]; then
+        echo -e "${RED}端點配置文件不存在${NC}"
+        return 1
+    fi
+    
+    # 列出可用環境
+    echo -e "${CYAN}可用的 VPN 環境：${NC}"
+    local environments
+    if command -v jq >/dev/null 2>&1; then
+        environments=$(jq -r 'keys[]' "$ENDPOINTS_CONFIG_FILE" 2>/dev/null)
+    else
+        # 備用解析方法
+        environments=$(grep -o '"[^"]*"[[:space:]]*:' "$ENDPOINTS_CONFIG_FILE" | sed 's/[":]//g' | tr -d ' ')
+    fi
+    
+    if [ -z "$environments" ]; then
+        echo -e "${RED}無法解析環境配置${NC}"
+        return 1
+    fi
+    
+    local env_array=()
+    while IFS= read -r env; do
+        env_array+=("$env")
+        echo -e "  ${YELLOW}$((${#env_array[@]}))${NC}. $env"
+    done <<< "$environments"
+    
+    if [ ${#env_array[@]} -eq 0 ]; then
+        echo -e "${RED}沒有可用的環境${NC}"
+        return 1
+    fi
+    
+    # 如果只有一個環境，自動選擇
+    if [ ${#env_array[@]} -eq 1 ]; then
+        TARGET_ENVIRONMENT="${env_array[0]}"
+        echo -e "${GREEN}✓ 自動選擇環境: $TARGET_ENVIRONMENT${NC}"
+    else
+        # 用戶選擇環境
+        local choice
+        while true; do
+            read -p "請選擇環境 (1-${#env_array[@]}): " choice
+            if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#env_array[@]} ]; then
+                TARGET_ENVIRONMENT="${env_array[$((choice-1))]}"
+                echo -e "${GREEN}✓ 選擇環境: $TARGET_ENVIRONMENT${NC}"
+                break
+            else
+                echo -e "${RED}無效選擇，請輸入 1-${#env_array[@]}${NC}"
+            fi
+        done
+    fi
+    
+    # 提取環境配置
+    if command -v jq >/dev/null 2>&1; then
+        ENDPOINT_ID=$(jq -r ".[\"$TARGET_ENVIRONMENT\"].endpoint_id" "$ENDPOINTS_CONFIG_FILE" 2>/dev/null)
+        AWS_REGION=$(jq -r ".[\"$TARGET_ENVIRONMENT\"].region" "$ENDPOINTS_CONFIG_FILE" 2>/dev/null)
+    else
+        # 備用解析方法
+        local env_section
+        env_section=$(sed -n "/\"$TARGET_ENVIRONMENT\"[[:space:]]*:/,/}/p" "$ENDPOINTS_CONFIG_FILE")
+        ENDPOINT_ID=$(echo "$env_section" | grep -o '"endpoint_id"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"endpoint_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+        AWS_REGION=$(echo "$env_section" | grep -o '"region"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"region"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+    fi
+    
+    if [ -z "$ENDPOINT_ID" ] || [ -z "$AWS_REGION" ]; then
+        echo -e "${RED}無法解析環境配置 (endpoint_id: $ENDPOINT_ID, region: $AWS_REGION)${NC}"
+        return 1
+    fi
+    
+    echo -e "${GREEN}✓ 環境配置: 端點 $ENDPOINT_ID, 區域 $AWS_REGION${NC}"
+    return 0
+}
+
+# 上傳 CSR 到 S3
+upload_csr_to_s3() {
+    local csr_file="$1"
+    local username="$2"
+    
+    echo -e "${BLUE}上傳 CSR 到 S3...${NC}"
+    
+    local s3_csr_path="s3://$S3_BUCKET/csr/${username}.csr"
+    
+    if aws s3 cp "$csr_file" "$s3_csr_path" \
+        --sse aws:kms \
+        --profile "$SELECTED_AWS_PROFILE"; then
+        echo -e "${GREEN}✓ CSR 已上傳到 S3${NC}"
+        log_team_setup_message "CSR 已上傳到 S3: $s3_csr_path"
+        return 0
+    else
+        echo -e "${RED}CSR 上傳失敗${NC}"
+        return 1
+    fi
+}
+
+# 從 S3 下載簽署證書
+download_certificate_from_s3() {
+    local username="$1"
+    local cert_file="$2"
+    
+    echo -e "${BLUE}從 S3 下載簽署證書...${NC}"
+    
+    local s3_cert_path="s3://$S3_BUCKET/cert/${username}.crt"
+    
+    # 檢查證書是否存在
+    if ! aws s3 ls "$s3_cert_path" --profile "$SELECTED_AWS_PROFILE" &>/dev/null; then
+        echo -e "${YELLOW}證書尚未準備好，請等待管理員簽署${NC}"
+        echo -e "${BLUE}證書位置: $s3_cert_path${NC}"
+        return 1
+    fi
+    
+    if aws s3 cp "$s3_cert_path" "$cert_file" --profile "$SELECTED_AWS_PROFILE"; then
+        echo -e "${GREEN}✓ 證書已從 S3 下載${NC}"
+        log_team_setup_message "證書已從 S3 下載: $s3_cert_path"
+        return 0
+    else
+        echo -e "${RED}證書下載失敗${NC}"
+        return 1
+    fi
+}
+
+# 零接觸初始化模式
+zero_touch_init_mode() {
+    echo -e "\n${YELLOW}[零接觸模式] 初始化 VPN 設定...${NC}"
+    
+    # 檢查 S3 訪問
+    if [ "$DISABLE_S3" = false ]; then
+        if ! check_s3_access; then
+            echo -e "${YELLOW}S3 訪問失敗，切換到本地模式${NC}"
+            DISABLE_S3=true
+        fi
+    fi
+    
+    # 初始化環境和 AWS 配置
+    if ! init_environment_and_aws; then
+        return 1
+    fi
+    
+    # 下載或使用本地 CA 證書
+    if [ "$DISABLE_S3" = false ] && [ -z "$CA_PATH" ]; then
+        if ! download_ca_from_s3; then
+            echo -e "${YELLOW}CA 證書下載失敗，請手動提供${NC}"
+            setup_ca_cert_and_environment
+        fi
+    else
+        setup_ca_cert_and_environment
+    fi
+    
+    # 下載或手動設置端點配置
+    if [ "$DISABLE_S3" = false ] && [ -z "$ENDPOINT_ID" ]; then
+        if download_endpoints_from_s3; then
+            if select_environment_from_config; then
+                echo -e "${GREEN}✓ 使用 S3 端點配置${NC}"
+            else
+                echo -e "${YELLOW}端點配置解析失敗，手動設置${NC}"
+                setup_vpn_endpoint_info
+            fi
+        else
+            echo -e "${YELLOW}端點配置下載失敗，手動設置${NC}"
+            setup_vpn_endpoint_info
+        fi
+    else
+        setup_vpn_endpoint_info
+    fi
+    
+    # 設定用戶資訊
+    setup_user_info
+    
+    # 載入配置以獲取用戶名
+    if ! source "$USER_CONFIG_FILE"; then
+        echo -e "${RED}載入配置文件失敗${NC}"
+        return 1
+    fi
+    
+    # 生成 CSR 並上傳
+    generate_csr_for_zero_touch
+    
+    return 0
+}
+
+# 零接觸恢復模式
+zero_touch_resume_mode() {
+    echo -e "\n${YELLOW}[零接觸模式] 恢復 VPN 設定...${NC}"
+    
+    # 檢查是否有現有配置
+    if [ ! -f "$USER_CONFIG_FILE" ]; then
+        echo -e "${RED}找不到配置文件，請先執行初始化模式${NC}"
+        echo -e "${YELLOW}執行: $0 --init${NC}"
+        return 1
+    fi
+    
+    # 載入配置
+    if ! source "$USER_CONFIG_FILE"; then
+        echo -e "${RED}載入配置文件失敗${NC}"
+        return 1
+    fi
+    
+    # 檢查 S3 訪問（如果啟用）
+    if [ "$DISABLE_S3" = false ]; then
+        if ! check_s3_access; then
+            echo -e "${YELLOW}S3 訪問失敗，切換到本地模式${NC}"
+            DISABLE_S3=true
+        fi
+    fi
+    
+    # 下載簽署證書
+    local cert_file="$USER_CERT_DIR/${USERNAME}.crt"
+    if [ "$DISABLE_S3" = false ]; then
+        if download_certificate_from_s3 "$USERNAME" "$cert_file"; then
+            echo -e "${GREEN}✓ 使用 S3 下載的證書${NC}"
+        else
+            echo -e "${YELLOW}證書下載失敗，檢查本地文件${NC}"
+            if [ ! -f "$cert_file" ]; then
+                echo -e "${RED}找不到簽署證書，請等待管理員簽署或檢查文件位置${NC}"
+                return 1
+            fi
+        fi
+    else
+        if [ ! -f "$cert_file" ]; then
+            echo -e "${RED}找不到簽署證書: $cert_file${NC}"
+            return 1
+        fi
+    fi
+    
+    # 驗證證書
+    if ! resume_with_signed_certificate; then
+        return 1
+    fi
+    
+    # 導入證書到 ACM
+    import_certificate
+    
+    # 設置 VPN 客戶端
+    setup_vpn_client
+    
+    # 顯示連接指示
+    show_connection_instructions
+    
+    return 0
+}
+
+# 為零接觸模式生成 CSR
+generate_csr_for_zero_touch() {
+    local original_dir="$PWD"
+    
+    # 載入配置
+    if ! source "$USER_CONFIG_FILE"; then
+        echo -e "${RED}載入配置文件失敗${NC}"
+        log_team_setup_message "載入配置文件失敗"
+        return 1
+    fi
+    
+    # 創建環境特定的用戶證書目錄
+    local cert_dir="$USER_CERT_DIR"
+    mkdir -p "$cert_dir"
+    chmod 700 "$cert_dir"
+    
+    # 安全地切換到證書目錄
+    if ! cd "$cert_dir"; then
+        echo -e "${RED}無法切換到證書目錄: $cert_dir${NC}"
+        cd "$original_dir" || true
+        return 1
+    fi
+    
+    # 檢查是否存在現有證書文件
+    if [ -f "${USERNAME}.key" ] || [ -f "${USERNAME}.csr" ]; then
+        local overwrite_key
+        if read_secure_input "金鑰檔案 ${USERNAME}.key 或 ${USERNAME}.csr 已存在。是否覆蓋? (y/n): " overwrite_key "validate_yes_no"; then
+            if [[ "$overwrite_key" =~ ^[Yy]$ ]]; then
+                rm -f "${USERNAME}.key" "${USERNAME}.csr" "${USERNAME}.crt"
+            else
+                echo -e "${YELLOW}保留現有金鑰檔案。${NC}"
+                cd "$original_dir" || true
+                return 0
+            fi
+        else
+            echo -e "${YELLOW}保留現有金鑰檔案。${NC}"
+            cd "$original_dir" || true
+            return 0
+        fi
+    fi
+    
+    echo -e "${BLUE}正在為使用者 $USERNAME 產生私鑰和證書簽署請求 (CSR)...${NC}"
+    
+    # 生成私鑰
+    if ! openssl genrsa -out "${USERNAME}.key" 2048; then
+        echo -e "${RED}生成私鑰失敗${NC}"
+        cd "$original_dir" || true
+        return 1
+    fi
+    chmod 600 "${USERNAME}.key"
+    echo -e "${GREEN}✓ 私鑰已生成: ${USERNAME}.key${NC}"
+    
+    # 生成 CSR
+    if ! openssl req -new -key "${USERNAME}.key" -out "${USERNAME}.csr" \
+      -subj "/CN=${USERNAME}/O=VPN-Client/C=TW/L=Taipei/ST=Taiwan/OU=${TARGET_ENVIRONMENT}"; then
+        echo -e "${RED}生成 CSR 失敗${NC}"
+        cd "$original_dir" || true
+        return 1
+    fi
+    chmod 644 "${USERNAME}.csr"
+    echo -e "${GREEN}✓ CSR 已生成: ${USERNAME}.csr${NC}"
+    
+    # 上傳 CSR 到 S3（如果啟用）
+    if [ "$DISABLE_S3" = false ]; then
+        if upload_csr_to_s3 "$cert_dir/${USERNAME}.csr" "$USERNAME"; then
+            echo -e "${GREEN}✓ CSR 已上傳到 S3，等待管理員簽署${NC}"
+        else
+            echo -e "${YELLOW}CSR 上傳失敗，請手動提供給管理員${NC}"
+        fi
+    fi
+    
+    # 顯示零接觸等待指示
+    show_zero_touch_instructions "$cert_dir/${USERNAME}.csr"
+    
+    log_team_setup_message "CSR 已生成，等待管理員簽署"
+    
+    cd "$original_dir" || true
+    
+    # 零接觸模式：CSR 生成階段完成，退出腳本等待管理員簽署
+    exit 0
+}
+
+# 顯示零接觸等待指示
+show_zero_touch_instructions() {
+    local csr_path="$1"
+    
+    echo -e "\n${GREEN}=============================================${NC}"
+    echo -e "${GREEN}       零接觸 CSR 生成完成！       ${NC}"
+    echo -e "${GREEN}=============================================${NC}"
+    echo -e ""
+    echo -e "${CYAN}📋 下一步操作：${NC}"
+    echo -e ""
+    
+    if [ "$DISABLE_S3" = false ]; then
+        echo -e "${BLUE}✅ CSR 已自動上傳到 S3 存儲桶${NC}"
+        echo -e "   位置: ${YELLOW}s3://$S3_BUCKET/csr/${USERNAME}.csr${NC}"
+        echo -e ""
+        echo -e "${BLUE}🔔 通知管理員${NC}"
+        echo -e "   告知管理員您的 CSR 已準備好簽署"
+        echo -e "   用戶名: ${CYAN}$USERNAME${NC}"
+        echo -e "   環境: ${CYAN}$TARGET_ENVIRONMENT${NC}"
+        echo -e ""
+        echo -e "${BLUE}⏳ 等待簽署完成${NC}"
+        echo -e "   管理員簽署後，證書將自動上傳到:"
+        echo -e "   ${YELLOW}s3://$S3_BUCKET/cert/${USERNAME}.crt${NC}"
+        echo -e ""
+        echo -e "${BLUE}🎯 完成設定${NC}"
+        echo -e "   當管理員告知證書已簽署後，執行:"
+        echo -e "   ${CYAN}$0 --resume${NC}"
+    else
+        echo -e "${BLUE}📁 本地 CSR 文件位置：${NC}"
+        echo -e "   ${YELLOW}$csr_path${NC}"
+        echo -e ""
+        echo -e "${BLUE}📧 手動提供給管理員${NC}"
+        echo -e "   將上述 CSR 文件提供給管理員進行簽署"
+        echo -e ""
+        echo -e "${BLUE}📥 等待簽署證書${NC}"
+        echo -e "   簽署後的證書應放置在:"
+        echo -e "   ${YELLOW}$USER_CERT_DIR/${USERNAME}.crt${NC}"
+        echo -e ""
+        echo -e "${BLUE}🎯 完成設定${NC}"
+        echo -e "   當收到簽署證書後，執行:"
+        echo -e "   ${CYAN}$0 --resume${NC}"
+    fi
+    
+    echo -e ""
+    echo -e "${YELLOW}💡 提示：${NC}"
+    echo -e "• 請保留此 CSR 文件直到設定完成"
+    echo -e "• 零接觸模式可自動處理大部分配置"
+    echo -e "• 如有問題，請聯繫系統管理員"
+    echo -e ""
+    echo -e "${GREEN}設定暫停，等待證書簽署...${NC}"
+}
+
+# 顯示 CSR 上傳和等待指示
+show_csr_instructions() {
+    local csr_path="$1"
+    
+    echo -e "\n${GREEN}=============================================${NC}"
+    echo -e "${GREEN}       CSR 生成完成！       ${NC}"
+    echo -e "${GREEN}=============================================${NC}"
+    echo -e ""
+    echo -e "${CYAN}📋 下一步操作：${NC}"
+    echo -e ""
+    echo -e "${BLUE}1. 將以下 CSR 文件提供給管理員：${NC}"
+    echo -e "   ${YELLOW}$csr_path${NC}"
+    echo -e ""
+    echo -e "${BLUE}2. 將 CSR 上傳到指定位置（根據管理員指示）：${NC}"
+    echo -e "   • 上傳到 S3: ${CYAN}s3://vpn-csr-exchange/csr/${USERNAME}.csr${NC}"
+    echo -e "   • 或者發送電子郵件給管理員"
+    echo -e ""
+    echo -e "${BLUE}3. 等待管理員簽署您的證書${NC}"
+    echo -e ""
+    echo -e "${BLUE}4. 當管理員告知證書已簽署後，執行以下命令繼續設定：${NC}"
+    echo -e "   ${CYAN}$0 --resume-cert${NC}"
+    echo -e ""
+    echo -e "${YELLOW}💡 提示：${NC}"
+    echo -e "• 請保留此 CSR 文件直到設定完成"
+    echo -e "• 簽署後的證書文件將命名為: ${USERNAME}.crt"
+    echo -e "• 管理員將提供具體的上傳和下載指示"
+    echo -e ""
+    echo -e "${GREEN}設定暫停，等待證書簽署...${NC}"
+}
 # 導入證書到 ACM
 import_certificate() {
     echo -e "\\n${YELLOW}[6/6] 導入證書到 AWS Certificate Manager...${NC}"
@@ -1194,31 +1673,155 @@ main() {
         log_team_setup_message "開始團隊成員 VPN 設定"
     fi
     
-    # 顯示歡迎訊息
-    show_welcome
-    
-    # 執行設置步驟
-    check_team_prerequisites
-    init_environment_and_aws
-    setup_ca_cert_and_environment
-    setup_vpn_endpoint_info
-    setup_user_info
-    generate_client_certificate
-    import_certificate
-    setup_vpn_client
-    
-    # 顯示連接指示
-    show_connection_instructions
-    
-    # 可選的連接測試
-    test_connection
+    # 根據模式執行不同的工作流程
+    if [ "$INIT_MODE" = true ]; then
+        # 零接觸初始化模式
+        show_welcome
+        check_team_prerequisites
+        zero_touch_init_mode
+    elif [ "$RESUME_MODE" = true ]; then
+        # 零接觸恢復模式
+        show_welcome
+        check_team_prerequisites
+        zero_touch_resume_mode
+    elif [ "$RESUME_CERT_MODE" = true ]; then
+        # 傳統恢復模式（向後相容）
+        show_welcome
+        check_team_prerequisites
+        init_environment_and_aws
+        setup_ca_cert_and_environment
+        setup_vpn_endpoint_info
+        setup_user_info
+        generate_client_certificate
+        import_certificate
+        setup_vpn_client
+        show_connection_instructions
+        test_connection
+    else
+        # 傳統完整模式（向後相容）
+        show_welcome
+        check_team_prerequisites
+        init_environment_and_aws
+        setup_ca_cert_and_environment
+        setup_vpn_endpoint_info
+        setup_user_info
+        generate_client_certificate
+        import_certificate
+        setup_vpn_client
+        show_connection_instructions
+        test_connection
+    fi
     
     if [ -n "$LOG_FILE" ]; then
         log_team_setup_message "團隊成員 VPN 設定完成"
     fi
 }
 
+# 解析命令行參數
+parse_arguments() {
+    RESUME_CERT_MODE=false
+    INIT_MODE=false
+    RESUME_MODE=false
+    S3_BUCKET="vpn-csr-exchange"
+    DISABLE_S3=false
+    CA_PATH=""
+    ENDPOINT_ID=""
+    
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --init)
+                INIT_MODE=true
+                shift
+                ;;
+            --resume)
+                RESUME_MODE=true
+                shift
+                ;;
+            --resume-cert)
+                RESUME_CERT_MODE=true
+                shift
+                ;;
+            --bucket)
+                S3_BUCKET="$2"
+                shift 2
+                ;;
+            --no-s3)
+                DISABLE_S3=true
+                shift
+                ;;
+            --ca-path)
+                CA_PATH="$2"
+                shift 2
+                ;;
+            --endpoint-id)
+                ENDPOINT_ID="$2"
+                shift 2
+                ;;
+            -h|--help)
+                show_usage
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}未知參數: $1${NC}"
+                show_usage
+                exit 1
+                ;;
+        esac
+    done
+    
+    # 檢查互斥模式
+    local mode_count=0
+    [ "$INIT_MODE" = true ] && ((mode_count++))
+    [ "$RESUME_MODE" = true ] && ((mode_count++))
+    [ "$RESUME_CERT_MODE" = true ] && ((mode_count++))
+    
+    if [ $mode_count -gt 1 ]; then
+        echo -e "${RED}錯誤: 不能同時使用多個模式${NC}"
+        show_usage
+        exit 1
+    fi
+    
+    # 如果沒有指定模式，預設為 init 模式（零接觸工作流程）
+    if [ $mode_count -eq 0 ]; then
+        INIT_MODE=true
+    fi
+}
+
+# 顯示使用說明
+show_usage() {
+    echo "用法: $0 [選項]"
+    echo ""
+    echo "工作模式:"
+    echo "  --init           初始化模式：從 S3 下載配置，生成 CSR 並上傳 (預設)"
+    echo "  --resume         恢復模式：從 S3 下載簽署證書並完成 VPN 設定"
+    echo "  --resume-cert    舊版恢復模式：使用本地證書繼續設定 (向後相容)"
+    echo ""
+    echo "S3 配置選項:"
+    echo "  --bucket NAME    使用指定的 S3 存儲桶 (預設: vpn-csr-exchange)"
+    echo "  --no-s3          停用 S3 整合，使用本地檔案"
+    echo ""
+    echo "覆蓋選項 (用於測試和特殊情況):"
+    echo "  --ca-path PATH   使用指定的 CA 證書文件，而非從 S3 下載"
+    echo "  --endpoint-id ID 使用指定的端點 ID，而非從 S3 下載的配置"
+    echo ""
+    echo "其他選項:"
+    echo "  -h, --help       顯示此幫助訊息"
+    echo ""
+    echo "使用範例:"
+    echo "  $0               # 零接觸初始化 (從 S3 獲取配置)"
+    echo "  $0 --init        # 明確指定初始化模式"
+    echo "  $0 --resume      # 恢復模式 (管理員簽署證書後)"
+    echo "  $0 --no-s3       # 停用 S3，使用傳統本地檔案模式"
+    echo "  $0 --bucket my-bucket --init  # 使用自定義 S3 存儲桶"
+    echo ""
+    echo "工作流程:"
+    echo "  1. 執行 '$0 --init' 生成 CSR 並上傳到 S3"
+    echo "  2. 等待管理員簽署證書"
+    echo "  3. 執行 '$0 --resume' 下載證書並完成設定"
+}
+
 # 只有在腳本直接執行時才執行主程序（不是被 source 時）
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    parse_arguments "$@"
     main
 fi

@@ -17,6 +17,12 @@ if ! env_init_for_script "aws_vpn_admin.sh"; then
     exit 1
 fi
 
+# 驗證 AWS Profile 整合
+echo -e "${BLUE}正在驗證 AWS Profile 設定...${NC}"
+if ! env_validate_profile_integration "$CURRENT_ENVIRONMENT" "true"; then
+    echo -e "${YELLOW}警告: AWS Profile 設定可能有問題，但繼續執行管理員工具${NC}"
+fi
+
 # 設定環境特定路徑
 env_setup_paths
 
@@ -31,12 +37,69 @@ source "$SCRIPT_DIR/../lib/cert_management.sh"
 source "$SCRIPT_DIR/../lib/endpoint_creation.sh"
 source "$SCRIPT_DIR/../lib/endpoint_management.sh"
 
+# S3 零接觸支援函數
+upload_public_assets_to_s3() {
+    local bucket_name="${1:-vpn-csr-exchange}"
+    
+    # 檢查是否有 publish_endpoints.sh 工具
+    local publish_script="$SCRIPT_DIR/publish_endpoints.sh"
+    if [ -x "$publish_script" ]; then
+        echo -e "${BLUE}正在更新 S3 公用資產...${NC}"
+        if "$publish_script" -b "$bucket_name" -e "$CURRENT_ENV" --force; then
+            echo -e "${GREEN}✓ S3 公用資產已更新${NC}"
+            return 0
+        else
+            echo -e "${YELLOW}⚠ S3 資產更新失敗${NC}"
+            return 1
+        fi
+    else
+        echo -e "${YELLOW}⚠ 找不到 publish_endpoints.sh，跳過 S3 更新${NC}"
+        return 1
+    fi
+}
+
 # 不使用 set -e，改用手動錯誤處理以避免程式意外退出
 
 # 顯示主選單
 show_menu() {
     clear
     show_env_aware_header "AWS Client VPN 管理員控制台"
+    
+    # 顯示 AWS Profile 資訊
+    local current_profile
+    current_profile=$(env_get_profile "$CURRENT_ENVIRONMENT" 2>/dev/null)
+    if [[ -n "$current_profile" ]]; then
+        # 獲取 AWS 帳戶資訊
+        if command -v aws &> /dev/null && aws configure list-profiles | grep -q "^$current_profile$"; then
+            local account_id region
+            account_id=$(aws sts get-caller-identity --profile "$current_profile" --query Account --output text 2>/dev/null)
+            region=$(aws configure get region --profile "$current_profile" 2>/dev/null)
+            
+            echo -e "${CYAN}AWS 配置狀態:${NC}"
+            echo -e "  Profile: ${GREEN}$current_profile${NC}"
+            if [[ -n "$account_id" ]]; then
+                echo -e "  帳戶 ID: ${account_id}"
+            fi
+            if [[ -n "$region" ]]; then
+                echo -e "  區域: ${region}"
+            fi
+            
+            # 驗證 profile 匹配環境
+            if validate_profile_matches_environment "$current_profile" "$CURRENT_ENVIRONMENT" 2>/dev/null; then
+                echo -e "  狀態: ${GREEN}✓ 有效且匹配環境${NC}"
+            else
+                echo -e "  狀態: ${YELLOW}⚠ 有效但可能不匹配環境${NC}"
+            fi
+        else
+            echo -e "${CYAN}AWS 配置狀態:${NC}"
+            echo -e "  Profile: ${RED}$current_profile (不存在)${NC}"
+        fi
+    else
+        echo -e "${CYAN}AWS 配置狀態:${NC}"
+        echo -e "  Profile: ${YELLOW}未設定${NC}"
+    fi
+    echo -e ""
+    
     echo -e "${BLUE}選擇操作：${NC}"
     echo -e "  ${GREEN}1.${NC} 建立新的 VPN 端點"
     echo -e "  ${GREEN}2.${NC} 查看現有 VPN 端點"
@@ -48,6 +111,7 @@ show_menu() {
     echo -e "  ${GREEN}8.${NC} 系統健康檢查"
     echo -e "  ${GREEN}9.${NC} 多 VPC 管理"
     echo -e "  ${YELLOW}E.${NC} 環境管理"
+    echo -e "  ${YELLOW}P.${NC} Profile 管理"
     echo -e "  ${RED}10.${NC} 退出"
     echo -e ""
     echo -e "${CYAN}========================================================${NC}"
@@ -875,6 +939,130 @@ show_admin_guide() {
     read -n 1
 }
 
+# AWS Profile 管理
+manage_aws_profiles() {
+    while true; do
+        clear
+        show_env_aware_header "AWS Profile 管理"
+        
+        # 顯示當前環境的 profile 狀態
+        echo -e "${CYAN}當前環境 Profile 狀態:${NC}"
+        env_get_profile "$CURRENT_ENVIRONMENT" true
+        echo ""
+        
+        echo -e "${BLUE}Profile 管理選項:${NC}"
+        echo -e "  ${GREEN}1.${NC} 設定當前環境的 AWS Profile"
+        echo -e "  ${GREEN}2.${NC} 驗證 Profile 整合"
+        echo -e "  ${GREEN}3.${NC} 查看所有環境的 Profile 設定"
+        echo -e "  ${GREEN}4.${NC} 切換環境並設定 Profile"
+        echo -e "  ${GREEN}5.${NC} Profile 診斷與修復"
+        echo -e "  ${YELLOW}6.${NC} 返回主選單"
+        echo ""
+        echo -e "${CYAN}========================================================${NC}"
+        
+        read -p "請選擇操作 (1-6): " profile_choice
+        
+        case "$profile_choice" in
+            1)
+                # 設定當前環境的 AWS Profile
+                echo -e "\n${CYAN}=== 設定 $CURRENT_ENVIRONMENT 環境的 AWS Profile ===${NC}"
+                local selected_profile
+                selected_profile=$(select_aws_profile_for_environment "$CURRENT_ENVIRONMENT")
+                if [[ $? -eq 0 ]] && [[ -n "$selected_profile" ]]; then
+                    env_set_profile "$CURRENT_ENVIRONMENT" "$selected_profile"
+                    echo -e "\n${GREEN}✅ Profile 設定完成${NC}"
+                else
+                    echo -e "\n${YELLOW}Profile 設定已取消${NC}"
+                fi
+                echo -e "\n${YELLOW}按任意鍵繼續...${NC}"
+                read -n 1
+                ;;
+            2)
+                # 驗證 Profile 整合
+                echo -e "\n${CYAN}=== 驗證 Profile 整合 ===${NC}"
+                env_validate_profile_integration "$CURRENT_ENVIRONMENT" true
+                echo -e "\n${YELLOW}按任意鍵繼續...${NC}"
+                read -n 1
+                ;;
+            3)
+                # 查看所有環境的 Profile 設定
+                echo -e "\n${CYAN}=== 所有環境的 Profile 設定 ===${NC}"
+                for env_dir in "$SCRIPT_DIR/../configs"/*; do
+                    if [[ -d "$env_dir" ]]; then
+                        local env_name=$(basename "$env_dir")
+                        local env_file="$env_dir/${env_name}.env"
+                        if [[ -f "$env_file" ]]; then
+                            source "$env_file"
+                            echo -e "\n${ENV_ICON:-⚪} ${ENV_DISPLAY_NAME:-$env_name}:"
+                            env_get_profile "$env_name" true 2>/dev/null || echo -e "  ${YELLOW}未設定 Profile${NC}"
+                        fi
+                    fi
+                done
+                echo -e "\n${YELLOW}按任意鍵繼續...${NC}"
+                read -n 1
+                ;;
+            4)
+                # 切換環境並設定 Profile
+                echo -e "\n${CYAN}=== 切換環境並設定 Profile ===${NC}"
+                echo -e "可用環境:"
+                echo -e "  1) staging - Staging Environment 🟡"
+                echo -e "  2) production - Production Environment 🔴"
+                echo ""
+                read -p "請選擇目標環境 (1-2): " env_choice
+                
+                local target_env=""
+                case "$env_choice" in
+                    1) target_env="staging" ;;
+                    2) target_env="production" ;;
+                    *)
+                        echo -e "${RED}無效選擇${NC}"
+                        sleep 1
+                        continue
+                        ;;
+                esac
+                
+                if env_switch_with_profile "$target_env"; then
+                    echo -e "\n${GREEN}✅ 環境切換並 Profile 設定完成${NC}"
+                    echo -e "請重新啟動管理員工具以使用新環境"
+                    echo -e "\n${YELLOW}按任意鍵返回主選單...${NC}"
+                    read -n 1
+                    return 0
+                else
+                    echo -e "\n${RED}環境切換失敗${NC}"
+                    echo -e "\n${YELLOW}按任意鍵繼續...${NC}"
+                    read -n 1
+                fi
+                ;;
+            5)
+                # Profile 診斷與修復
+                echo -e "\n${CYAN}=== Profile 診斷與修復 ===${NC}"
+                echo -e "${BLUE}檢查所有環境的 Profile 健康狀態...${NC}"
+                
+                for env_dir in "$SCRIPT_DIR/../configs"/*; do
+                    if [[ -d "$env_dir" ]]; then
+                        local env_name=$(basename "$env_dir")
+                        local env_file="$env_dir/${env_name}.env"
+                        if [[ -f "$env_file" ]]; then
+                            echo -e "\n=== $env_name 環境 ==="
+                            env_validate_profile_integration "$env_name" true
+                        fi
+                    fi
+                done
+                
+                echo -e "\n${YELLOW}按任意鍵繼續...${NC}"
+                read -n 1
+                ;;
+            6)
+                return 0
+                ;;
+            *)
+                echo -e "${RED}無效選擇，請重試。${NC}"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
 # 主函數
 main() {
     # 檢查必要工具
@@ -916,7 +1104,7 @@ main() {
     # 主循環
     while true; do
         show_menu
-        read -p "請選擇操作 (1-10, E): " choice
+        read -p "請選擇操作 (1-10, E, P): " choice
         
         case "$choice" in
             1)
@@ -951,6 +1139,9 @@ main() {
                 "$SCRIPT_DIR/../vpn_env.sh"
                 echo -e "\n${YELLOW}按任意鍵返回主選單...${NC}"
                 read -n 1
+                ;;
+            P|p)
+                manage_aws_profiles
                 ;;
             10)
                 echo -e "${BLUE}正在退出...${NC}"

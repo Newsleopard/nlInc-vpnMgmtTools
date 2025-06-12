@@ -31,6 +31,40 @@ validate_vpc_id() {
     return 0
 }
 
+# ===========================
+# AWS CLI wrapper functions
+# ===========================
+aws_with_profile() {
+    local profile="${AWS_PROFILE:-${ENV_AWS_PROFILE:-default}}"
+
+    # Validate profile exists
+    if ! aws configure list-profiles 2>/dev/null | grep -q "^${profile}\$"; then
+        echo -e "${RED}Error: AWS profile '${profile}' not found${NC}" >&2
+        return 1
+    fi
+
+    aws "$@" --profile "$profile"
+}
+
+aws_with_env_profile() {
+    local environment="$1"
+    shift
+
+    # Obtain mapped profile if helper available
+    local profile=""
+    if command -v get_env_profile >/dev/null 2>&1; then
+        profile="$(get_env_profile "$environment")"
+    fi
+    profile="${profile:-${AWS_PROFILE:-default}}"
+
+    # Cross-account validation if helper exists
+    if command -v validate_profile_matches_environment >/dev/null 2>&1; then
+        validate_profile_matches_environment "$profile" "$environment" || return 1
+    fi
+
+    AWS_PROFILE="$profile" aws "$@" --profile "$profile"
+}
+
 # Validate date format (YYYY-MM-DD) - Portable
 # Returns 0 if valid, 1 if invalid
 validate_date_format_yyyy_mm_dd() {

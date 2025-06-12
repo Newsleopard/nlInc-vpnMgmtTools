@@ -53,6 +53,29 @@ env_current() {
         echo -e "最後切換: ${LAST_SWITCHED_TIME:-未知}"
         echo -e "切換者: ${SWITCHED_BY:-未知}"
         
+        # 顯示 AWS Profile 資訊
+        local current_profile
+        current_profile=$(get_env_profile "$CURRENT_ENVIRONMENT" 2>/dev/null)
+        if [[ -n "$current_profile" ]]; then
+            echo -e "AWS Profile: ${GREEN}$current_profile${NC}"
+            
+            # 顯示 AWS 帳戶資訊
+            if command -v aws &> /dev/null && aws configure list-profiles | grep -q "^$current_profile$"; then
+                local account_id region
+                account_id=$(aws sts get-caller-identity --profile "$current_profile" --query Account --output text 2>/dev/null)
+                region=$(aws configure get region --profile "$current_profile" 2>/dev/null)
+                
+                if [[ -n "$account_id" ]]; then
+                    echo -e "AWS 帳戶: ${account_id}"
+                fi
+                if [[ -n "$region" ]]; then
+                    echo -e "AWS 區域: ${region}"
+                fi
+            fi
+        else
+            echo -e "AWS Profile: ${YELLOW}未設定${NC}"
+        fi
+        
         # 檢查環境健康狀態
         if env_health_check "${CURRENT_ENVIRONMENT}"; then
             echo -e "狀態: ${GREEN}🟢 健康${NC}"
@@ -201,10 +224,20 @@ get_env_display_info() {
 # 環境健康檢查
 env_health_check() {
     local env_name="$1"
+    local verbose="${2:-false}"
     local env_file="$PROJECT_ROOT/configs/${env_name}/${env_name}.env"
+    
+    local health_status=0
+    
+    if [[ "$verbose" == "true" ]]; then
+        echo -e "${BLUE}檢查 $env_name 環境健康狀態...${NC}"
+    fi
     
     # 基本檢查：配置檔案存在
     if [[ ! -f "$env_file" ]]; then
+        if [[ "$verbose" == "true" ]]; then
+            echo -e "${RED}✗ 環境配置檔案不存在: $env_file${NC}"
+        fi
         return 1
     fi
     
@@ -212,17 +245,81 @@ env_health_check() {
     source "$env_file"
     local cert_dir="$PROJECT_ROOT/$CERT_DIR"
     local config_dir="$PROJECT_ROOT/$CONFIG_DIR"
+    local log_dir="$PROJECT_ROOT/$LOG_DIR"
     
     # 檢查目錄是否存在且可寫入
     if [[ ! -d "$cert_dir" ]] || [[ ! -w "$cert_dir" ]]; then
-        return 1
+        if [[ "$verbose" == "true" ]]; then
+            echo -e "${RED}✗ 證書目錄問題: $cert_dir${NC}"
+        fi
+        health_status=1
+    elif [[ "$verbose" == "true" ]]; then
+        echo -e "${GREEN}✓ 證書目錄正常${NC}"
     fi
     
     if [[ ! -d "$config_dir" ]] || [[ ! -w "$config_dir" ]]; then
-        return 1
+        if [[ "$verbose" == "true" ]]; then
+            echo -e "${RED}✗ 配置目錄問題: $config_dir${NC}"
+        fi
+        health_status=1
+    elif [[ "$verbose" == "true" ]]; then
+        echo -e "${GREEN}✓ 配置目錄正常${NC}"
     fi
     
-    return 0
+    if [[ ! -d "$log_dir" ]] || [[ ! -w "$log_dir" ]]; then
+        if [[ "$verbose" == "true" ]]; then
+            echo -e "${YELLOW}⚠ 日誌目錄問題: $log_dir${NC}"
+        fi
+        # Log directory issue is not critical
+    elif [[ "$verbose" == "true" ]]; then
+        echo -e "${GREEN}✓ 日誌目錄正常${NC}"
+    fi
+    
+    # 檢查 AWS Profile 配置
+    local profile
+    profile=$(get_env_profile "$env_name" 2>/dev/null)
+    
+    if [[ -n "$profile" ]]; then
+        if command -v aws &> /dev/null; then
+            # 檢查 profile 是否存在
+            if ! aws configure list-profiles | grep -q "^$profile$"; then
+                if [[ "$verbose" == "true" ]]; then
+                    echo -e "${RED}✗ AWS profile '$profile' 不存在${NC}"
+                fi
+                health_status=1
+            else
+                # 檢查 profile 是否可以通過身份驗證
+                if aws sts get-caller-identity --profile "$profile" &>/dev/null; then
+                    if [[ "$verbose" == "true" ]]; then
+                        echo -e "${GREEN}✓ AWS profile '$profile' 有效${NC}"
+                        
+                        # 檢查跨帳戶驗證
+                        if validate_profile_matches_environment "$profile" "$env_name" 2>/dev/null; then
+                            echo -e "${GREEN}✓ Profile 帳戶匹配環境${NC}"
+                        else
+                            echo -e "${YELLOW}⚠ Profile 可能不匹配環境帳戶${NC}"
+                        fi
+                    fi
+                else
+                    if [[ "$verbose" == "true" ]]; then
+                        echo -e "${RED}✗ AWS profile '$profile' 無法通過身份驗證${NC}"
+                    fi
+                    health_status=1
+                fi
+            fi
+        else
+            if [[ "$verbose" == "true" ]]; then
+                echo -e "${YELLOW}⚠ AWS CLI 未安裝，無法驗證 profile${NC}"
+            fi
+        fi
+    else
+        if [[ "$verbose" == "true" ]]; then
+            echo -e "${YELLOW}⚠ 未設定 AWS profile${NC}"
+        fi
+        # Missing profile is not critical for basic health check
+    fi
+    
+    return $health_status
 }
 
 # 列出所有可用環境
@@ -544,6 +641,316 @@ env_aware_operation() {
     return 0
 }
 
+# =======================================
+# Profile Management Integration (Phase 2)
+# =======================================
+
+# Load core functions for profile management
+if [[ -f "$SCRIPT_DIR/core_functions.sh" ]]; then
+    source "$SCRIPT_DIR/core_functions.sh"
+fi
+
+if [[ -f "$SCRIPT_DIR/env_core.sh" ]]; then
+    source "$SCRIPT_DIR/env_core.sh"
+fi
+
+# Set AWS profile for specific environment
+env_set_profile() {
+    local environment="$1"
+    local profile="$2"
+    local force="${3:-false}"
+    
+    if [[ -z "$environment" ]] || [[ -z "$profile" ]]; then
+        echo -e "${RED}錯誤: 請指定環境和 AWS profile${NC}" >&2
+        echo "使用方式: env_set_profile <environment> <profile> [force]"
+        return 1
+    fi
+    
+    # Validate environment exists
+    local env_file="$PROJECT_ROOT/configs/${environment}/${environment}.env"
+    if [[ ! -f "$env_file" ]]; then
+        echo -e "${RED}錯誤: 環境 '$environment' 不存在${NC}" >&2
+        return 1
+    fi
+    
+    # Validate AWS profile exists and is valid
+    if ! validate_aws_profile_config "$profile" "$environment"; then
+        if [[ "$force" != "true" ]]; then
+            echo -e "${RED}錯誤: AWS profile '$profile' 無效或無法通過驗證${NC}" >&2
+            return 1
+        else
+            echo -e "${YELLOW}警告: 強制設定 profile '$profile'，即使驗證失敗${NC}" >&2
+        fi
+    fi
+    
+    # Save profile to environment configuration
+    if save_profile_to_config "$environment" "$profile"; then
+        echo -e "${GREEN}✅ 已設定 $environment 環境的 AWS profile 為 '$profile'${NC}"
+        
+        # If this is the current environment, update active profile
+        load_current_env
+        if [[ "$CURRENT_ENVIRONMENT" == "$environment" ]]; then
+            export AWS_PROFILE="$profile"
+            export ENV_AWS_PROFILE="$profile"
+            echo -e "${GREEN}✅ 已更新當前環境的活躍 profile${NC}"
+        fi
+        
+        # Log the profile change
+        log_env_action "PROFILE_SET" "Set AWS profile '$profile' for $environment environment"
+        return 0
+    else
+        echo -e "${RED}錯誤: 無法保存 profile 配置${NC}" >&2
+        return 1
+    fi
+}
+
+# Get current AWS profile for environment
+env_get_profile() {
+    local environment="${1:-$CURRENT_ENVIRONMENT}"
+    local show_details="${2:-false}"
+    
+    if [[ -z "$environment" ]]; then
+        load_current_env
+        environment="$CURRENT_ENVIRONMENT"
+    fi
+    
+    # Get profile from environment configuration
+    local profile
+    profile=$(get_env_profile "$environment")
+    
+    if [[ -z "$profile" ]]; then
+        echo -e "${YELLOW}警告: $environment 環境未設定 AWS profile${NC}" >&2
+        return 1
+    fi
+    
+    if [[ "$show_details" == "true" ]]; then
+        echo -e "${BLUE}$environment 環境的 AWS profile:${NC}"
+        echo -e "  Profile: ${GREEN}$profile${NC}"
+        
+        # Show profile details if valid
+        if aws configure list-profiles | grep -q "^$profile$"; then
+            local account_id region
+            account_id=$(aws sts get-caller-identity --profile "$profile" --query Account --output text 2>/dev/null)
+            region=$(aws configure get region --profile "$profile" 2>/dev/null)
+            
+            echo -e "  帳戶 ID: ${account_id:-未知}"
+            echo -e "  區域: ${region:-預設}"
+            
+            # Validate profile matches environment
+            if validate_profile_matches_environment "$profile" "$environment" 2>/dev/null; then
+                echo -e "  狀態: ${GREEN}✓ 有效且匹配環境${NC}"
+            else
+                echo -e "  狀態: ${YELLOW}⚠ 有效但可能不匹配環境${NC}"
+            fi
+        else
+            echo -e "  狀態: ${RED}✗ Profile 不存在${NC}"
+        fi
+    else
+        echo "$profile"
+    fi
+    
+    return 0
+}
+
+# Validate profile integration for environment
+env_validate_profile_integration() {
+    local environment="${1:-$CURRENT_ENVIRONMENT}"
+    local fix_issues="${2:-false}"
+    
+    if [[ -z "$environment" ]]; then
+        load_current_env
+        environment="$CURRENT_ENVIRONMENT"
+    fi
+    
+    echo -e "${BLUE}驗證 $environment 環境的 AWS profile 整合...${NC}"
+    
+    local profile
+    profile=$(get_env_profile "$environment")
+    
+    if [[ -z "$profile" ]]; then
+        echo -e "${RED}✗ 環境 $environment 未設定 AWS profile${NC}"
+        if [[ "$fix_issues" == "true" ]]; then
+            echo -e "${BLUE}嘗試自動修復...${NC}"
+            if profile=$(select_aws_profile_for_environment "$environment"); then
+                env_set_profile "$environment" "$profile"
+                echo -e "${GREEN}✅ 已自動設定 profile: $profile${NC}"
+            else
+                echo -e "${RED}無法自動修復 profile 設定${NC}"
+                return 1
+            fi
+        else
+            return 1
+        fi
+    fi
+    
+    # Validate profile exists
+    if ! aws configure list-profiles | grep -q "^$profile$"; then
+        echo -e "${RED}✗ AWS profile '$profile' 不存在${NC}"
+        return 1
+    fi
+    
+    # Validate profile authentication
+    if ! aws sts get-caller-identity --profile "$profile" &>/dev/null; then
+        echo -e "${RED}✗ AWS profile '$profile' 無法通過身份驗證${NC}"
+        return 1
+    fi
+    
+    # Cross-account validation
+    if ! validate_profile_matches_environment "$profile" "$environment"; then
+        echo -e "${YELLOW}⚠ Profile 可能不匹配環境 (帳戶 ID 驗證失敗)${NC}"
+        if [[ "$fix_issues" == "true" ]]; then
+            echo -e "${BLUE}建議重新選擇 profile...${NC}"
+            if new_profile=$(select_aws_profile_for_environment "$environment" true); then
+                env_set_profile "$environment" "$new_profile"
+                echo -e "${GREEN}✅ 已更新 profile: $new_profile${NC}"
+            fi
+        fi
+    else
+        echo -e "${GREEN}✅ Profile 驗證通過${NC}"
+    fi
+    
+    # Validate environment configuration consistency
+    local env_file="$PROJECT_ROOT/configs/${environment}/${environment}.env"
+    if [[ -f "$env_file" ]]; then
+        source "$env_file"
+        if [[ "$AWS_PROFILE" != "$profile" ]] || [[ "$ENV_AWS_PROFILE" != "$profile" ]]; then
+            echo -e "${YELLOW}⚠ 環境配置文件中的 profile 設定不一致${NC}"
+            if [[ "$fix_issues" == "true" ]]; then
+                save_profile_to_config "$environment" "$profile"
+                echo -e "${GREEN}✅ 已修復配置文件中的 profile 設定${NC}"
+            fi
+        fi
+    fi
+    
+    echo -e "${GREEN}✅ $environment 環境的 profile 整合驗證完成${NC}"
+    log_env_action "PROFILE_VALIDATED" "Profile integration validated for $environment environment"
+    return 0
+}
+
+# Load environment with automatic profile setup
+env_load_with_profile() {
+    local env_name="${1:-$CURRENT_ENVIRONMENT}"
+    local auto_fix="${2:-false}"
+    
+    if [[ -z "$env_name" ]]; then
+        load_current_env
+        env_name="$CURRENT_ENVIRONMENT"
+    fi
+    
+    echo -e "${BLUE}載入 $env_name 環境並設定 AWS profile...${NC}"
+    
+    # First load the environment configuration normally
+    if ! env_load_config "$env_name"; then
+        echo -e "${RED}錯誤: 無法載入環境配置${NC}" >&2
+        return 1
+    fi
+    
+    # Validate and setup profile integration
+    if ! env_validate_profile_integration "$env_name" "$auto_fix"; then
+        if [[ "$auto_fix" != "true" ]]; then
+            echo -e "${YELLOW}警告: Profile 整合驗證失敗，建議使用 --auto-fix 選項${NC}" >&2
+        else
+            echo -e "${RED}錯誤: 無法修復 profile 整合問題${NC}" >&2
+            return 1
+        fi
+    fi
+    
+    # Load profile from configuration
+    if load_profile_from_config "$env_name"; then
+        echo -e "${GREEN}✅ 已載入 $env_name 環境並設定 AWS profile${NC}"
+        echo -e "  環境: $(get_env_display_info "$env_name")"
+        echo -e "  AWS Profile: ${AWS_PROFILE:-未設定}"
+        
+        # Log the environment load with profile
+        log_env_action "ENV_LOADED_WITH_PROFILE" "Environment $env_name loaded with AWS profile: ${AWS_PROFILE:-none}"
+        return 0
+    else
+        echo -e "${YELLOW}警告: 環境已載入但未能設定 AWS profile${NC}" >&2
+        return 1
+    fi
+}
+
+# Switch environments with profile validation
+env_switch_with_profile() {
+    local target_env="$1"
+    local validate_profile="${2:-true}"
+    
+    if [[ -z "$target_env" ]]; then
+        echo -e "${RED}錯誤: 請指定目標環境 (staging 或 production)${NC}" >&2
+        return 1
+    fi
+    
+    # First validate the target environment exists
+    local target_env_file="$PROJECT_ROOT/configs/${target_env}/${target_env}.env"
+    if [[ ! -f "$target_env_file" ]]; then
+        echo -e "${RED}錯誤: 環境 '$target_env' 不存在${NC}" >&2
+        return 1
+    fi
+    
+    load_current_env
+    
+    # Check if already in target environment
+    if [[ "$CURRENT_ENVIRONMENT" == "$target_env" ]]; then
+        echo -e "${YELLOW}已經在 $target_env 環境中${NC}"
+        # Still validate profile integration
+        if [[ "$validate_profile" == "true" ]]; then
+            env_validate_profile_integration "$target_env"
+        fi
+        env_current
+        return 0
+    fi
+    
+    # Validate profile integration for target environment
+    if [[ "$validate_profile" == "true" ]]; then
+        echo -e "${BLUE}驗證目標環境的 AWS profile 設定...${NC}"
+        if ! env_validate_profile_integration "$target_env" "true"; then
+            echo -e "${RED}錯誤: 目標環境的 profile 設定有問題${NC}" >&2
+            echo -e "${YELLOW}建議先使用 env_set_profile 設定正確的 AWS profile${NC}" >&2
+            return 1
+        fi
+    fi
+    
+    # Show enhanced switch confirmation with profile information
+    source "$target_env_file"
+    local target_icon="${ENV_ICON:-⚪}"
+    local target_display_name="${ENV_DISPLAY_NAME:-$target_env}"
+    local target_profile=$(get_env_profile "$target_env")
+    
+    echo -e "\n🔄 ${BLUE}環境切換確認 (含 AWS Profile)${NC}"
+    echo -e "從: $(get_env_display_info "$CURRENT_ENVIRONMENT")"
+    echo -e "到: ${target_icon} ${target_display_name}"
+    echo -e "AWS Profile: ${target_profile:-未設定}"
+    echo ""
+    echo "此操作將："
+    echo "• 切換所有後續操作到 $target_env 環境"
+    echo "• 載入 $target_env 環境配置"
+    echo "• 設定 AWS profile 為 '${target_profile:-未設定}'"
+    echo "• 記錄環境切換歷史"
+    echo ""
+    
+    # Use enhanced confirmation system
+    if ! smart_operation_confirmation "SWITCH_ENVIRONMENT_WITH_PROFILE" "$target_env" 1 "切換到 $target_env 環境並設定 AWS profile"; then
+        echo -e "${YELLOW}環境切換已取消${NC}"
+        return 1
+    fi
+    
+    # Perform the environment switch
+    if perform_env_switch "$target_env"; then
+        # Load with profile integration
+        if env_load_with_profile "$target_env" "true"; then
+            echo -e "${GREEN}✅ 環境切換成功 (含 AWS profile 設定)${NC}"
+            env_current
+            log_env_action "ENV_SWITCHED_WITH_PROFILE" "Switched to $target_env environment with AWS profile: ${AWS_PROFILE:-none}"
+        else
+            echo -e "${YELLOW}⚠ 環境切換成功但 profile 設定有問題${NC}"
+            env_current
+        fi
+    else
+        echo -e "${RED}❌ 環境切換失敗${NC}"
+        return 1
+    fi
+}
+
 # 主程式入口點
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     case "${1:-}" in
@@ -553,8 +960,14 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
         switch)
             env_switch "$2"
             ;;
+        switch-with-profile)
+            env_switch_with_profile "$2" "${3:-true}"
+            ;;
         load)
             env_load_config "$2"
+            ;;
+        load-with-profile)
+            env_load_with_profile "$2" "${3:-false}"
             ;;
         list)
             env_list
@@ -566,19 +979,41 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
             env_init
             ;;
         health)
-            env_health_check "$2"
+            env_health_check "$2" "${3:-false}"
+            ;;
+        set-profile)
+            env_set_profile "$2" "$3" "${4:-false}"
+            ;;
+        get-profile)
+            env_get_profile "$2" "${3:-false}"
+            ;;
+        validate-profile)
+            env_validate_profile_integration "$2" "${3:-false}"
             ;;
         *)
-            echo "使用方式: $0 {current|switch <env>|load <env>|list|selector|init|health <env>}"
+            echo "使用方式: $0 {current|switch <env>|load <env>|list|selector|init|health <env>|profile commands}"
             echo ""
-            echo "命令說明:"
-            echo "  current          顯示當前環境狀態"
-            echo "  switch <env>     切換到指定環境"
-            echo "  load <env>       載入環境配置"
-            echo "  list             列出所有可用環境"
-            echo "  selector         啟動互動式環境選擇器"
-            echo "  init             初始化環境管理器"
-            echo "  health <env>     檢查環境健康狀態"
+            echo "基本命令:"
+            echo "  current                          顯示當前環境狀態"
+            echo "  switch <env>                     切換到指定環境"
+            echo "  switch-with-profile <env>        切換環境並驗證 AWS profile"
+            echo "  load <env>                       載入環境配置"
+            echo "  load-with-profile <env> [fix]    載入環境並設定 AWS profile"
+            echo "  list                             列出所有可用環境"
+            echo "  selector                         啟動互動式環境選擇器"
+            echo "  init                             初始化環境管理器"
+            echo "  health <env> [verbose]           檢查環境健康狀態"
+            echo ""
+            echo "Profile 管理命令:"
+            echo "  set-profile <env> <profile> [force]     設定環境的 AWS profile"
+            echo "  get-profile [env] [details]             取得環境的 AWS profile"
+            echo "  validate-profile [env] [fix]            驗證環境的 profile 整合"
+            echo ""
+            echo "範例:"
+            echo "  $0 set-profile staging default          設定 staging 環境使用 default profile"
+            echo "  $0 get-profile production true          顯示 production 環境的詳細 profile 資訊"
+            echo "  $0 validate-profile staging true        驗證並自動修復 staging 環境的 profile"
+            echo "  $0 health staging true                   詳細檢查 staging 環境健康狀態"
             exit 1
             ;;
     esac
