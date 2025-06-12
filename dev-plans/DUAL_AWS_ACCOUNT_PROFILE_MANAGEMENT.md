@@ -16,6 +16,24 @@ This document outlines the comprehensive plan for implementing dual AWS account 
 - **Basic Profile Support**: Limited AWS profile handling via `--profile` parameters
 - **Environment Detection**: Basic environment detection from CA certificates and file paths
 - **Configuration Management**: Environment-specific configurations in `configs/staging/` and `configs/production/`
+- **Environment Manager Integration**: Existing `lib/env_manager.sh` system used by admin tools
+- **Partial Implementation**: `lib/env_core.sh` already contains some profile detection functions
+
+### Current Implementation Status
+**Already Implemented:**
+- `detect_available_aws_profiles()` in `lib/env_core.sh` - Lists and validates AWS profiles
+- `detect_environment_from_profile()` - Maps profile names to environments  
+- `validate_aws_profile_config()` - Validates profile configuration
+- Profile selection in `team_member_setup.sh` using `SELECTED_AWS_PROFILE`
+- Environment manager system in admin tools
+
+**Missing Implementation:**
+- Standardized profile variable naming across all scripts
+- Profile persistence in configuration files
+- AWS CLI command updates with `--profile` parameter
+- Integration between profile management and environment manager
+- S3 zero-touch workflow profile awareness
+- Cross-account validation and safety measures
 
 ### Key Files to Modify
 1. **`team_member_setup.sh`** - Main user-facing script requiring profile intelligence
@@ -53,48 +71,124 @@ staging → [default, staging, stage]
 production → [production, prod, prd]
 ```
 
+### 4. Standardized Variable Naming
+- **Primary**: `AWS_PROFILE` (standard AWS CLI environment variable)
+- **Environment Override**: `ENV_AWS_PROFILE` (environment-specific override)
+- **Legacy Support**: `SELECTED_AWS_PROFILE` (backward compatibility)
+
+### 5. Profile Detection Priority Order
+1. Existing configuration files (`configs/staging/staging.env`, `configs/production/production.env`)
+2. AWS CLI default profile
+3. Profile name pattern matching
+4. User manual selection
+5. Fallback to environment-based defaults
+
 ## Implementation Plan
 
 ### Phase 1: Core Profile Management Functions
 
 #### 1.1 Enhanced Profile Detection (`lib/env_core.sh`)
 ```bash
+# Enhanced existing functions:
+detect_available_aws_profiles()          # Already exists - enhance with validation
+detect_environment_from_profile()        # Already exists - enhance mapping logic
+validate_aws_profile_config()            # Already exists - add environment validation
+
 # New functions to add:
-detect_available_aws_profiles()
 map_environment_to_profiles()
 validate_profile_environment_match()
 select_aws_profile_for_environment()
+load_profile_from_config()
+save_profile_to_config()
+
+# Integration functions:
+integrate_with_env_manager()
+aws_with_profile()                       # Wrapper for AWS CLI commands
 ```
 
 **Features:**
-- Scan `~/.aws/credentials` for available profiles
-- Map profile names to environments using naming conventions
-- Validate profile permissions for target environment
-- Interactive profile selection with confirmation
+- Scan `~/.aws/credentials` for available profiles (✓ exists)
+- Map profile names to environments using naming conventions (✓ exists, needs enhancement)
+- Validate profile permissions for target environment (enhance existing)
+- Interactive profile selection with confirmation (✓ exists)
+- Integration with existing environment manager system
+- AWS CLI command wrapper for consistent profile usage
 
-#### 1.2 Profile Validation System
+#### 1.2 Enhanced Profile Validation System
 ```bash
-# Validation functions:
-validate_aws_profile_config()
+# Enhanced validation functions:
+validate_aws_profile_config()           # Already exists - enhance
 test_profile_permissions()
 verify_profile_environment_access()
+validate_profile_matches_environment()  # Cross-account validation
+validate_s3_profile_access()           # S3-specific validation
 ```
 
 **Validation Checks:**
-- Profile exists in AWS credentials
-- Profile has valid AWS credentials
+- Profile exists in AWS credentials (✓ exists)
+- Profile has valid AWS credentials (✓ exists)
 - Profile has permissions for target environment operations
 - Profile can access environment-specific resources (S3 buckets, VPN endpoints)
+- Cross-account access prevention
+- Environment-specific permission validation
+- S3 bucket access validation for zero-touch workflow
+
+**Cross-Account Validation:**
+```bash
+validate_profile_matches_environment() {
+    local profile=$1
+    local environment=$2
+    local account_id=$(aws sts get-caller-identity --profile "$profile" --query Account --output text)
+    
+    case "$environment" in
+        staging)
+            [[ "$account_id" == "$STAGING_ACCOUNT_ID" ]] || return 1
+            ;;
+        production)
+            [[ "$account_id" == "$PRODUCTION_ACCOUNT_ID" ]] || return 1
+            ;;
+    esac
+}
+```
 
 #### 1.3 Smart Profile Selection Logic
 ```bash
-# Selection algorithm:
-1. Detect target environment (staging/production)
-2. Scan available AWS profiles
-3. Map profiles to environments based on naming conventions
-4. Validate profile permissions
-5. Present user with intelligent defaults
-6. Allow manual override if needed
+# Enhanced selection algorithm:
+1. Check existing configuration files for saved profile
+2. Detect target environment (staging/production)
+3. Scan available AWS profiles
+4. Map profiles to environments based on naming conventions
+5. Validate profile permissions and cross-account access
+6. Present user with intelligent defaults
+7. Allow manual override if needed
+8. Save selection to environment configuration
+```
+
+#### 1.4 Environment Manager Integration
+```bash
+# Integration with lib/env_manager.sh:
+integrate_profile_with_env_manager() {
+    local environment=$1
+    local profile=$2
+    
+    # Update environment manager with profile information
+    env_set_profile "$environment" "$profile"
+    
+    # Validate integration
+    env_validate_profile_integration "$environment" "$profile"
+}
+```
+
+#### 1.5 AWS CLI Wrapper System
+```bash
+# Consistent AWS CLI usage across all scripts:
+aws_with_profile() {
+    local profile="${AWS_PROFILE:-${ENV_AWS_PROFILE:-default}}"
+    aws "$@" --profile "$profile"
+}
+
+# Usage example:
+aws_with_profile ec2 describe-client-vpn-endpoints --region "$AWS_REGION"
 ```
 
 ### Phase 2: User Experience Enhancements
@@ -173,6 +267,35 @@ Are you absolutely sure you want to continue? (type 'CONFIRM'): CONFIRM
 - Support for environment-specific S3 buckets
 - Cross-environment access validation
 
+**Zero-Touch Workflow S3 Profile Handling:**
+```bash
+# Enhanced S3 operations for zero-touch workflow:
+s3_upload_with_profile() {
+    local file_path=$1
+    local s3_path=$2
+    local profile="${AWS_PROFILE:-${ENV_AWS_PROFILE:-default}}"
+    
+    # Validate S3 access before upload
+    validate_s3_profile_access "$profile" "$S3_BUCKET"
+    
+    aws s3 cp "$file_path" "$s3_path" --profile "$profile"
+}
+
+s3_download_with_profile() {
+    local s3_path=$1
+    local local_path=$2
+    local profile="${AWS_PROFILE:-${ENV_AWS_PROFILE:-default}}"
+    
+    aws s3 cp "$s3_path" "$local_path" --profile "$profile"
+}
+```
+
+**S3 Profile Validation:**
+- Validate bucket access permissions
+- Check environment-specific bucket policies
+- Prevent cross-environment S3 operations
+- Enhanced error handling for S3 profile issues
+
 ### Phase 4: Safety and Security Features
 
 #### 4.1 Production Safety Measures
@@ -200,7 +323,7 @@ confirm_production_operation() {
 
 #### 4.3 Permission Validation
 ```bash
-# Pre-operation checks:
+# Enhanced pre-operation checks:
 validate_profile_permissions() {
     local profile="$1"
     local environment="$2"
@@ -208,13 +331,42 @@ validate_profile_permissions() {
     # Test basic AWS connectivity
     aws sts get-caller-identity --profile "$profile" >/dev/null
     
+    # Validate account matches environment
+    validate_profile_matches_environment "$profile" "$environment"
+    
     # Test environment-specific permissions
     case "$environment" in
         staging)
             # Validate staging-specific permissions
+            aws ec2 describe-client-vpn-endpoints --profile "$profile" --region "$AWS_REGION" >/dev/null
+            aws s3 ls "s3://$STAGING_S3_BUCKET" --profile "$profile" >/dev/null
             ;;
         production)
             # Validate production-specific permissions
+            aws ec2 describe-client-vpn-endpoints --profile "$profile" --region "$AWS_REGION" >/dev/null
+            aws s3 ls "s3://$PRODUCTION_S3_BUCKET" --profile "$profile" >/dev/null
+            ;;
+    esac
+}
+
+# Enhanced error recovery:
+handle_profile_permission_failure() {
+    local profile=$1
+    local environment=$2
+    local error_type=$3
+    
+    case "$error_type" in
+        "account_mismatch")
+            echo "❌ Profile '$profile' belongs to wrong AWS account for $environment"
+            suggest_correct_profiles "$environment"
+            ;;
+        "insufficient_permissions")
+            echo "❌ Profile '$profile' lacks required permissions for $environment"
+            suggest_permission_fixes "$profile" "$environment"
+            ;;
+        "network_error")
+            echo "❌ Network connectivity issues with profile '$profile'"
+            suggest_connectivity_fixes
             ;;
     esac
 }
@@ -329,17 +481,54 @@ detect_environment_mismatch() {
 - Maintain compatibility with existing single-profile setups
 - Graceful fallback for users with only one AWS profile
 - Preserve existing configuration files and workflows
+- Support legacy `SELECTED_AWS_PROFILE` variable naming
 
 ### 2. Gradual Rollout
-1. **Phase 1**: Deploy core profile management functions
-2. **Phase 2**: Update `team_member_setup.sh` with smart detection
-3. **Phase 3**: Enhance admin tools with profile awareness
-4. **Phase 4**: Add advanced safety features and validation
+1. **Phase 1**: Update `lib/env_core.sh` with enhanced profile management functions
+2. **Phase 2**: Integrate with `lib/env_manager.sh` for admin tools
+3. **Phase 3**: Update all admin tools to use profile-aware AWS commands
+4. **Phase 4**: Enhance `team_member_setup.sh` with full dual-profile support
+5. **Phase 5**: Add safety features and validation
 
-### 3. User Migration Guide
+### 3. User Migration Support
 - Documentation for setting up dual AWS profiles
 - Migration scripts for existing single-profile users
 - Training materials for new dual-environment workflow
+
+#### 3.1 Migration Script for Existing Users
+```bash
+#!/bin/bash
+# migrate_to_dual_profile.sh
+migrate_existing_user() {
+    local current_profile=$(aws configure list-profiles | head -1)
+    local environment=$(detect_current_environment)
+    
+    echo "Migrating from single profile setup..."
+    echo "Current profile: $current_profile"
+    echo "Detected environment: $environment"
+    
+    # Save current profile to environment config
+    save_profile_to_config "$environment" "$current_profile"
+    
+    # Guide user through second profile setup
+    setup_second_environment_profile "$environment"
+}
+```
+
+#### 3.2 Configuration File Migration
+```bash
+# Automatically update existing config files:
+migrate_config_files() {
+    # Add AWS_PROFILE to existing environment configs
+    for env_config in configs/*/*.env; do
+        if [ -f "$env_config" ] && ! grep -q "AWS_PROFILE" "$env_config"; then
+            local env_name=$(basename $(dirname "$env_config"))
+            local default_profile=$(get_env_default_profile "$env_name")
+            echo "AWS_PROFILE=$default_profile" >> "$env_config"
+        fi
+    done
+}
+```
 
 ## Documentation Updates
 
@@ -377,25 +566,29 @@ detect_environment_mismatch() {
 
 ## Implementation Timeline
 
-### Week 1-2: Core Infrastructure
-- Implement profile detection and validation functions
-- Create environment mapping logic
-- Add basic profile selection interface
+### Week 1-2: Core Infrastructure (Updated Priority)
+- Enhance existing `lib/env_core.sh` profile management functions
+- Implement AWS CLI wrapper system (`aws_with_profile`)
+- Integrate profile management with `lib/env_manager.sh`
+- Add profile persistence to configuration files
 
-### Week 3-4: User Experience
-- Enhance `team_member_setup.sh` with smart detection
-- Implement interactive profile selection
-- Add safety confirmations for production
+### Week 3-4: Admin Tools Integration
+- Update `lib/env_manager.sh` to support profile-aware operations
+- Modify all admin tools to use `aws_with_profile` wrapper
+- Add profile validation to admin tool prerequisites
+- Implement cross-account validation
 
-### Week 5-6: Admin Tools Enhancement
-- Update admin scripts with profile awareness
-- Implement S3 integration improvements
-- Add comprehensive error handling
+### Week 5-6: User Experience & S3 Integration
+- Enhance `team_member_setup.sh` with improved profile support
+- Update zero-touch workflow S3 operations with profile awareness
+- Implement enhanced error handling and recovery
+- Add migration support for existing users
 
-### Week 7-8: Testing and Documentation
-- Comprehensive testing across all scenarios
-- Documentation updates and user guides
-- Performance optimization and bug fixes
+### Week 7-8: Safety Features & Documentation
+- Implement production safety measures and confirmations
+- Add comprehensive testing across all scenarios
+- Create migration scripts and user documentation
+- Performance optimization and security audit
 
 ## Admin Tools Impact Analysis
 
@@ -468,10 +661,44 @@ aws ec2 describe-client-vpn-endpoints --region "$AWS_REGION"
 aws acm list-certificates --region "$AWS_REGION"
 aws iam get-user --user-name "$username"
 
-# New pattern required:
-aws ec2 describe-client-vpn-endpoints --region "$AWS_REGION" --profile "$ENV_AWS_PROFILE"
-aws acm list-certificates --region "$AWS_REGION" --profile "$ENV_AWS_PROFILE"
-aws iam get-user --user-name "$username" --profile "$ENV_AWS_PROFILE"
+# Recommended new pattern using wrapper function:
+aws_with_profile ec2 describe-client-vpn-endpoints --region "$AWS_REGION"
+aws_with_profile acm list-certificates --region "$AWS_REGION"
+aws_with_profile iam get-user --user-name "$username"
+
+# Alternative direct pattern:
+aws ec2 describe-client-vpn-endpoints --region "$AWS_REGION" --profile "${AWS_PROFILE:-default}"
+aws acm list-certificates --region "$AWS_REGION" --profile "${AWS_PROFILE:-default}"
+aws iam get-user --user-name "$username" --profile "${AWS_PROFILE:-default}"
+```
+
+#### **AWS CLI Wrapper Implementation**
+```bash
+# Add to lib/core_functions.sh:
+aws_with_profile() {
+    local profile="${AWS_PROFILE:-${ENV_AWS_PROFILE:-default}}"
+    
+    # Validate profile exists before use
+    if ! aws configure list-profiles | grep -q "^$profile$"; then
+        echo "Error: AWS profile '$profile' not found" >&2
+        return 1
+    fi
+    
+    # Execute AWS command with profile
+    aws "$@" --profile "$profile"
+}
+
+# Enhanced version with environment validation:
+aws_with_env_profile() {
+    local environment="${1:-$CURRENT_ENV}"
+    local profile=$(get_env_profile "$environment")
+    
+    # Validate profile matches environment
+    validate_profile_matches_environment "$profile" "$environment" || return 1
+    
+    # Execute AWS command
+    AWS_PROFILE="$profile" aws "${@:2}" --profile "$profile"
+}
 ```
 
 #### **Environment Configuration Updates**
@@ -480,27 +707,82 @@ Each environment will need AWS profile specification:
 # configs/staging/staging.env
 AWS_REGION=us-east-1
 AWS_PROFILE=default  # or staging
+ENV_AWS_PROFILE=staging  # Environment-specific override
+STAGING_ACCOUNT_ID=111111111111  # For validation
+STAGING_S3_BUCKET=staging-vpn-csr-exchange
 ENDPOINT_ID=cvpn-endpoint-123...
+VPN_NAME=staging-vpn
 
 # configs/production/production.env  
 AWS_REGION=us-east-1
 AWS_PROFILE=production  # or prod
+ENV_AWS_PROFILE=production  # Environment-specific override
+PRODUCTION_ACCOUNT_ID=222222222222  # For validation
+PRODUCTION_S3_BUCKET=production-vpn-csr-exchange
 ENDPOINT_ID=cvpn-endpoint-456...
+VPN_NAME=production-vpn
+```
+
+#### **Configuration Loading Priority**
+```bash
+# Enhanced configuration loading in lib/env_core.sh:
+load_environment_profile() {
+    local environment=$1
+    local config_file="configs/$environment/$environment.env"
+    
+    if [ -f "$config_file" ]; then
+        source "$config_file"
+        
+        # Set AWS_PROFILE with priority order:
+        # 1. ENV_AWS_PROFILE (environment-specific)
+        # 2. AWS_PROFILE (from config)
+        # 3. Environment default
+        export AWS_PROFILE="${ENV_AWS_PROFILE:-${AWS_PROFILE:-$(get_env_default_profile "$environment")}}"
+    fi
+}
 ```
 
 #### **Profile Validation Integration**
 All admin tools will need enhanced prerequisite checks:
 ```bash
-# New prerequisite check pattern
+# Enhanced prerequisite check pattern
 check_admin_prerequisites() {
     # Existing checks...
     check_prerequisites
     
-    # New profile validation
-    validate_aws_profile_for_environment "$ENV_AWS_PROFILE" "$CURRENT_ENV"
+    # Load environment configuration with profile
+    load_environment_profile "$CURRENT_ENV"
+    
+    # Validate profile configuration
+    validate_aws_profile_config "$AWS_PROFILE" || {
+        echo "Error: AWS profile '$AWS_PROFILE' validation failed"
+        return 1
+    }
+    
+    # Cross-account validation
+    validate_profile_matches_environment "$AWS_PROFILE" "$CURRENT_ENV" || {
+        echo "Error: Profile '$AWS_PROFILE' does not match environment '$CURRENT_ENV'"
+        return 1
+    }
     
     # Enhanced environment validation
-    validate_profile_permissions "$ENV_AWS_PROFILE" "$CURRENT_ENV"
+    validate_profile_permissions "$AWS_PROFILE" "$CURRENT_ENV" || {
+        echo "Error: Profile '$AWS_PROFILE' lacks required permissions for '$CURRENT_ENV'"
+        return 1
+    }
+}
+
+# Environment manager integration
+env_validate_profile_integration() {
+    local environment=$1
+    local profile=$2
+    
+    # Ensure environment manager is aware of profile
+    env_set_profile "$environment" "$profile"
+    
+    # Validate the integration
+    local current_profile=$(env_get_profile "$environment")
+    [ "$current_profile" = "$profile" ] || return 1
 }
 ```
 
@@ -525,6 +807,79 @@ check_admin_prerequisites() {
 - Graceful fallback when only one AWS profile is available
 - Environment detection will default to existing behavior when profile mapping is ambiguous
 - Existing configuration files will continue to work with automatic profile detection
+- Support legacy `SELECTED_AWS_PROFILE` variable for existing scripts
+- Automatic migration of existing configurations to include profile settings
+
+### Enhanced Error Recovery:
+
+```bash
+# Comprehensive error handling for profile issues
+handle_profile_error() {
+    local error_type=$1
+    local profile=$2
+    local environment=$3
+    
+    case "$error_type" in
+        "profile_not_found")
+            echo "❌ AWS profile '$profile' not found"
+            echo "Available profiles:"
+            aws configure list-profiles
+            offer_profile_setup_wizard
+            ;;
+        "account_mismatch")
+            echo "❌ Profile '$profile' connects to wrong AWS account for $environment"
+            echo "Expected account: $(get_expected_account_id "$environment")"
+            echo "Actual account: $(aws sts get-caller-identity --profile "$profile" --query Account --output text)"
+            suggest_correct_profiles "$environment"
+            ;;
+        "permission_denied")
+            echo "❌ Profile '$profile' lacks permissions for $environment operations"
+            suggest_permission_troubleshooting "$profile" "$environment"
+            ;;
+        "network_error")
+            echo "❌ Network connectivity issues"
+            suggest_network_troubleshooting
+            ;;
+    esac
+}
+
+# Profile setup wizard for error recovery
+offer_profile_setup_wizard() {
+    echo ""
+    echo "Would you like to:"
+    echo "  1. Configure AWS credentials for this profile"
+    echo "  2. Select a different existing profile"
+    echo "  3. Set up dual AWS account profiles"
+    echo "  4. Exit and configure manually"
+    
+    read -p "Choose option (1-4): " choice
+    case "$choice" in
+        1) aws configure --profile "$profile" ;;
+        2) select_alternative_profile ;;
+        3) run_dual_profile_setup_wizard ;;
+        4) exit 1 ;;
+    esac
+}
+```
+
+### Enhanced Audit Trail:
+
+- Log all AWS operations with profile information
+- Track profile switches and environment changes
+- Record cross-account validation results
+- Maintain audit trail for compliance purposes
+
+```bash
+# Enhanced logging with profile information
+log_aws_operation() {
+    local operation=$1
+    local profile=$2
+    local environment=$3
+    local result=$4
+    
+    log_message "AWS_OPERATION: $operation | PROFILE: $profile | ENV: $environment | RESULT: $result | ACCOUNT: $(aws sts get-caller-identity --profile "$profile" --query Account --output text 2>/dev/null || echo 'unknown')"
+}
+```
 
 ## Conclusion
 
