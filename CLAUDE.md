@@ -44,32 +44,32 @@ Each environment has its own configuration structure:
 
 ```bash
 # Main admin console (environment-aware)
-./admin/aws_vpn_admin.sh
+./admin-tools/aws_vpn_admin.sh
 
 # Team member setup
 ./team_member_setup.sh
 
 # Revoke user access
-./admin/revoke_member_access.sh
+./admin-tools/revoke_member_access.sh
 
 # Employee offboarding
-./admin/employee_offboarding.sh
+./admin-tools/employee_offboarding.sh
 ```
 
 ### Diagnostic and Repair Tools
 
 ```bash
 # Debug VPN creation issues
-./admin/tools/debug_vpn_creation.sh
+./admin-tools/tools/debug_vpn_creation.sh
 
 # Fix common configuration problems
-./admin/tools/fix_vpn_config.sh
+./admin-tools/tools/fix_vpn_config.sh
 
 # Validate and auto-fix configurations
-./admin/tools/validate_config.sh
+./admin-tools/tools/validate_config.sh
 
 # Fix endpoint ID issues
-./admin/tools/fix_endpoint_id.sh
+./admin-tools/tools/fix_endpoint_id.sh
 ```
 
 ## Core Library Functions
@@ -119,7 +119,7 @@ The toolkit requires and will auto-install:
 
 ## Testing
 
-Currently no automated test framework is present. The `tests/` directory exists but is empty. Manual testing is performed through the diagnostic tools in `admin/tools/`.
+Currently no automated test framework is present. The `tests/` directory exists but is empty. Manual testing is performed through the diagnostic tools in `admin-tools/tools/`.
 
 ## Important Notes
 
@@ -127,4 +127,4 @@ Currently no automated test framework is present. The `tests/` directory exists 
 - Production operations have additional safety checks and confirmations
 - The toolkit is specifically designed for macOS environments
 - All scripts use bash and include Chinese language prompts and documentation
-- Configuration issues (especially fake endpoint IDs) can be resolved using tools in `admin/tools/`
+- Configuration issues (especially fake endpoint IDs) can be resolved using tools in `admin-tools/tools/`

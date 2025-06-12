@@ -108,12 +108,12 @@ mv "$temp_config" "$main_config_file"
 - `lib/endpoint_creation.sh` - 修復配置覆蓋問題
 
 ### 新增工具
-- `admin/tools/verify_config_update_fix.sh` - 配置更新修復驗證工具
+- `admin-tools/tools/verify_config_update_fix.sh` - 配置更新修復驗證工具
 
 ### 之前的相關修復
 - `configs/staging/staging.env` - 更新為正確的端點 ID
-- `admin/tools/fix_endpoint_id.sh` - 端點 ID 修復工具
-- `admin/tools/validate_config.sh` - 配置驗證工具
+- `admin-tools/tools/fix_endpoint_id.sh` - 端點 ID 修復工具
+- `admin-tools/tools/validate_config.sh` - 配置驗證工具
 
 ## 預防措施
 

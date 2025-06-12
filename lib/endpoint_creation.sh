@@ -1457,7 +1457,7 @@ terminate_vpn_endpoint_lib() {
             echo -e "${BLUE}可能的解決方案:${NC}"
             echo -e "1. 檢查端點 ID 是否正確"
             echo -e "2. 確認是否在正確的 AWS 區域"
-            echo -e "3. 使用修復工具檢查配置: ./admin/tools/fix_endpoint_id.sh"
+            echo -e "3. 使用修復工具檢查配置: ./admin-tools/tools/fix_endpoint_id.sh"
             echo -e "4. 查看所有可用端點: aws ec2 describe-client-vpn-endpoints --region $aws_region"
             log_message_core "錯誤: VPN 端點不存在: $endpoint_id"
             return 1

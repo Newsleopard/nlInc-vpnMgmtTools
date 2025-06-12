@@ -21,7 +21,7 @@ An error occurred (InvalidClientVpnEndpointId.NotFound) when calling the DeleteC
 
 2. **執行自動修復工具**：
    ```bash
-   ./admin/tools/fix_endpoint_id.sh
+   ./admin-tools/tools/fix_endpoint_id.sh
    ```
 
 3. **跟隨工具的指示**：
@@ -95,7 +95,7 @@ An error occurred (InvalidClientVpnEndpointId.NotFound) when calling the DeleteC
 3. **創建新的 VPN 端點**：
    如果端點確實不存在，您需要重新創建：
    ```bash
-   ./admin/aws_vpn_admin.sh
+   ./admin-tools/aws_vpn_admin.sh
    # 選擇選項 1: 建立新的 VPN 端點
    ```
 
@@ -110,7 +110,7 @@ An error occurred (InvalidClientVpnEndpointId.NotFound) when calling the DeleteC
 
 2. **執行系統健康檢查**：
    ```bash
-   ./admin/aws_vpn_admin.sh
+   ./admin-tools/aws_vpn_admin.sh
    # 選擇選項 8: 系統健康檢查
    ```
 
@@ -140,7 +140,7 @@ An error occurred (InvalidClientVpnEndpointId.NotFound) when calling the DeleteC
 
 2. **使用簡化診斷工具**：
    ```bash
-   ./admin/tools/simple_endpoint_fix.sh
+   ./admin-tools/tools/simple_endpoint_fix.sh
    ```
 
 3. **手動執行 AWS CLI 命令進行診斷**（如上述方案 2）

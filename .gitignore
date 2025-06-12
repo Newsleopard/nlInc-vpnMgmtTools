@@ -48,3 +48,4 @@ pki/
 
 .current_env
 certs/
+.claude/settings.local.json

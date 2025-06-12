@@ -7,21 +7,14 @@
 # 全域變數
 TEAM_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# 載入環境管理器 (必須第一個載入)
-source "$TEAM_SCRIPT_DIR/lib/env_manager.sh"
+# 載入輕量級環境核心庫 (團隊成員專用)
+source "$TEAM_SCRIPT_DIR/lib/env_core.sh"
 
-# 初始化環境
-if ! env_init_for_script "team_member_setup.sh"; then
-    echo -e "${RED}錯誤: 無法初始化環境管理器${NC}"
-    exit 1
-fi
-
-# 設定環境特定路徑
-env_setup_paths
-
-# 環境感知的配置檔案
-USER_CONFIG_FILE="$USER_VPN_CONFIG_FILE"
-LOG_FILE="$TEAM_SETUP_LOG_FILE"
+# 全域變數
+SELECTED_AWS_PROFILE=""
+TARGET_ENVIRONMENT=""
+USER_CONFIG_FILE=""
+LOG_FILE=""
 
 # 載入核心函式庫
 source "$TEAM_SCRIPT_DIR/lib/core_functions.sh"
@@ -34,21 +27,26 @@ set -e
 
 # 記錄函數 (團隊設置專用)
 log_team_setup_message() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S'): $1" >> "$LOG_FILE"
+    # 只有在 LOG_FILE 已設定且目錄存在時才記錄
+    if [ -n "$LOG_FILE" ] && [ -n "$(dirname "$LOG_FILE")" ]; then
+        # 確保日誌目錄存在
+        mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null
+        echo "$(date '+%Y-%m-%d %H:%M:%S'): $1" >> "$LOG_FILE" 2>/dev/null || true
+    fi
 }
 
 # 顯示歡迎訊息
 show_welcome() {
     clear
-    show_env_aware_header "AWS Client VPN 團隊成員設定工具"
+    show_team_env_header "AWS Client VPN 團隊成員設定工具"
     echo -e ""
     echo -e "${BLUE}此工具將幫助您設定 AWS Client VPN 連接${NC}"
-    echo -e "${BLUE}以便安全連接到生產環境進行除錯${NC}"
+    echo -e "${BLUE}以便安全連接到目標環境進行除錯${NC}"
     echo -e ""
     echo -e "${YELLOW}請確保您已從管理員那裡獲得：${NC}"
-    echo -e "  - VPN 端點 ID"
+    echo -e "  - VPN 端點 ID 和 AWS 區域"
     echo -e "  - CA 證書文件 (ca.crt)"
-    echo -e "  - AWS 帳戶訪問權限"
+    echo -e "  - 適當的 AWS 帳戶訪問權限"
     echo -e ""
     echo -e "${CYAN}========================================================${NC}"
     echo -e ""
@@ -185,14 +183,25 @@ install_tools_linux() {
     fi
 }
 
-# 設定 AWS 配置
-setup_aws_config() {
-    echo -e "\\n${YELLOW}[2/6] 設定 AWS 配置...${NC}"
+# 初始化環境和 AWS 配置
+init_environment_and_aws() {
+    echo -e "\\n${YELLOW}[1/6] 初始化環境和 AWS 配置...${NC}"
     
-    # 檢查現有配置
-    local existing_config=false
-    local use_existing_config=false
-    local aws_region=""
+    # 使用新的環境初始化
+    if ! init_team_member_environment "team_member_setup.sh" "$TEAM_SCRIPT_DIR"; then
+        echo -e "${RED}環境初始化失敗${NC}"
+        return 1
+    fi
+    
+    # 驗證選中的 AWS profile
+    if ! validate_aws_profile_config "$SELECTED_AWS_PROFILE"; then
+        echo -e "${RED}AWS profile 驗證失敗${NC}"
+        return 1
+    fi
+    
+    # 獲取 AWS 區域 (如果未設定則要求輸入)
+    local aws_region
+    aws_region=$(aws configure get region --profile "$SELECTED_AWS_PROFILE" 2>/dev/null)
     
     if [ -f ~/.aws/credentials ] && [ -f ~/.aws/config ]; then
         existing_config=true
@@ -204,18 +213,18 @@ setup_aws_config() {
         echo -e "  • ~/.aws/credentials"
         echo -e "  • ~/.aws/config"
         
-        # 檢查是否可以使用現有配置
-        echo -e "\n${BLUE}正在驗證現有配置...${NC}"
-        if aws sts get-caller-identity > /dev/null 2>&1; then
-            echo -e "${GREEN}✅ 現有 AWS 配置可正常使用${NC}"
+        # 檢查是否可以使用選中的 profile 配置
+        echo -e "\n${BLUE}正在驗證選中的 profile '$SELECTED_AWS_PROFILE' 配置...${NC}"
+        if aws sts get-caller-identity --profile "$SELECTED_AWS_PROFILE" > /dev/null 2>&1; then
+            echo -e "${GREEN}✅ 選中的 AWS profile '$SELECTED_AWS_PROFILE' 配置可正常使用${NC}"
             
             # 顯示當前配置詳細資訊
             local current_region current_output current_identity
-            current_region=$(aws configure get region 2>/dev/null || echo "")
-            current_output=$(aws configure get output 2>/dev/null || echo "")
-            current_identity=$(aws sts get-caller-identity 2>/dev/null || echo "")
+            current_region=$(aws configure get region --profile "$SELECTED_AWS_PROFILE" 2>/dev/null || echo "")
+            current_output=$(aws configure get output --profile "$SELECTED_AWS_PROFILE" 2>/dev/null || echo "")
+            current_identity=$(aws sts get-caller-identity --profile "$SELECTED_AWS_PROFILE" 2>/dev/null || echo "")
             
-            echo -e "\n${BLUE}📊 當前 AWS 配置詳細資訊:${NC}"
+            echo -e "\n${BLUE}📊 選中的 AWS profile '$SELECTED_AWS_PROFILE' 詳細資訊:${NC}"
             echo -e "═══════════════════════════════════════"
             
             if [ -n "$current_region" ]; then
@@ -248,8 +257,8 @@ setup_aws_config() {
             
             if [ -n "$current_region" ]; then
                 echo -e "\n${YELLOW}💡 您有以下選擇:${NC}"
-                echo -e "  ${GREEN}Y${NC} - 使用現有配置 (推薦，如果這是您要使用的 AWS 帳號)"
-                echo -e "      → 將使用上述顯示的 AWS 配置進行 VPN 設定"
+                echo -e "  ${GREEN}Y${NC} - 使用選中的 profile '$SELECTED_AWS_PROFILE' (推薦)"
+                echo -e "      → 將使用上述顯示的 AWS profile 配置進行 VPN 設定"
                 echo -e "      → 不會修改您現有的 AWS 配置檔案"
                 echo -e ""
                 echo -e "  ${YELLOW}N${NC} - 重新配置 AWS 帳號"
@@ -263,7 +272,7 @@ setup_aws_config() {
                     if [[ "$use_existing" =~ ^[Yy]$ ]]; then
                         use_existing_config=true
                         aws_region="$current_region"
-                        echo -e "${GREEN}✅ 將使用現有的 AWS 配置${NC}"
+                        echo -e "${GREEN}✅ 將使用選中的 AWS profile '$SELECTED_AWS_PROFILE'${NC}"
                         echo -e "${BLUE}📋 已確認使用區域: $aws_region${NC}"
                     else
                         echo -e "${YELLOW}📝 將進行 AWS 帳號重新配置${NC}"
@@ -401,17 +410,94 @@ setup_aws_config() {
         fi
     fi
     
+    # 設定環境變數供後續函數使用
+    export AWS_PROFILE="$SELECTED_AWS_PROFILE"
+    export AWS_REGION="$aws_region"
+    
+    echo -e "${GREEN}✓ 已設定環境變數:${NC}"
+    echo -e "  AWS_PROFILE=$AWS_PROFILE"
+    echo -e "  AWS_REGION=$AWS_REGION"
+    
+    log_team_setup_message "使用 AWS profile: $SELECTED_AWS_PROFILE, region: $aws_region"
+}
+
+# 設定 CA 證書和環境確認
+setup_ca_cert_and_environment() {
+    echo -e "\\n${YELLOW}[2/6] 設定 CA 證書和環境確認...${NC}"
+    
+    # 要求用戶提供 CA 證書
+    local ca_cert_path
+    if ! read_secure_input "請輸入 CA 證書檔案的完整路徑: " ca_cert_path "validate_file_path"; then
+        echo -e "${RED}必須提供有效的 CA 證書檔案路徑${NC}"
+        return 1
+    fi
+    
+    if [ ! -f "$ca_cert_path" ]; then
+        echo -e "${RED}CA 證書檔案不存在: $ca_cert_path${NC}"
+        return 1
+    fi
+    
+    echo -e "${GREEN}✓ 找到 CA 證書檔案: $ca_cert_path${NC}"
+    
+    # 從 CA 證書偵測環境
+    local detected_env
+    detected_env=$(detect_environment_from_ca_cert "$ca_cert_path")
+    
+    # 從 AWS profile 偵測環境
+    local profile_env
+    profile_env=$(detect_environment_from_profile "$SELECTED_AWS_PROFILE")
+    
+    echo -e "\\n${BLUE}環境偵測結果:${NC}"
+    echo -e "  從 CA 證書偵測: ${detected_env:-無法判斷}"
+    echo -e "  從 AWS profile 偵測: ${profile_env:-無法判斷}"
+    
+    # 環境確認
+    TARGET_ENVIRONMENT=$(confirm_environment_selection "$detected_env" "$ca_cert_path" "$SELECTED_AWS_PROFILE")
+    
+    if [ -z "$TARGET_ENVIRONMENT" ]; then
+        echo -e "${RED}環境選擇失敗${NC}"
+        return 1
+    fi
+    
+    echo -e "${GREEN}✓ 確認目標環境: $(get_env_display_name "$TARGET_ENVIRONMENT")${NC}"
+    
+    # 設定環境特定路徑
+    setup_team_member_paths "$TARGET_ENVIRONMENT" "$TEAM_SCRIPT_DIR"
+    
+    # 設定配置檔案路徑
+    USER_CONFIG_FILE="$USER_VPN_CONFIG_FILE"
+    LOG_FILE="$TEAM_SETUP_LOG_FILE"
+    
+    # 複製 CA 證書到環境特定目錄
+    local env_ca_cert="$USER_CERT_DIR/ca.crt"
+    if ! cp "$ca_cert_path" "$env_ca_cert"; then
+        echo -e "${RED}複製 CA 證書失敗${NC}"
+        return 1
+    fi
+    
+    chmod 600 "$env_ca_cert"
+    echo -e "${GREEN}✓ CA 證書已複製到: $env_ca_cert${NC}"
+    
+    log_team_setup_message "環境設定完成: $TARGET_ENVIRONMENT, CA證書: $ca_cert_path"
+}
+
+# 獲取 VPN 端點資訊
+setup_vpn_endpoint_info() {
+    echo -e "\\n${YELLOW}[3/6] 設定 VPN 端點資訊...${NC}"
+    
+    echo -e "${BLUE}請向管理員獲取以下資訊：${NC}"
+    
     local endpoint_id
     if ! read_secure_input "請輸入 Client VPN 端點 ID: " endpoint_id "validate_endpoint_id"; then
         echo -e "${RED}VPN 端點 ID 驗證失敗${NC}"
-        log_team_setup_message "VPN 端點 ID 驗證失敗"
         return 1
     fi
     
     # 驗證端點 ID
     echo -e "${BLUE}驗證 VPN 端點...${NC}"
+    echo -e "${BLUE}使用參數: --client-vpn-endpoint-ids $endpoint_id --region $AWS_REGION --profile $AWS_PROFILE${NC}"
     local endpoint_check
-    endpoint_check=$(aws ec2 describe-client-vpn-endpoints --client-vpn-endpoint-ids "$endpoint_id" --region "$aws_region" 2>/dev/null || echo "not_found")
+    endpoint_check=$(aws ec2 describe-client-vpn-endpoints --client-vpn-endpoint-ids "$endpoint_id" --region "$AWS_REGION" --profile "$AWS_PROFILE" 2>/dev/null || echo "not_found")
     
     if [[ "$endpoint_check" == "not_found" ]]; then
         echo -e "${RED}無法找到指定的 VPN 端點。請確認 ID 是否正確，以及您是否有權限訪問。${NC}"
@@ -423,8 +509,10 @@ setup_aws_config() {
     
     # 保存配置
     cat > "$USER_CONFIG_FILE" << EOF
-AWS_REGION=$aws_region
+AWS_REGION=$AWS_REGION
+AWS_PROFILE=$SELECTED_AWS_PROFILE
 ENDPOINT_ID=$endpoint_id
+TARGET_ENVIRONMENT=$TARGET_ENVIRONMENT
 USERNAME=""
 CLIENT_CERT_ARN=""
 EOF
@@ -432,12 +520,12 @@ EOF
     # 設置配置文件權限
     chmod 600 "$USER_CONFIG_FILE"
     
-    log_team_setup_message "AWS 配置已完成，端點 ID: $endpoint_id"
+    log_team_setup_message "VPN 端點配置完成: $endpoint_id"
 }
 
 # 設定用戶資訊
 setup_user_info() {
-    echo -e "\\n${YELLOW}[3/6] 設定用戶資訊...${NC}"
+    echo -e "\\n${YELLOW}[4/6] 設定用戶資訊...${NC}"
     
     # 使用安全輸入驗證獲取用戶名
     local username
@@ -473,7 +561,7 @@ setup_user_info() {
 # 生成個人客戶端證書
 generate_client_certificate() {
     local original_dir="$PWD"  # 記錄原始目錄
-    echo -e "\\n${YELLOW}[4/6] 生成個人 VPN 客戶端證書...${NC}"
+    echo -e "\\n${YELLOW}[5/6] 生成個人 VPN 客戶端證書...${NC}"
     
     # 載入配置
     if ! source "$USER_CONFIG_FILE"; then
@@ -497,51 +585,40 @@ generate_client_certificate() {
     # 檢查 CA 證書
     echo -e "${YELLOW}檢查 CA 證書文件...${NC}"
     
-    local ca_cert_path=""
+    local ca_cert_path="$USER_CERT_DIR/ca.crt"
     
-    # 優先檢查環境特定的 CA 證書路徑
-    if [ -f "$VPN_CA_CERT_FILE" ]; then
-        ca_cert_path="$VPN_CA_CERT_FILE"
-    elif [ -f "$VPN_CERT_DIR/ca.crt" ]; then
-        ca_cert_path="$VPN_CERT_DIR/ca.crt"
-    else
-        echo -e "${YELLOW}未找到 CA 證書文件。${NC}"
-        if read_secure_input "請輸入 CA 證書文件的完整路徑: " ca_cert_path "validate_file_path"; then
-            if [ ! -f "$ca_cert_path" ]; then
-                echo -e "${RED}指定的 CA 證書文件不存在${NC}"
-                cd "$original_dir" || {
-                    echo -e "${RED}警告: 無法恢復到原始目錄${NC}"
-                }
-                return 1
-            fi
-        else
-            echo -e "${RED}必須提供有效的 CA 證書文件路徑${NC}"
-            cd "$original_dir" || {
-                echo -e "${RED}警告: 無法恢復到原始目錄${NC}"
-            }
-            return 1
-        fi
+    # 檢查是否存在 CA 證書
+    if [ ! -f "$ca_cert_path" ]; then
+        echo -e "${RED}未找到 CA 證書文件: $ca_cert_path${NC}"
+        echo -e "${YELLOW}請確保已完成環境設定步驟${NC}"
+        cd "$original_dir" || {
+            echo -e "${RED}警告: 無法恢復到原始目錄${NC}"
+        }
+        return 1
     fi
     
     echo -e "${GREEN}✓ 找到 CA 證書文件: $ca_cert_path${NC}"
     
     # 檢查 CA 私鑰
-    local ca_key_path=""
-    local ca_dir
-    ca_dir=$(dirname "$ca_cert_path")
+    local ca_key_path="$USER_CERT_DIR/ca.key"
+    local has_ca_key=false
     
-    if [ -f "$ca_dir/ca.key" ]; then
-        ca_key_path="$ca_dir/ca.key"
+    if [ -f "$ca_key_path" ]; then
+        has_ca_key=true
+        echo -e "${GREEN}✓ 找到 CA 私鑰文件: $ca_key_path${NC}"
     else
         echo -e "${YELLOW}未找到 CA 私鑰文件。${NC}"
         echo -e "${YELLOW}如果您沒有 CA 私鑰，請聯繫管理員生成您的證書。${NC}"
-        if read_secure_input "請輸入 CA 私鑰文件的完整路徑 (或按 Enter 跳過自動生成): " ca_key_path "validate_file_path_allow_empty"; then
-            if [ -n "$ca_key_path" ] && [ ! -f "$ca_key_path" ]; then
-                echo -e "${RED}指定的 CA 私鑰文件不存在${NC}"
-                cd "$original_dir" || {
-                    echo -e "${RED}警告: 無法恢復到原始目錄${NC}"
-                }
-                return 1
+        if read_secure_input "請輸入 CA 私鑰文件的完整路徑 (或按 Enter 跳過自動生成): " ca_key_input "validate_file_path_allow_empty"; then
+            if [ -n "$ca_key_input" ] && [ -f "$ca_key_input" ]; then
+                # 複製 CA 私鑰到環境目錄
+                if cp "$ca_key_input" "$ca_key_path"; then
+                    chmod 600 "$ca_key_path"
+                    has_ca_key=true
+                    echo -e "${GREEN}✓ CA 私鑰已複製到: $ca_key_path${NC}"
+                else
+                    echo -e "${RED}複製 CA 私鑰失敗${NC}"
+                fi
             fi
         fi
     fi
@@ -560,16 +637,13 @@ generate_client_certificate() {
         return 1
     fi
     
-    # 複製 CA 證書
-    if ! cp "$ca_cert_path" ./ca.crt; then
-        echo -e "${RED}複製 CA 證書失敗${NC}"
-        cd "$original_dir" || {
-            echo -e "${RED}警告: 無法恢復到原始目錄${NC}"
-        }
-        return 1
+    # CA 證書已在環境設定階段複製
+    # 確保當前目錄有 CA 證書的連結
+    if [ ! -f "./ca.crt" ]; then
+        ln -s "$ca_cert_path" ./ca.crt
     fi
     
-    if [ -n "$ca_key_path" ]; then
+    if [ "$has_ca_key" = true ]; then
         # 有 CA 私鑰，可以自動生成證書
         echo -e "${BLUE}自動生成客戶端證書...${NC}"
         
@@ -681,7 +755,7 @@ generate_client_certificate() {
 
 # 導入證書到 ACM
 import_certificate() {
-    echo -e "\\n${YELLOW}[5/6] 導入證書到 AWS Certificate Manager...${NC}"
+    echo -e "\\n${YELLOW}[6/6] 導入證書到 AWS Certificate Manager...${NC}"
     
     # 載入配置
     if ! source "$USER_CONFIG_FILE"; then
@@ -713,6 +787,7 @@ import_certificate() {
     --private-key "fileb://$cert_dir/${USERNAME}.key" \
     --certificate-chain "fileb://$cert_dir/ca.crt" \
     --region "$AWS_REGION" \
+    --profile "$AWS_PROFILE" \
     --tags Key=Name,Value="VPN-Client-${USERNAME}" Key=Purpose,Value="ClientVPN" Key=User,Value="$USERNAME"); then
         echo -e "${RED}導入證書失敗${NC}"
         return 1
@@ -744,7 +819,7 @@ import_certificate() {
 
 # 設置 VPN 客戶端
 setup_vpn_client() {
-    echo -e "\\n${YELLOW}[6/6] 設置 VPN 客戶端...${NC}"
+    echo -e "\\n${YELLOW}[7/7] 設置 VPN 客戶端...${NC}"
     
     # 載入配置
     if ! source "$USER_CONFIG_FILE"; then
@@ -763,6 +838,7 @@ setup_vpn_client() {
     if ! aws ec2 export-client-vpn-client-configuration \
       --client-vpn-endpoint-id "$ENDPOINT_ID" \
       --region "$AWS_REGION" \
+      --profile "$AWS_PROFILE" \
       --output text > "$config_dir/client-config-base.ovpn"; then
         echo -e "${RED}下載 VPN 配置失敗${NC}"
         log_team_setup_message "下載 VPN 配置失敗"
@@ -816,30 +892,106 @@ setup_vpn_client() {
     
     echo -e "${GREEN}✓ 個人配置文件已建立${NC}"
     
-    # 下載並安裝 AWS VPN 客戶端（跨平台）
-    echo -e "${BLUE}設置 AWS VPN 客戶端...${NC}"
+    # 詢問用戶是否要安裝 AWS VPN 客戶端
+    echo -e "\n${CYAN}========================================${NC}"
+    echo -e "${CYAN}AWS VPN 客戶端安裝${NC}"
+    echo -e "${CYAN}========================================${NC}"
+    echo -e "您需要安裝 AWS VPN 客戶端來連接到 VPN。"
+    echo -e "您可以選擇現在自動安裝，或稍後手動安裝。"
+    echo
     
-    local os_type=$(uname -s)
-    case "$os_type" in
-        "Darwin")
-            setup_vpn_client_macos
-            ;;
-        "Linux")
-            setup_vpn_client_linux
-            ;;
-        *)
-            echo -e "${YELLOW}⚠ 未支援的作業系統自動安裝 VPN 客戶端${NC}"
-            echo -e "${BLUE}請手動下載並安裝 AWS VPN 客戶端：${NC}"
-            echo -e "  macOS: https://d20adtppz83p9s.cloudfront.net/OSX/latest/AWS_VPN_Client.pkg"
-            echo -e "  Windows: https://d20adtppz83p9s.cloudfront.net/WIN/latest/AWS_VPN_Client.msi"
-            echo -e "  Linux: 請使用 OpenVPN 客戶端"
-            ;;
-    esac
+    local install_client
+    if read_secure_input "是否要現在安裝 AWS VPN 客戶端？(y/n): " install_client "validate_yes_no"; then
+        if [[ "$install_client" =~ ^[Yy]$ ]]; then
+            # 下載並安裝 AWS VPN 客戶端（跨平台）
+            echo -e "${BLUE}設置 AWS VPN 客戶端...${NC}"
+            
+            local os_type=$(uname -s)
+            case "$os_type" in
+                "Darwin")
+                    setup_vpn_client_macos
+                    ;;
+                "Linux")
+                    setup_vpn_client_linux
+                    ;;
+                *)
+                    echo -e "${YELLOW}⚠ 未支援的作業系統自動安裝 VPN 客戶端${NC}"
+                    echo -e "${BLUE}請手動下載並安裝 AWS VPN 客戶端：${NC}"
+                    echo -e "  macOS: https://d20adtppz83p9s.cloudfront.net/OSX/latest/AWS_VPN_Client.pkg"
+                    echo -e "  Windows: https://d20adtppz83p9s.cloudfront.net/WIN/latest/AWS_VPN_Client.msi"
+                    echo -e "  Linux: 請使用 OpenVPN 客戶端"
+                    ;;
+            esac
+            
+            # 顯示如何啟動客戶端的說明
+            show_vpn_client_launch_instructions
+        else
+            echo -e "${YELLOW}跳過 AWS VPN 客戶端安裝${NC}"
+            echo -e "${BLUE}您可以稍後從以下連結手動下載安裝：${NC}"
+            echo -e "  • macOS: https://d20adtppz83p9s.cloudfront.net/OSX/latest/AWS_VPN_Client.pkg"
+            echo -e "  • Windows: https://d20adtppz83p9s.cloudfront.net/WIN/latest/AWS_VPN_Client.msi"
+            echo -e "  • Linux: 請使用 OpenVPN 客戶端"
+            echo
+            echo -e "${BLUE}安裝完成後，請使用以下配置文件：${NC}"
+            echo -e "  ${CYAN}$config_dir/${USERNAME}-config.ovpn${NC}"
+        fi
+    else
+        echo -e "${YELLOW}跳過 AWS VPN 客戶端安裝${NC}"
+    fi
     
     echo -e "${GREEN}VPN 客戶端設置完成！${NC}"
     echo -e "您的配置文件: ${BLUE}$config_dir/${USERNAME}-config.ovpn${NC}"
     
     log_team_setup_message "VPN 客戶端設置完成"
+}
+
+# 顯示 VPN 客戶端啟動說明
+show_vpn_client_launch_instructions() {
+    echo -e "\n${CYAN}========================================${NC}"
+    echo -e "${CYAN}如何啟動 AWS VPN 客戶端${NC}"
+    echo -e "${CYAN}========================================${NC}"
+    
+    local os_type=$(uname -s)
+    case "$os_type" in
+        "Darwin")
+            echo -e "${BLUE}macOS 用戶：${NC}"
+            echo -e "1. 開啟 Finder"
+            echo -e "2. 前往「應用程式」資料夾"
+            echo -e "3. 找到並雙擊「AWS VPN Client」"
+            echo -e "4. 或者在 Spotlight 搜尋中輸入「AWS VPN Client」"
+            echo
+            echo -e "${BLUE}使用 Launchpad：${NC}"
+            echo -e "• 按 F4 或點擊 Dock 中的 Launchpad 圖示"
+            echo -e "• 搜尋「AWS VPN Client」並點擊"
+            ;;
+        "Linux")
+            echo -e "${BLUE}Linux 用戶：${NC}"
+            echo -e "請使用 OpenVPN 客戶端："
+            echo -e "sudo openvpn --config $USER_VPN_CONFIG_DIR/${USERNAME}-config.ovpn"
+            echo
+            echo -e "${BLUE}或使用 Network Manager (GUI)：${NC}"
+            echo -e "1. 打開網路設定"
+            echo -e "2. 點擊「+」新增連接"
+            echo -e "3. 選擇「匯入 VPN 連接」"
+            echo -e "4. 選擇您的 .ovpn 文件"
+            ;;
+        *)
+            echo -e "${BLUE}其他作業系統：${NC}"
+            echo -e "請下載並安裝適合您作業系統的 VPN 客戶端"
+            echo -e "• Windows: 下載並安裝 .msi 文件後，在開始選單中搜尋「AWS VPN Client」"
+            echo -e "• 其他系統: 使用支援 OpenVPN 的客戶端"
+            ;;
+    esac
+    
+    echo
+    echo -e "${GREEN}配置文件位置：${NC}"
+    echo -e "  ${CYAN}$USER_VPN_CONFIG_DIR/${USERNAME}-config.ovpn${NC}"
+    echo
+    echo -e "${YELLOW}提示：${NC}"
+    echo -e "• 首次連接時，VPN 客戶端會要求您匯入配置文件"
+    echo -e "• 選擇上述路徑中的 .ovpn 文件"
+    echo -e "• 連接後，您就可以安全地訪問內部資源"
+    echo
 }
 
 # macOS VPN 客戶端安裝
@@ -900,15 +1052,14 @@ show_connection_instructions() {
     # 載入配置
     source "$USER_CONFIG_FILE"
     
-    # 載入環境配置以獲取環境資訊
-    env_load_config "$CURRENT_ENVIRONMENT"
-    
     echo -e "\\n${GREEN}=============================================${NC}"
     echo -e "${GREEN}       AWS Client VPN 設置完成！      ${NC}"
     echo -e "${GREEN}=============================================${NC}"
     echo -e ""
     echo -e "${CYAN}環境資訊：${NC}"
-    echo -e "  目標環境: ${ENV_ICON} ${ENV_DISPLAY_NAME}"
+    echo -e "  目標環境: $(get_env_display_name "$TARGET_ENVIRONMENT")"
+    echo -e "  AWS Profile: ${AWS_PROFILE}"
+    echo -e "  AWS Region: ${AWS_REGION}"
     echo -e "  用戶名稱: ${USERNAME}"
     echo -e "  配置文件: ${USER_VPN_CONFIG_DIR}/${USERNAME}-config.ovpn"
     echo -e ""
@@ -928,7 +1079,7 @@ show_connection_instructions() {
     
     echo -e ""
     echo -e "${CYAN}測試連接：${NC}"
-    echo -e "連接成功後，嘗試 ping ${ENV_DISPLAY_NAME}環境中的某個私有 IP："
+    echo -e "連接成功後，嘗試 ping $(get_env_display_name "$TARGET_ENVIRONMENT")中的某個私有 IP："
     echo -e "  ${YELLOW}ping 10.0.x.x${NC}  # 請向管理員詢問測試 IP"
     echo -e ""
     echo -e "${CYAN}故障排除：${NC}"
@@ -954,7 +1105,7 @@ show_macos_instructions() {
     echo -e "${BLUE}2.${NC} 點擊「檔案」>「管理設定檔」"
     echo -e "${BLUE}3.${NC} 點擊「添加設定檔」"
     echo -e "${BLUE}4.${NC} 選擇您的配置文件：${YELLOW}$USER_VPN_CONFIG_DIR/${USERNAME}-config.ovpn${NC}"
-    echo -e "${BLUE}5.${NC} 輸入設定檔名稱：${YELLOW}${ENV_DISPLAY_NAME:-$CURRENT_ENVIRONMENT} VPN - ${USERNAME}${NC}"
+    echo -e "${BLUE}5.${NC} 輸入設定檔名稱：${YELLOW}$(get_env_display_name "$TARGET_ENVIRONMENT") VPN - ${USERNAME}${NC}"
     echo -e "${BLUE}6.${NC} 點擊「添加設定檔」完成添加"
     echo -e "${BLUE}7.${NC} 選擇剛添加的設定檔並點擊「連接」"
 }
@@ -967,7 +1118,7 @@ show_linux_instructions() {
     echo -e ""
     echo -e "${BLUE}或使用 NetworkManager (如果可用)：${NC}"
     echo -e "${YELLOW}sudo nmcli connection import type openvpn file $USER_VPN_CONFIG_DIR/${USERNAME}-config.ovpn${NC}"
-    echo -e "${YELLOW}nmcli connection up '${ENV_DISPLAY_NAME:-$CURRENT_ENVIRONMENT} VPN - ${USERNAME}'${NC}"
+    echo -e "${YELLOW}nmcli connection up '$(get_env_display_name "$TARGET_ENVIRONMENT") VPN - ${USERNAME}'${NC}"
 }
 
 # 通用連接指示
@@ -975,7 +1126,7 @@ show_generic_instructions() {
     echo -e "${CYAN}通用連接說明：${NC}"
     echo -e "${BLUE}1.${NC} 安裝相容的 OpenVPN 客戶端"
     echo -e "${BLUE}2.${NC} 導入配置文件：${YELLOW}$USER_VPN_CONFIG_DIR/${USERNAME}-config.ovpn${NC}"
-    echo -e "${BLUE}3.${NC} 使用設定檔名稱：${YELLOW}${ENV_DISPLAY_NAME:-$CURRENT_ENVIRONMENT} VPN - ${USERNAME}${NC}"
+    echo -e "${BLUE}3.${NC} 使用設定檔名稱：${YELLOW}$(get_env_display_name "$TARGET_ENVIRONMENT") VPN - ${USERNAME}${NC}"
     echo -e "${BLUE}4.${NC} 連接到 VPN"
 }
 
@@ -1018,20 +1169,19 @@ test_connection() {
 
 # 主函數
 main() {
-    # 環境操作驗證
-    if ! env_validate_operation "TEAM_MEMBER_SETUP"; then
-        return 1
-    fi
-    
     # 記錄操作開始
-    log_env_action "TEAM_MEMBER_SETUP_START" "開始團隊成員 VPN 設定"
+    if [ -n "$LOG_FILE" ]; then
+        log_team_setup_message "開始團隊成員 VPN 設定"
+    fi
     
     # 顯示歡迎訊息
     show_welcome
     
     # 執行設置步驟
     check_team_prerequisites
-    setup_aws_config
+    init_environment_and_aws
+    setup_ca_cert_and_environment
+    setup_vpn_endpoint_info
     setup_user_info
     generate_client_certificate
     import_certificate
@@ -1043,11 +1193,10 @@ main() {
     # 可選的連接測試
     test_connection
     
-    log_env_action "TEAM_MEMBER_SETUP_COMPLETE" "團隊成員 VPN 設定完成"
+    if [ -n "$LOG_FILE" ]; then
+        log_team_setup_message "團隊成員 VPN 設定完成"
+    fi
 }
-
-# 記錄腳本啟動
-log_team_setup_message "團隊成員 VPN 設置腳本已啟動"
 
 # 只有在腳本直接執行時才執行主程序（不是被 source 時）
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then

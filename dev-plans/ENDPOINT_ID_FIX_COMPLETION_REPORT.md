@@ -36,7 +36,7 @@
 - ✅ 自動備份和修復機制
 
 ### 4. 完善文檔
-- ✅ 更新 `admin/tools/README.md` 詳細說明問題和解決方案
+- ✅ 更新 `admin-tools/tools/README.md` 詳細說明問題和解決方案
 - ✅ 提供完整的故障排除指南
 - ✅ 包含最佳實踐建議
 
@@ -75,8 +75,8 @@ AWS 區域: us-east-1
 
 1. **立即執行**：
    ```bash
-   ./admin/tools/validate_config.sh  # 驗證所有環境配置
-   ./admin/aws_vpn_admin.sh          # 執行系統健康檢查（選項 8）
+   ./admin-tools/tools/validate_config.sh  # 驗證所有環境配置
+   ./admin-tools/aws_vpn_admin.sh          # 執行系統健康檢查（選項 8）
    ```
 
 2. **定期維護**：

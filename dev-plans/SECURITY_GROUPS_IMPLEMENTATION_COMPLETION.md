@@ -74,7 +74,7 @@
    - 新增 security_groups 參數
    - 更新對 _create_aws_client_vpn_endpoint_ec 的調用
 
-### `/admin/aws_vpn_admin.sh`
+### `/admin-tools/aws_vpn_admin.sh`
 1. **create_vpn_endpoint()**:
    - 新增 security_groups 變數解析
    - 更新配置檔案保存（加入 SECURITY_GROUPS）
@@ -94,7 +94,7 @@
 
 ### 功能測試指令
 ```bash
-bash admin/aws_vpn_admin.sh create_vpn_endpoint
+bash admin-tools/aws_vpn_admin.sh create_vpn_endpoint
 ```
 
 ## 功能特性
