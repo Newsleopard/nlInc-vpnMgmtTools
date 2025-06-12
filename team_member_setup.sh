@@ -196,32 +196,114 @@ setup_aws_config() {
     
     if [ -f ~/.aws/credentials ] && [ -f ~/.aws/config ]; then
         existing_config=true
-        echo -e "${BLUE}檢測到現有的 AWS 配置檔案${NC}"
+        echo -e "${BLUE}📋 檢測到現有的 AWS 配置檔案${NC}"
+        echo -e "${BLUE}═══════════════════════════════════════${NC}"
+        
+        # 顯示配置檔案位置
+        echo -e "配置檔案位置:"
+        echo -e "  • ~/.aws/credentials"
+        echo -e "  • ~/.aws/config"
         
         # 檢查是否可以使用現有配置
+        echo -e "\n${BLUE}正在驗證現有配置...${NC}"
         if aws sts get-caller-identity > /dev/null 2>&1; then
-            echo -e "${GREEN}✓ 現有 AWS 配置可正常使用${NC}"
-            local current_region
-            current_region=$(aws configure get region 2>/dev/null)
+            echo -e "${GREEN}✅ 現有 AWS 配置可正常使用${NC}"
+            
+            # 顯示當前配置詳細資訊
+            local current_region current_output current_identity
+            current_region=$(aws configure get region 2>/dev/null || echo "")
+            current_output=$(aws configure get output 2>/dev/null || echo "")
+            current_identity=$(aws sts get-caller-identity 2>/dev/null || echo "")
+            
+            echo -e "\n${BLUE}📊 當前 AWS 配置詳細資訊:${NC}"
+            echo -e "═══════════════════════════════════════"
+            
             if [ -n "$current_region" ]; then
-                echo -e "${BLUE}當前 AWS 區域: $current_region${NC}"
+                echo -e "AWS 區域: ${GREEN}$current_region${NC}"
+            else
+                echo -e "AWS 區域: ${YELLOW}未設定${NC}"
+            fi
+            
+            if [ -n "$current_output" ]; then
+                echo -e "輸出格式: $current_output"
+            else
+                echo -e "輸出格式: 預設"
+            fi
+            
+            # 顯示當前身份資訊（如果可獲取）
+            if [ -n "$current_identity" ]; then
+                local account_id user_arn
+                if command -v jq >/dev/null 2>&1; then
+                    account_id=$(echo "$current_identity" | jq -r '.Account' 2>/dev/null || echo "無法解析")
+                    user_arn=$(echo "$current_identity" | jq -r '.Arn' 2>/dev/null || echo "無法解析")
+                else
+                    account_id=$(echo "$current_identity" | grep -o '"Account":"[^"]*"' | cut -d'"' -f4 || echo "無法解析")
+                    user_arn=$(echo "$current_identity" | grep -o '"Arn":"[^"]*"' | cut -d'"' -f4 || echo "無法解析")
+                fi
+                echo -e "AWS 帳號: $account_id"
+                echo -e "使用者身份: $user_arn"
+            fi
+            
+            echo -e "═══════════════════════════════════════"
+            
+            if [ -n "$current_region" ]; then
+                echo -e "\n${YELLOW}💡 您有以下選擇:${NC}"
+                echo -e "  ${GREEN}Y${NC} - 使用現有配置 (推薦，如果這是您要使用的 AWS 帳號)"
+                echo -e "      → 將使用上述顯示的 AWS 配置進行 VPN 設定"
+                echo -e "      → 不會修改您現有的 AWS 配置檔案"
+                echo -e ""
+                echo -e "  ${YELLOW}N${NC} - 重新配置 AWS 帳號"
+                echo -e "      → 將要求您輸入新的 AWS Access Key 和 Secret Key"
+                echo -e "      → 會備份現有配置檔案後覆寫設定"
+                echo -e "      → 適用於需要使用不同 AWS 帳號的情況"
+                echo -e ""
+                
                 local use_existing
-                if read_secure_input "是否使用現有的 AWS 配置？(y/n): " use_existing "validate_yes_no"; then
+                if read_secure_input "請選擇 (y/n): " use_existing "validate_yes_no"; then
                     if [[ "$use_existing" =~ ^[Yy]$ ]]; then
                         use_existing_config=true
                         aws_region="$current_region"
+                        echo -e "${GREEN}✅ 將使用現有的 AWS 配置${NC}"
+                        echo -e "${BLUE}📋 已確認使用區域: $aws_region${NC}"
+                    else
+                        echo -e "${YELLOW}📝 將進行 AWS 帳號重新配置${NC}"
                     fi
                 else
-                    echo -e "${YELLOW}使用預設選項：重新配置${NC}"
+                    echo -e "${YELLOW}⚠️ 輸入無效，使用預設選項：重新配置${NC}"
                 fi
+            else
+                echo -e "${YELLOW}⚠️ 現有配置中缺少 AWS 區域設定${NC}"
+                echo -e "${BLUE}將自動進行重新配置以確保設定完整...${NC}"
             fi
         else
-            echo -e "${YELLOW}⚠ 現有 AWS 配置無法正常使用，需要重新設定${NC}"
+            echo -e "${RED}❌ 現有 AWS 配置無法正常使用${NC}"
+            echo -e "${YELLOW}⚠️ 可能的原因:${NC}"
+            echo -e "  • AWS Access Key 或 Secret Key 無效"
+            echo -e "  • 網路連線問題"
+            echo -e "  • AWS 帳號權限不足"
+            echo -e ""
+            echo -e "${BLUE}將自動進行重新配置...${NC}"
         fi
+    else
+        echo -e "${BLUE}📋 未檢測到 AWS 配置檔案${NC}"
+        echo -e "${YELLOW}需要設定 AWS 憑證以繼續 VPN 配置${NC}"
     fi
     
     if [ "$use_existing_config" = false ]; then
-        echo -e "${YELLOW}請提供您的 AWS 帳戶資訊：${NC}"
+        echo -e "\n${YELLOW}🔧 AWS 帳號配置設定${NC}"
+        echo -e "═══════════════════════════════════════"
+        echo -e "請提供您的 AWS 帳戶資訊用於 VPN 設定："
+        echo -e ""
+        echo -e "${BLUE}💡 您需要提供:${NC}"
+        echo -e "  • AWS Access Key ID (通常以 AKIA 開頭)"
+        echo -e "  • AWS Secret Access Key (較長的字母數字組合)"
+        echo -e "  • AWS 區域 (需與 VPN 端點在同一區域)"
+        echo -e ""
+        echo -e "${YELLOW}⚠️ 重要提醒:${NC}"
+        echo -e "  • 請確保您的 AWS 帳號有足夠權限進行 VPN 操作"
+        echo -e "  • 輸入的憑證將用於上傳證書到 AWS Certificate Manager"
+        echo -e "═══════════════════════════════════════"
+        echo -e ""
         
         local aws_access_key
         local aws_secret_key
@@ -248,38 +330,47 @@ setup_aws_config() {
         if [ "$existing_config" = true ]; then
             local backup_timestamp
             backup_timestamp=$(date +%Y%m%d_%H%M%S)
-            echo -e "${BLUE}備份現有 AWS 配置檔案...${NC}"
+            echo -e "${BLUE}💾 備份現有 AWS 配置檔案...${NC}"
+            echo -e "備份時間戳記: $backup_timestamp"
             
             if [ -f ~/.aws/credentials ]; then
                 if cp ~/.aws/credentials ~/.aws/credentials.backup_$backup_timestamp; then
-                    echo -e "${GREEN}✓ 已備份 ~/.aws/credentials${NC}"
+                    echo -e "${GREEN}✅ 已備份 ~/.aws/credentials → ~/.aws/credentials.backup_$backup_timestamp${NC}"
                 else
-                    echo -e "${YELLOW}⚠ 備份 credentials 失敗，繼續設定${NC}"
+                    echo -e "${YELLOW}⚠️ 備份 credentials 失敗，繼續設定${NC}"
                 fi
             fi
             
             if [ -f ~/.aws/config ]; then
                 if cp ~/.aws/config ~/.aws/config.backup_$backup_timestamp; then
-                    echo -e "${GREEN}✓ 已備份 ~/.aws/config${NC}"
+                    echo -e "${GREEN}✅ 已備份 ~/.aws/config → ~/.aws/config.backup_$backup_timestamp${NC}"
                 else
-                    echo -e "${YELLOW}⚠ 備份 config 失敗，繼續設定${NC}"
+                    echo -e "${YELLOW}⚠️ 備份 config 失敗，繼續設定${NC}"
                 fi
             fi
+            
+            echo -e "${BLUE}📝 如需恢復原始配置，請執行:${NC}"
+            echo -e "  cp ~/.aws/credentials.backup_$backup_timestamp ~/.aws/credentials"
+            echo -e "  cp ~/.aws/config.backup_$backup_timestamp ~/.aws/config"
+            echo -e ""
         fi
         
         # 創建配置目錄
         mkdir -p ~/.aws
         
         # 使用 AWS CLI 命令安全地設定配置
-        echo -e "${BLUE}設定 AWS CLI 配置...${NC}"
+        echo -e "${BLUE}🔧 設定 AWS CLI 配置...${NC}"
         aws configure set aws_access_key_id "$aws_access_key"
         aws configure set aws_secret_access_key "$aws_secret_key"
         aws configure set default.region "$aws_region"
         aws configure set default.output json
         
-        echo -e "${GREEN}AWS 配置已完成！${NC}"
+        echo -e "${GREEN}✅ AWS 配置設定完成！${NC}"
+        echo -e "${BLUE}新配置詳細資訊:${NC}"
+        echo -e "  • 區域: $aws_region"
+        echo -e "  • 輸出格式: json"
     else
-        echo -e "${GREEN}✓ 使用現有 AWS 配置${NC}"
+        echo -e "${GREEN}✅ 使用現有 AWS 配置${NC}"
     fi
     
     # 測試 AWS 連接
@@ -293,6 +384,23 @@ setup_aws_config() {
     
     # 獲取 VPN 端點資訊
     echo -e "\\n${YELLOW}請向管理員獲取以下資訊：${NC}"
+    
+    # 確保 AWS 區域已設置
+    if [ -z "$aws_region" ]; then
+        echo -e "${YELLOW}⚠️ AWS 區域未設置，正在從當前配置獲取...${NC}"
+        aws_region=$(aws configure get region 2>/dev/null)
+        if [ -z "$aws_region" ]; then
+            echo -e "${RED}❌ 無法獲取 AWS 區域設定${NC}"
+            if ! read_secure_input "請輸入 AWS 區域 (與 VPN 端點相同的區域): " aws_region "validate_aws_region"; then
+                echo -e "${RED}AWS 區域驗證失敗${NC}"
+                log_team_setup_message "AWS 區域驗證失敗"
+                return 1
+            fi
+        else
+            echo -e "${GREEN}✓ 已從配置獲取 AWS 區域: $aws_region${NC}"
+        fi
+    fi
+    
     local endpoint_id
     if ! read_secure_input "請輸入 Client VPN 端點 ID: " endpoint_id "validate_endpoint_id"; then
         echo -e "${RED}VPN 端點 ID 驗證失敗${NC}"
@@ -670,6 +778,28 @@ setup_vpn_client() {
     
     # 添加配置選項
     echo "reneg-sec 0" >> "$config_dir/${USERNAME}-config.ovpn"
+    
+    # 添加 AWS 域名分割 DNS 配置
+    echo -e "${BLUE}配置 AWS 域名分割 DNS...${NC}"
+    {
+        echo ""
+        echo "# AWS 域名分割 DNS 配置"
+        echo "# 確保 AWS 內部服務域名通過 VPC DNS 解析"
+        echo "dhcp-option DNS-priority 1"
+        echo "dhcp-option DOMAIN internal"
+        echo "dhcp-option DOMAIN $AWS_REGION.compute.internal"
+        echo "dhcp-option DOMAIN ec2.internal"
+        echo "dhcp-option DOMAIN $AWS_REGION.elb.amazonaws.com"
+        echo "dhcp-option DOMAIN $AWS_REGION.rds.amazonaws.com"
+        echo "dhcp-option DOMAIN $AWS_REGION.s3.amazonaws.com"
+        echo "dhcp-option DOMAIN *.amazonaws.com"
+        echo ""
+        echo "# 路由配置：將 AWS 服務流量導向 VPN"
+        echo "# EC2 metadata service"
+        echo "route 169.254.169.254 255.255.255.255"
+        echo "# VPC DNS resolver"
+        echo "route 169.254.169.253 255.255.255.255"
+    } >> "$config_dir/${USERNAME}-config.ovpn"
     
     # 添加客戶端證書和密鑰
     {

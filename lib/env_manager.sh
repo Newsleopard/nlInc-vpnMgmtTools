@@ -109,7 +109,7 @@ env_switch() {
     echo ""
     
     # 使用增強確認系統進行環境切換確認
-    if ! smart_operation_confirmation "SWITCH_ENVIRONMENT" "$target_env" "切換到 $target_env 環境"; then
+    if ! smart_operation_confirmation "SWITCH_ENVIRONMENT" "$target_env" 1 "切換到 $target_env 環境"; then
         echo -e "${YELLOW}環境切換已取消${NC}"
         return 1
     fi
@@ -412,7 +412,7 @@ env_validate_operation() {
     
     # 使用增強確認系統進行操作驗證
     if [[ "$REQUIRE_OPERATION_CONFIRMATION" == "true" ]]; then
-        if ! smart_operation_confirmation "$operation" "$env_name" "在 $env_name 環境執行 $operation"; then
+        if ! smart_operation_confirmation "$operation" "$env_name" 1 "在 $env_name 環境執行 $operation"; then
             echo -e "${YELLOW}操作已取消${NC}"
             return 1
         fi
@@ -508,9 +508,11 @@ env_enhanced_operation_confirm() {
     
     # 使用增強確認模組
     if [[ "$batch_mode" == "true" ]]; then
-        batch_operation_confirmation "$operation" "$env_name" "$description"
+        # batch_operation_confirmation 需要: operation, target_count, env_name
+        local target_count="1"  # 預設為 1，可從 description 中解析更多資訊
+        batch_operation_confirmation "$operation" "$target_count" "$env_name"
     else
-        smart_operation_confirmation "$operation" "$env_name" "$description"
+        smart_operation_confirmation "$operation" "$env_name" 1 "$description"
     fi
 }
 

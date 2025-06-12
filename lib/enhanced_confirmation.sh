@@ -292,6 +292,12 @@ smart_operation_confirmation() {
     # 獲取風險等級
     local risk_level=$(get_operation_risk_level "$operation" "$env_name")
     
+    # 驗證 batch_count 是否為有效數字
+    if ! [[ "$batch_count" =~ ^[0-9]+$ ]]; then
+        echo "警告: batch_count 參數不是有效數字: '$batch_count'，設置為預設值 1" >&2
+        batch_count=1
+    fi
+    
     # 批次操作處理
     if [[ $batch_count -gt 1 ]]; then
         if ! batch_operation_confirmation "$operation" "$batch_count" "$env_name"; then

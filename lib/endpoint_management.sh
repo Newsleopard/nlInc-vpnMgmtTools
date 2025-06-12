@@ -433,6 +433,27 @@ generate_admin_config_lib() {
     cp "$script_dir/configs/admin-config-base.ovpn" "$script_dir/configs/admin-config.ovpn"
     echo "reneg-sec 0" >> "$script_dir/configs/admin-config.ovpn"
     
+    # 添加 AWS 域名分割 DNS 配置
+    {
+        echo ""
+        echo "# AWS 域名分割 DNS 配置"
+        echo "# 確保 AWS 內部服務域名通過 VPC DNS 解析"
+        echo "dhcp-option DNS-priority 1"
+        echo "dhcp-option DOMAIN internal"
+        echo "dhcp-option DOMAIN $AWS_REGION.compute.internal"
+        echo "dhcp-option DOMAIN ec2.internal"
+        echo "dhcp-option DOMAIN $AWS_REGION.elb.amazonaws.com"
+        echo "dhcp-option DOMAIN $AWS_REGION.rds.amazonaws.com"
+        echo "dhcp-option DOMAIN $AWS_REGION.s3.amazonaws.com"
+        echo "dhcp-option DOMAIN *.amazonaws.com"
+        echo ""
+        echo "# 路由配置：將 AWS 服務流量導向 VPN"
+        echo "# EC2 metadata service"
+        echo "route 169.254.169.254 255.255.255.255"
+        echo "# VPC DNS resolver"
+        echo "route 169.254.169.253 255.255.255.255"
+    } >> "$script_dir/configs/admin-config.ovpn"
+    
     # 生成管理員證書
     if ! generate_admin_certificate_lib "$script_dir"; then
         echo -e "${RED}錯誤: 生成管理員證書失敗${NC}"
@@ -518,6 +539,28 @@ export_team_config_lib() {
         log_message_core "錯誤: AWS CLI 調用失敗 - export-client-vpn-client-configuration"
         return 1
     fi
+    
+    # 添加 AWS 域名分割 DNS 配置到團隊基礎配置
+    echo -e "${BLUE}配置 AWS 域名分割 DNS 到團隊基礎配置...${NC}"
+    {
+        echo ""
+        echo "# AWS 域名分割 DNS 配置"
+        echo "# 確保 AWS 內部服務域名通過 VPC DNS 解析"
+        echo "dhcp-option DNS-priority 1"
+        echo "dhcp-option DOMAIN internal"
+        echo "dhcp-option DOMAIN $AWS_REGION.compute.internal"
+        echo "dhcp-option DOMAIN ec2.internal"
+        echo "dhcp-option DOMAIN $AWS_REGION.elb.amazonaws.com"
+        echo "dhcp-option DOMAIN $AWS_REGION.rds.amazonaws.com"
+        echo "dhcp-option DOMAIN $AWS_REGION.s3.amazonaws.com"
+        echo "dhcp-option DOMAIN *.amazonaws.com"
+        echo ""
+        echo "# 路由配置：將 AWS 服務流量導向 VPN"
+        echo "# EC2 metadata service"
+        echo "route 169.254.169.254 255.255.255.255"
+        echo "# VPC DNS resolver"
+        echo "route 169.254.169.253 255.255.255.255"
+    } >> "$script_dir/team-configs/team-config-base.ovpn"
     
     # 檢查證書文件是否存在 - 使用環境感知路徑
     if [ ! -f "$VPN_CERT_DIR/pki/ca.crt" ] || [ ! -f "$VPN_CERT_DIR/pki/private/ca.key" ]; then

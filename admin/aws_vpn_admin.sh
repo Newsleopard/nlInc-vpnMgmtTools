@@ -166,7 +166,7 @@ create_vpn_endpoint() {
         return 1
     fi
 
-    local vpc_id subnet_id vpn_cidr vpn_name
+    local vpc_id subnet_id vpn_cidr vpn_name security_groups
     
     # 解析 VPC 詳細資訊 JSON
     if command -v jq >/dev/null 2>&1; then
@@ -187,12 +187,21 @@ create_vpn_endpoint() {
             handle_error "無法從詳細資訊中解析 VPN 名稱。"
             return 1
         fi
+        if ! security_groups=$(echo "$vpn_details_json" | jq -r '.security_groups' 2>/dev/null); then
+            handle_error "無法從詳細資訊中解析 Security Groups。"
+            return 1
+        fi
+        # 如果 security_groups 是 "null"，設為空字串
+        if [ "$security_groups" == "null" ]; then
+            security_groups=""
+        fi
     else
         # 備用解析方法：使用 sed 和 grep 從 JSON 中提取值
         vpc_id=$(echo "$vpn_details_json" | grep -o '"vpc_id":"[^"]*"' | sed 's/"vpc_id":"\([^"]*\)"/\1/')
         subnet_id=$(echo "$vpn_details_json" | grep -o '"subnet_id":"[^"]*"' | sed 's/"subnet_id":"\([^"]*\)"/\1/')
         vpn_cidr=$(echo "$vpn_details_json" | grep -o '"vpn_cidr":"[^"]*"' | sed 's/"vpn_cidr":"\([^"]*\)"/\1/')
         vpn_name=$(echo "$vpn_details_json" | grep -o '"vpn_name":"[^"]*"' | sed 's/"vpn_name":"\([^"]*\)"/\1/')
+        security_groups=$(echo "$vpn_details_json" | grep -o '"security_groups":"[^"]*"' | sed 's/"security_groups":"\([^"]*\)"/\1/')
         
         # 使用通用驗證函數進行錯誤檢查，並提供適當的驗證函數
         if ! validate_json_parse_result "$vpc_id" "VPC ID" "validate_vpc_id"; then
@@ -225,19 +234,21 @@ create_vpn_endpoint() {
     echo -e "${BLUE}選定的子網路 ID: $subnet_id${NC}"
     echo -e "${BLUE}VPN CIDR: $vpn_cidr${NC}"
     echo -e "${BLUE}VPN 名稱: $vpn_name${NC}"
+    echo -e "${BLUE}Security Groups: ${security_groups:-無 (使用預設)}${NC}"
 
     # 更新配置文件
     update_config "$CONFIG_FILE" "VPC_ID" "$vpc_id"
     update_config "$CONFIG_FILE" "SUBNET_ID" "$subnet_id"
     update_config "$CONFIG_FILE" "VPN_CIDR" "$vpn_cidr"
     update_config "$CONFIG_FILE" "VPN_NAME" "$vpn_name"
+    update_config "$CONFIG_FILE" "SECURITY_GROUPS" "$security_groups"
     update_config "$CONFIG_FILE" "SERVER_CERT_ARN" "$main_server_cert_arn" # 使用已獲取的 ARN
     update_config "$CONFIG_FILE" "CLIENT_CERT_ARN" "$main_client_cert_arn" # 使用已獲取的 ARN
 
     # 呼叫核心創建函式
     echo -e "\\n${CYAN}=== 開始創建 VPN 端點 ===${NC}"
     local creation_output
-    if ! creation_output=$(create_vpn_endpoint_lib "$CONFIG_FILE" "$AWS_REGION" "$vpc_id" "$subnet_id" "$vpn_cidr" "$main_server_cert_arn" "$main_client_cert_arn" "$vpn_name"); then # Pass all required args
+    if ! creation_output=$(create_vpn_endpoint_lib "$CONFIG_FILE" "$AWS_REGION" "$vpc_id" "$subnet_id" "$vpn_cidr" "$main_server_cert_arn" "$main_client_cert_arn" "$vpn_name" "$security_groups"); then # Pass all required args
         echo -e "${RED}VPN 端點創建過程中發生錯誤。${NC}" # Bug fix item 5
         log_message "VPN 端點創建過程中發生錯誤。"
         return 1
