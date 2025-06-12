@@ -123,7 +123,7 @@ logs/
 1.  **`vpn_env.sh`** - 環境管理入口工具。用於切換和查看 Staging/Production 環境狀態，以及執行環境健康檢查。
 2.  **`enhanced_env_selector.sh`** - 增強型互動式環境選擇器。提供一個控制台界面，方便用戶進行環境切換、狀態查看和比較等操作。
 3.  **`admin-tools/aws_vpn_admin.sh`** - 管理員主控台。核心管理工具，用於創建、查看、管理和刪除 VPN 端點，以及管理團隊設定等。此工具會根據當前選定的環境（Staging/Production）執行操作。
-4.  **`team_member_setup.sh`** - 團隊成員設置工具。引導團隊成員完成 VPN 客戶端的配置，包括生成個人證書和 VPN 設定檔。
+4.  **`team_member_setup.sh`** - 團隊成員設置工具。引導團隊成員完成 VPN 客戶端的配置，包括生成個人證書和 VPN 設定檔。**自動配置進階 DNS 分流和 AWS 服務路由功能**。
 5.  **`admin-tools/revoke_member_access.sh`** - 權限撤銷工具。用於安全地撤銷特定用戶的 VPN 訪問權限，包括註銷其證書和斷開現有連接。
 6.  **`admin-tools/employee_offboarding.sh`** - 員工離職處理系統。提供一個標準化流程，用於處理員工離職時的 VPN 訪問權限移除及相關安全審計。
 
@@ -156,6 +156,67 @@ logs/
 總共包含 **13個主要腳本** 和 **7個核心庫文件**，提供從環境管理、VPN 端點創建、團隊管理到故障診斷的完整解決方案。所有工具都支援雙環境（Staging/Production）架構，並提供自動備份和錯誤恢復功能。
 
 詳細的診斷和修復工具說明請參考: [`admin-tools/tools/README.md`](admin-tools/tools/README.md)
+
+---
+
+## 🌐 進階 VPN 配置功能
+
+### DNS 分流與 AWS 服務整合
+
+`team_member_setup.sh` 工具在生成個人 VPN 配置文件時，會自動配置進階的 DNS 分流和路由功能，確保無縫存取 AWS 服務和內部資源。
+
+#### 🔍 自動配置的 DNS 功能
+
+**智慧 DNS 分流設定:**
+```bash
+dhcp-option DNS-priority 1                    # 設定 VPN DNS 優先級
+dhcp-option DOMAIN internal                   # 內部網域解析
+dhcp-option DOMAIN us-east-1.compute.internal # EC2 區域特定域名
+dhcp-option DOMAIN ec2.internal               # EC2 內部域名
+dhcp-option DOMAIN us-east-1.elb.amazonaws.com # ELB 服務域名
+dhcp-option DOMAIN us-east-1.rds.amazonaws.com # RDS 服務域名  
+dhcp-option DOMAIN us-east-1.s3.amazonaws.com  # S3 服務域名
+dhcp-option DOMAIN *.amazonaws.com             # 所有 AWS 服務域名
+```
+
+#### 🛣️ 進階路由配置
+
+**AWS 核心服務路由:**
+```bash
+route 169.254.169.254 255.255.255.255  # EC2 Metadata Service (IMDS)
+route 169.254.169.253 255.255.255.255  # VPC DNS Resolver
+```
+
+#### ✨ 主要優勢和功能
+
+**🔧 開發環境整合:**
+- **EC2 實例發現**: 可以透過私有 DNS 名稱存取 EC2 實例
+- **服務發現**: 支援 ECS、EKS 等容器化服務的內部發現機制
+- **Metadata 存取**: 應用程式可以正常存取 EC2 metadata 和 IAM 角色憑證
+
+**🚀 效能最佳化:**
+- **內部網路路由**: AWS 服務間通訊使用內部網路，減少延遲
+- **頻寬節省**: 只有 AWS 相關流量走 VPN，其他網路流量保持本地路由
+- **DNS 快取**: 利用 VPC DNS 解析器的快取機制
+
+**🔒 安全性增強:**
+- **網路隔離**: 確保敏感的內部服務只能透過 VPN 存取
+- **流量分流**: 避免所有流量都經過 VPN，減少安全風險
+- **存取控制**: 配合 AWS 安全群組和 NACL 實現精細的存取控制
+
+#### 🎯 實際應用場景
+
+1. **本地開發環境**: 開發者可以直接連接到 VPC 內的 RDS、ElastiCache 等服務
+2. **除錯和測試**: 可以存取內部 Load Balancer 和私有子網路的服務
+3. **管理操作**: 透過私有 IP 直接管理 EC2 實例，無需跳板機
+4. **應用程式整合**: 本地運行的應用程式可以無縫整合 AWS 服務
+
+#### ⚙️ 技術實現細節
+
+- **區域感知**: 自動根據 AWS 設定檔的區域配置對應的服務域名
+- **動態配置**: 根據目標環境（Staging/Production）自動調整路由規則  
+- **相容性**: 支援 macOS、Linux 和 Windows 的 OpenVPN 客戶端
+- **故障排除**: 包含詳細的連線測試和診斷指令
 
 ---
 

@@ -72,6 +72,64 @@ Each environment has its own configuration structure:
 ./admin-tools/tools/fix_endpoint_id.sh
 ```
 
+## Advanced VPN Configuration Features
+
+### Automatic DNS Split Configuration
+
+The `team_member_setup.sh` script automatically configures advanced DNS and routing features in the generated OpenVPN configuration files to ensure seamless access to AWS services through the VPN tunnel.
+
+#### DNS Configuration Features
+
+**Split DNS Configuration:**
+```
+dhcp-option DNS-priority 1
+dhcp-option DOMAIN internal
+dhcp-option DOMAIN {region}.compute.internal
+dhcp-option DOMAIN ec2.internal
+dhcp-option DOMAIN {region}.elb.amazonaws.com
+dhcp-option DOMAIN {region}.rds.amazonaws.com
+dhcp-option DOMAIN {region}.s3.amazonaws.com
+dhcp-option DOMAIN *.amazonaws.com
+```
+
+**What this enables:**
+- **AWS Service Resolution**: Ensures AWS service endpoints resolve through VPC DNS
+- **Regional Awareness**: Automatically configures region-specific domains (e.g., `us-east-1.compute.internal`)
+- **EC2 Instance Discovery**: Allows resolution of EC2 private DNS names
+- **Service Integration**: Direct access to RDS, ELB, S3, and other AWS services via internal endpoints
+- **DNS Priority**: Sets VPN DNS as primary for AWS domains while preserving local DNS for other domains
+
+#### Advanced Routing Configuration
+
+**Metadata Service Access:**
+```
+route 169.254.169.254 255.255.255.255  # EC2 metadata service
+route 169.254.169.253 255.255.255.255  # VPC DNS resolver
+```
+
+**Benefits:**
+- **EC2 Metadata Access**: Applications can access EC2 instance metadata and user data
+- **IAM Role Integration**: EC2 instances can assume roles and retrieve temporary credentials
+- **VPC DNS Resolution**: Ensures all AWS internal DNS queries go through VPC resolver
+- **Service Discovery**: Enables applications to discover and connect to VPC-internal services
+
+#### Security and Performance Benefits
+
+**Network Isolation:**
+- Routes only necessary AWS traffic through VPN tunnel
+- Preserves local internet connectivity for non-AWS traffic
+- Reduces VPN bandwidth usage by not tunneling all traffic
+
+**Service Reliability:**
+- Uses AWS internal network paths for better performance
+- Avoids public internet routing for internal AWS communication
+- Reduces latency for AWS service access
+
+**Development Environment Parity:**
+- Matches production VPC DNS behavior
+- Enables consistent service discovery across environments
+- Supports containerized applications expecting AWS metadata access
+
 ## Core Library Functions
 
 The `lib/` directory contains modular libraries:

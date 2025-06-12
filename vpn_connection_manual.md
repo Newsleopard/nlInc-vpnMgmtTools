@@ -865,6 +865,111 @@ echo "" >> $LOG_FILE
 - **環境特定認證錯誤**: 檢查用戶證書 (`.crt`) 和私鑰 (`.key`) 是否匹配，證書是否過期。
 - **DNS 解析問題 (環境感知版)**: `scutil --dns` 查看當前 DNS，`nslookup` 測試。
 
+### 11.4 AWS DNS 分流與路由問題
+
+`team_member_setup.sh` 自動配置的進階 DNS 和路由功能可能遇到的問題：
+
+#### DNS 分流配置問題
+
+**問題**: AWS 服務域名無法解析或解析到錯誤 IP
+- **症狀**: 
+  - 無法連接到 RDS、ELB 等 AWS 服務
+  - `nslookup us-east-1.compute.internal` 失敗
+  - EC2 私有 DNS 名稱無法解析
+- **診斷命令**:
+  ```bash
+  # 檢查 DNS 設定
+  scutil --dns | grep amazonaws
+  
+  # 測試 AWS 域名解析
+  nslookup ec2.internal
+  nslookup us-east-1.compute.internal
+  nslookup myinstance.us-east-1.compute.internal
+  
+  # 檢查 VPN 配置文件中的 DNS 設定
+  grep "dhcp-option DOMAIN" ~/.vpn-configs/[username]-config.ovpn
+  ```
+- **解決方案**:
+  1. 確認 VPN 連接已建立且 DNS 優先級設定正確
+  2. 重新生成配置文件 (重新執行 `team_member_setup.sh`)
+  3. 確認 VPC DNS 解析已啟用
+
+#### EC2 Metadata Service 存取問題
+
+**問題**: 應用程式無法存取 EC2 Metadata Service (169.254.169.254)
+- **症狀**:
+  - IAM 角色憑證取得失敗
+  - 應用程式無法獲取實例 metadata
+  - AWS SDK 或 CLI 回報憑證錯誤
+- **診斷命令**:
+  ```bash
+  # 測試 metadata service 連接
+  curl -m 5 http://169.254.169.254/latest/meta-data/instance-id
+  
+  # 檢查路由表
+  netstat -rn | grep 169.254.169.254
+  
+  # 檢查 VPN 配置文件中的路由設定
+  grep "route 169.254.169" ~/.vpn-configs/[username]-config.ovpn
+  ```
+- **解決方案**:
+  1. 確認 VPN 配置文件包含正確的路由設定
+  2. 重新連接 VPN 以套用路由規則
+  3. 檢查防火牆是否阻擋相關流量
+
+#### VPC DNS 解析器問題
+
+**問題**: VPC 內部服務無法正確解析
+- **症狀**:
+  - 內部服務發現失敗
+  - ECS/EKS 服務無法互相發現
+  - 私有 hosted zone 記錄無法解析
+- **診斷命令**:
+  ```bash
+  # 測試 VPC DNS 解析器
+  nslookup google.com 169.254.169.253
+  
+  # 檢查當前 DNS 伺服器
+  cat /etc/resolv.conf
+  
+  # 測試特定內部服務
+  nslookup [internal-service-name].internal
+  ```
+- **解決方案**:
+  1. 確認 VPC DNS 支援已啟用
+  2. 檢查 Route 53 私有 hosted zone 設定
+  3. 驗證安全群組允許 DNS 流量 (Port 53)
+
+#### 效能最佳化問題
+
+**問題**: DNS 解析速度緩慢或不穩定
+- **解決方案**:
+  1. 啟用 DNS 快取: 確認系統 DNS 快取服務正常運作
+  2. 調整 DNS 逾時設定: 修改應用程式的 DNS 逾時參數
+  3. 使用多個 DNS 伺服器: 檢查 VPN 配置是否包含備用 DNS
+
+#### 驗證 DNS 配置正確性
+
+**完整驗證流程**:
+```bash
+# 1. 檢查 VPN 連接狀態
+aws ec2 describe-client-vpn-connections --client-vpn-endpoint-id [endpoint-id]
+
+# 2. 驗證 DNS 配置
+scutil --dns | grep -A 5 -B 5 amazonaws
+
+# 3. 測試關鍵服務解析
+nslookup us-east-1.compute.internal
+nslookup us-east-1.rds.amazonaws.com
+curl -m 5 http://169.254.169.254/latest/meta-data/
+
+# 4. 檢查路由表
+netstat -rn | grep -E "(169.254.169.254|169.254.169.253)"
+
+# 5. 測試實際應用連接
+# (根據具體使用的 AWS 服務進行測試)
+```
+
 ### 11.4 日誌文件分析
 - **管理員日誌**:
     - `vpn_admin_[environment].log` (由 `aws_vpn_admin.sh` 等工具生成)
