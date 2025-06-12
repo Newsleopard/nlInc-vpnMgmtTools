@@ -123,19 +123,25 @@ logs/
 1.  **`vpn_env.sh`** - 環境管理入口工具。用於切換和查看 Staging/Production 環境狀態，以及執行環境健康檢查。
 2.  **`enhanced_env_selector.sh`** - 增強型互動式環境選擇器。提供一個控制台界面，方便用戶進行環境切換、狀態查看和比較等操作。
 3.  **`admin-tools/aws_vpn_admin.sh`** - 管理員主控台。核心管理工具，用於創建、查看、管理和刪除 VPN 端點，以及管理團隊設定等。此工具會根據當前選定的環境（Staging/Production）執行操作。
-4.  **`team_member_setup.sh`** - 團隊成員設置工具。引導團隊成員完成 VPN 客戶端的配置，包括生成個人證書和 VPN 設定檔。**自動配置進階 DNS 分流和 AWS 服務路由功能**。
+4.  **`team_member_setup.sh`** - 團隊成員設置工具。引導團隊成員完成 VPN 客戶端的配置，使用**安全的 CSR 工作流程**生成證書請求並等待管理員簽署。**自動配置進階 DNS 分流和 AWS 服務路由功能**。
 5.  **`admin-tools/revoke_member_access.sh`** - 權限撤銷工具。用於安全地撤銷特定用戶的 VPN 訪問權限，包括註銷其證書和斷開現有連接。
 6.  **`admin-tools/employee_offboarding.sh`** - 員工離職處理系統。提供一個標準化流程，用於處理員工離職時的 VPN 訪問權限移除及相關安全審計。
 
+### 🔧 CSR 管理工具 (admin-tools/)
+
+7.  **`sign_csr.sh`** - CSR 簽署工具。管理員專用，用於安全地簽署團隊成員的證書請求，保持 CA 私鑰隔離。
+8.  **`setup_csr_s3_bucket.sh`** - S3 CSR 交換桶設置工具。創建和配置用於安全 CSR 交換的 S3 存儲桶，包括 IAM 政策生成。
+9.  **`process_csr_batch.sh`** - CSR 批次處理工具。支援批次下載、簽署和上傳 CSR，以及監控模式自動處理。
+
 ### 🔧 診斷和修復工具 (admin-tools/tools/)
 
-7.  **`fix_endpoint_id.sh`** - 自動修復 VPN 端點 ID 配置不匹配問題。自動檢測 AWS 認證狀態、列出可用端點並提供互動式選擇界面。
-8.  **`simple_endpoint_fix.sh`** - 簡化的診斷工具。提供詳細的手動修復指導步驟和常見診斷命令。
-9.  **`debug_vpn_creation.sh`** - VPN 端點創建診斷工具。全面診斷 VPN 端點創建問題，檢查 AWS 配置、網路資源、證書狀態和 JSON 格式。
-10. **`fix_vpn_config.sh`** - VPN 配置修復工具。自動修復常見配置問題，包括子網配置、證書替換和資源衝突清理。
-11. **`complete_vpn_setup.sh`** - 完整 VPN 設置工具。從 "pending-associate" 狀態繼續完成 VPN 端點設置流程。
-12. **`validate_config.sh`** - 配置驗證工具。驗證所有環境的配置正確性並自動修復簡單的配置問題。
-13. **`verify_config_update_fix.sh`** - 配置更新修復驗證工具。驗證配置文件更新修復是否正確工作。
+10.  **`fix_endpoint_id.sh`** - 自動修復 VPN 端點 ID 配置不匹配問題。自動檢測 AWS 認證狀態、列出可用端點並提供互動式選擇界面。
+11. **`simple_endpoint_fix.sh`** - 簡化的診斷工具。提供詳細的手動修復指導步驟和常見診斷命令。
+12. **`debug_vpn_creation.sh`** - VPN 端點創建診斷工具。全面診斷 VPN 端點創建問題，檢查 AWS 配置、網路資源、證書狀態和 JSON 格式。
+13. **`fix_vpn_config.sh`** - VPN 配置修復工具。自動修復常見配置問題，包括子網配置、證書替換和資源衝突清理。
+14. **`complete_vpn_setup.sh`** - 完整 VPN 設置工具。從 "pending-associate" 狀態繼續完成 VPN 端點設置流程。
+15. **`validate_config.sh`** - 配置驗證工具。驗證所有環境的配置正確性並自動修復簡單的配置問題。
+16. **`verify_config_update_fix.sh`** - 配置更新修復驗證工具。驗證配置文件更新修復是否正確工作。
 
 ### 📚 核心庫文件 (lib/)
 
@@ -153,7 +159,7 @@ logs/
 
 ### 完整工具清單
 
-總共包含 **13個主要腳本** 和 **7個核心庫文件**，提供從環境管理、VPN 端點創建、團隊管理到故障診斷的完整解決方案。所有工具都支援雙環境（Staging/Production）架構，並提供自動備份和錯誤恢復功能。
+總共包含 **16個主要腳本** 和 **7個核心庫文件**，提供從環境管理、VPN 端點創建、安全 CSR 管理、團隊管理到故障診斷的完整解決方案。所有工具都支援雙環境（Staging/Production）架構，並提供自動備份和錯誤恢復功能。
 
 詳細的診斷和修復工具說明請參考: [`admin-tools/tools/README.md`](admin-tools/tools/README.md)
 
@@ -220,6 +226,69 @@ route 169.254.169.253 255.255.255.255  # VPC DNS Resolver
 
 ---
 
+## 🔐 安全 CSR 工作流程
+
+### 概述
+
+本工具套件採用**兩階段證書簽署請求 (CSR) 工作流程**，確保 CA 私鑰始終保持在管理員系統上，從不暴露給團隊成員。這種方法大幅提升了安全性，同時保持了自助服務的便利性。
+
+### 工作流程步驟
+
+#### 📝 階段一：團隊成員生成 CSR
+```bash
+# 團隊成員執行（生成私鑰和 CSR）
+./team_member_setup.sh
+```
+- 生成個人私鑰（保留在本地）
+- 創建證書簽署請求 (CSR)
+- 提供上傳指示
+- 腳本暫停等待管理員簽署
+
+#### 🔒 階段二：管理員簽署證書
+```bash
+# 管理員選項 1：簽署單個 CSR
+./admin-tools/sign_csr.sh -e production user.csr
+
+# 管理員選項 2：批次處理多個 CSR
+./admin-tools/process_csr_batch.sh download -e production
+./admin-tools/process_csr_batch.sh process -e production
+./admin-tools/process_csr_batch.sh upload --auto-upload
+```
+- 驗證 CSR 格式和內容
+- 使用 CA 私鑰安全簽署
+- 生成有效的客戶端證書
+
+#### ✅ 階段三：團隊成員完成設置
+```bash
+# 團隊成員恢復設置（當收到簽署證書後）
+./team_member_setup.sh --resume-cert
+```
+- 驗證簽署證書
+- 完成 VPN 客戶端配置
+- 導入證書到 AWS ACM
+
+### S3 安全交換（可選）
+
+管理員可設置 S3 存儲桶進行安全的 CSR/證書交換：
+
+```bash
+# 設置 S3 交換桶
+./admin-tools/setup_csr_s3_bucket.sh
+
+# 監控模式自動處理
+./admin-tools/process_csr_batch.sh monitor -e staging
+```
+
+### 安全優勢
+
+- **🔐 CA 私鑰隔離**：CA 私鑰永不離開管理員系統
+- **🛡️ 最小權限**：團隊成員只能生成 CSR，無法簽署證書
+- **📋 審計追蹤**：所有簽署操作都有完整記錄
+- **🔄 自動化支持**：支援批次處理和監控模式
+- **☁️ 安全交換**：透過 S3 和 IAM 政策控制文件交換
+
+---
+
 ## 快速使用指南
 
 ### 常用操作流程
@@ -241,11 +310,31 @@ route 169.254.169.253 255.255.255.255  # VPC DNS Resolver
 # 啟動管理員控制台
 ./admin-tools/aws_vpn_admin.sh
 
-# 設置團隊成員 VPN 訪問
+# 設置團隊成員 VPN 訪問（生成 CSR）
 ./team_member_setup.sh
+
+# 完成證書設置（當管理員簽署後）
+./team_member_setup.sh --resume-cert
 
 # 撤銷用戶訪問權限
 ./admin-tools/revoke_member_access.sh
+```
+
+#### 🔐 CSR 管理操作（管理員專用）
+```bash
+# 設置 S3 CSR 交換桶
+./admin-tools/setup_csr_s3_bucket.sh
+
+# 簽署單個 CSR
+./admin-tools/sign_csr.sh -e production user.csr
+
+# 批次處理多個 CSR
+./admin-tools/process_csr_batch.sh download -e production
+./admin-tools/process_csr_batch.sh process -e production
+./admin-tools/process_csr_batch.sh upload --auto-upload
+
+# 監控模式自動處理
+./admin-tools/process_csr_batch.sh monitor -e staging
 ```
 
 #### 🔍 故障診斷與修復
@@ -275,7 +364,8 @@ route 169.254.169.253 255.255.255.255  # VPC DNS Resolver
     *   針對 Staging 和 Production 環境使用不同的 IAM 角色或政策，以實現更細緻的權限控制。
 
 2.  **證書安全管理**:
-    *   安全地存儲和處理 CA 證書及私鑰，尤其是 Production 環境的證書。
+    *   **CA 私鑰隔離**: 使用安全的 CSR 工作流程確保 CA 私鑰僅保存在管理員系統上，團隊成員無法接觸。
+    *   **S3 安全交換**: 透過配置適當 IAM 政策的 S3 存儲桶進行 CSR 和證書的安全交換。
     *   實施證書輪換策略，定期更新伺服器和客戶端證書。
     *   使用強密碼保護私鑰，並限制對私鑰的訪問。
 
@@ -316,7 +406,7 @@ route 169.254.169.253 255.255.255.255  # VPC DNS Resolver
 
 ---
 
-**最後更新：** 2025年5月25日
-**文檔版本：** 2.2 (已同步所有腳本功能)
-**適用工具版本：** 2.0
-**架構：** 模組化函式庫設計
+**最後更新：** 2025年6月12日
+**文檔版本：** 2.3 (已整合安全 CSR 工作流程)
+**適用工具版本：** 2.1
+**架構：** 模組化函式庫設計 + 安全 CSR 管理

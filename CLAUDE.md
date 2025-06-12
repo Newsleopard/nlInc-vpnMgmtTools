@@ -46,14 +46,52 @@ Each environment has its own configuration structure:
 # Main admin console (environment-aware)
 ./admin-tools/aws_vpn_admin.sh
 
-# Team member setup
-./team_member_setup.sh
+# Team member setup (secure CSR workflow)
+# Zero-Touch Workflow (Recommended)
+./team_member_setup.sh --init             # Download config from S3, generate & upload CSR
+./team_member_setup.sh --resume           # Download signed cert from S3, complete setup
+
+# Traditional CSR Workflow (Legacy)
+./team_member_setup.sh                    # Generate CSR locally (Phase 1)  
+./team_member_setup.sh --resume-cert      # Resume with local signed cert (Phase 2)
+
+# Override Options for Special Cases
+./team_member_setup.sh --no-s3            # Disable S3 integration
+./team_member_setup.sh --bucket my-bucket # Use custom S3 bucket
+./team_member_setup.sh --ca-path /path    # Use local CA certificate
+./team_member_setup.sh --endpoint-id ID   # Override endpoint ID
 
 # Revoke user access
 ./admin-tools/revoke_member_access.sh
 
 # Employee offboarding
 ./admin-tools/employee_offboarding.sh
+```
+
+### Secure CSR Management (Zero-Touch Workflow)
+
+```bash
+# Setup S3 bucket for zero-touch CSR exchange
+./admin-tools/setup_csr_s3_bucket.sh --publish-assets    # Create bucket and publish initial assets
+./admin-tools/setup_csr_s3_bucket.sh --create-users     # Also create IAM policies
+
+# Publish/update public assets (CA cert and endpoint configs)
+./admin-tools/publish_endpoints.sh                      # Publish all environments
+./admin-tools/publish_endpoints.sh -e production        # Publish specific environment
+
+# Sign individual CSR with zero-touch delivery
+./admin-tools/sign_csr.sh --upload-s3 user.csr         # Sign and auto-upload to S3
+./admin-tools/sign_csr.sh -e production user.csr       # Traditional local signing
+
+# Batch process CSRs from S3 (Admin efficiency)
+./admin-tools/process_csr_batch.sh download -e production    # Download CSRs from S3
+./admin-tools/process_csr_batch.sh process -e production     # Sign all CSRs
+./admin-tools/process_csr_batch.sh upload --auto-upload      # Upload certificates to S3
+./admin-tools/process_csr_batch.sh monitor -e staging        # Auto-monitor and process
+
+# S3 bucket management
+./admin-tools/setup_csr_s3_bucket.sh --list-users      # List IAM users with CSR policies
+./admin-tools/setup_csr_s3_bucket.sh --cleanup         # Remove bucket and policies
 ```
 
 ### Diagnostic and Repair Tools
@@ -159,11 +197,14 @@ Scripts create/modify files in environment-specific locations:
 
 ## Security Considerations
 
+- **CA Private Key Isolation**: Zero-touch workflow ensures CA private keys never leave admin systems
+- **S3 Encrypted Exchange**: All CSR/certificate exchanges use KMS-encrypted S3 storage
 - Production environment operations require enhanced confirmation
 - Certificate private keys have restricted file permissions (600)
 - Environment isolation prevents cross-contamination
 - All admin operations are logged with timestamps
 - AWS credentials are managed per environment (staging uses default profile, production uses prod profile)
+- IAM policies enforce least-privilege access to S3 resources
 
 ## Dependencies
 
@@ -179,6 +220,32 @@ The toolkit requires and will auto-install:
 
 Currently no automated test framework is present. The `tests/` directory exists but is empty. Manual testing is performed through the diagnostic tools in `admin-tools/tools/`.
 
+## Zero-Touch VPN Workflow
+
+### Overview
+The zero-touch workflow eliminates manual file transfers between admins and team members by using S3 as a secure exchange mechanism. Team members can automatically download CA certificates and endpoint configurations, while administrators can sign and deliver certificates without direct interaction.
+
+### Benefits
+- **🔐 Enhanced Security**: CA private keys never leave admin workstations
+- **⚡ Self-Service**: Team members can initiate setup without admin intervention  
+- **🚀 Scalability**: Supports large teams with minimal admin overhead
+- **📋 Audit Trail**: Complete S3/CloudTrail logging of all certificate exchanges
+- **🔄 Automation**: Batch processing and monitoring modes for efficiency
+- **☁️ Zero Configuration**: Automatic download of CA certs and endpoint configs
+
+### Workflow Steps
+1. **Admin Setup**: `./admin-tools/setup_csr_s3_bucket.sh --publish-assets`
+2. **Team Member Init**: `./team_member_setup.sh --init` 
+3. **Admin Signs**: `./admin-tools/sign_csr.sh --upload-s3 user.csr`
+4. **Team Member Complete**: `./team_member_setup.sh --resume`
+
+### S3 Bucket Structure
+- `public/ca.crt` - CA certificate (world-readable in bucket)
+- `public/vpn_endpoints.json` - Endpoint IDs and regions by environment
+- `csr/username.csr` - User-uploaded CSRs (PUT-only for users)
+- `cert/username.crt` - Admin-signed certificates (GET-only for users)
+- `log/` - Optional audit copies of processed CSRs/certificates
+
 ## Important Notes
 
 - Always verify current environment before operations using `./vpn_env.sh status`
@@ -186,3 +253,4 @@ Currently no automated test framework is present. The `tests/` directory exists 
 - The toolkit is specifically designed for macOS environments
 - All scripts use bash and include Chinese language prompts and documentation
 - Configuration issues (especially fake endpoint IDs) can be resolved using tools in `admin-tools/tools/`
+- Zero-touch workflow requires proper S3 bucket setup and IAM policies
