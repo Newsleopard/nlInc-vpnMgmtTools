@@ -127,6 +127,101 @@ Unchanged; auto-disassociate still uses `ec2:DisassociateClientVpnTargetNetwork`
 ## 8. Testing
 Add test case: simulate idle state → expect `disassociateSubnets` called and Slack notification sent.
 
+### 8.1 Unit Tests (Jest)
+
+```bash
+cd lambda
+npm test          # runs jest --coverage
+```
+
+* `vpnManager.test.ts` – mocks EC2 SDK to verify associate/disassociate logic  
+* `slack-handler.test.ts` – verifies signature validation and router dispatch  
+* `vpn-monitor.test.ts` – fuzzes idle thresholds with fake Date.now()
+
+### 8.2 Integration Tests
+
+| Scenario | Tool | Assertion |
+|----------|------|-----------|
+| Open VPN via Slack stub | `curl` to API Gateway with signed body | `state.associated == true` |
+| Idle auto-close | step-function test harness | CloudWatch metric increment |
+
+### 8.3 End-to-End Smoke
+
+```bash
+scripts/e2e/smoke.sh staging   # open → wait 2m → check
+```
+
+Outputs human-readable status and exits non-zero on failure.
+
+---
+
+## 9. Configuration & Environment Variables
+
+| Variable | Default | Used By | Description |
+|----------|---------|---------|-------------|
+| `IDLE_MINUTES` | `60` | vpn-monitor | Idle threshold before auto close |
+| `SIGNING_SECRET_PARAM` | `/vpn/slack/signing_secret` | slack-handler | SSM path to HMAC secret |
+| `WEBHOOK_PARAM` | `/vpn/slack/webhook` | shared/slack.ts | SSM path to Slack incoming webhook |
+| `VPN_STATE_PREFIX` | `/vpn/` | shared/stateStore.ts | Prefix for per-env keys |
+
+All variables are set in `cdklib/stack.ts`.
+
+---
+
+## 10. Local Development Workflow
+
+```bash
+npm i -g aws-cdk esbuild
+cd lambda
+npm ci
+npm run watch     # esbuild --watch → dist/*
+sam local invoke vpn-control -e events/open.json
+```
+
+* **esbuild** bundles TypeScript instantly  
+* **sam local** plus `aws-vault` profile for live testing  
+* Use `scripts/hot-reload.sh` to sync changes to a dev stage.
+
+---
+
+## 11. Monitoring & Observability
+
+```ts
+metrics.addMetric('IdleSubnetDisassociations', {
+  unit: MetricUnit.Count,
+  value: 1,
+});
+```
+
+A CloudWatch dashboard JSON lives in `cdklib/monitoring/dashboard.json` and includes:
+- ActiveConnections (per env)
+- IdleSubnetDisassociations
+- Lambda p95 duration
+
+Enable X-Ray in CDK: `lambdaFn.addEnvironment('AWS_XRAY_SDK_ENABLED','true')`.
+
+---
+
+## 12. Extension Points
+
+1. **Add new Slack command**:  
+   - Edit `lambda/slack-handler/router.ts` switch-case  
+   - Implement action in `lambda/vpn-control`  
+2. **Custom metrics**: push via `cloudwatch:PutMetricData`.  
+3. **Additional environments**: add env name to `EnvName` union and Parameter Store.
+
+---
+
+## 13. Troubleshooting
+
+| Symptom | Possible Cause | Fix |
+|---------|----------------|-----|
+| 403 from API GW | Bad Slack signature | Check signing secret in SSM |
+| Idle close never triggers | `lastActivity` stale | Ensure `vpn-control` writes after every open/close |
+| `Client.VpnEndpointId.NotFound` | Endpoint recreated manually | Update `/vpn/{env}/endpoint_id` or redeploy CDK |
+
+---
+
 ---
 
 _Last updated: 2025-06-13_
