@@ -8,6 +8,24 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PARENT_DIR="$(dirname "$SCRIPT_DIR")"
 
+# 載入環境管理器 (必須第一個載入)
+source "$PARENT_DIR/lib/env_manager.sh"
+
+# 初始化環境
+if ! env_init_for_script "sign_csr.sh"; then
+    echo -e "${RED}錯誤: 無法初始化環境管理器${NC}"
+    exit 1
+fi
+
+# 驗證 AWS Profile 整合
+echo -e "${BLUE}正在驗證 AWS Profile 設定...${NC}"
+if ! env_validate_profile_integration "$CURRENT_ENVIRONMENT" "true"; then
+    echo -e "${YELLOW}警告: AWS Profile 設定可能有問題，但繼續執行 CSR 簽署工具${NC}"
+fi
+
+# 設定環境特定路徑
+env_setup_paths
+
 # 載入核心函式庫
 source "$PARENT_DIR/lib/core_functions.sh"
 
@@ -69,7 +87,7 @@ check_s3_access() {
     
     echo -e "${BLUE}檢查 S3 存儲桶訪問權限...${NC}"
     
-    if ! aws s3 ls "s3://$S3_BUCKET/" --profile "$AWS_PROFILE" &>/dev/null; then
+    if ! aws_with_profile s3 ls "s3://$S3_BUCKET/" --profile "$AWS_PROFILE" &>/dev/null; then
         echo -e "${RED}無法訪問 S3 存儲桶: $S3_BUCKET${NC}"
         echo -e "${YELLOW}請檢查：${NC}"
         echo -e "  • 存儲桶是否存在"
@@ -95,7 +113,7 @@ upload_certificate_to_s3() {
     
     local s3_cert_path="s3://$S3_BUCKET/cert/${username}.crt"
     
-    if aws s3 cp "$cert_file" "$s3_cert_path" \
+    if aws_with_profile s3 cp "$cert_file" "$s3_cert_path" \
         --sse aws:kms \
         --acl bucket-owner-full-control \
         --profile "$AWS_PROFILE"; then
@@ -122,7 +140,7 @@ download_csr_from_s3() {
     
     local s3_csr_path="s3://$S3_BUCKET/csr/${username}.csr"
     
-    if aws s3 cp "$s3_csr_path" "$output_file" --profile "$AWS_PROFILE"; then
+    if aws_with_profile s3 cp "$s3_csr_path" "$output_file" --profile "$AWS_PROFILE"; then
         echo -e "${GREEN}✓ CSR 已從 S3 下載${NC}"
         return 0
     else
@@ -384,7 +402,7 @@ show_completion_instructions() {
         echo -e "   ${CYAN}certs/$environment/users/${CSR_USERNAME}.crt${NC}"
         echo -e ""
         echo -e "${BLUE}3. 或者手動上傳到 S3：${NC}"
-        echo -e "   ${CYAN}aws s3 cp $output_cert s3://$S3_BUCKET/cert/${CSR_USERNAME}.crt --sse aws:kms${NC}"
+        echo -e "   ${CYAN}aws_with_profile s3 cp $output_cert s3://$S3_BUCKET/cert/${CSR_USERNAME}.crt --sse aws:kms${NC}"
         echo -e ""
         echo -e "${BLUE}4. 通知用戶執行恢復命令：${NC}"
         echo -e "   傳統模式: ${CYAN}./team_member_setup.sh --resume-cert${NC}"
@@ -496,15 +514,44 @@ main() {
     LOG_FILE="$PARENT_DIR/logs/$environment/csr_signing.log"
     mkdir -p "$(dirname "$LOG_FILE")"
     
-    echo -e "${CYAN}========================================${NC}"
-    echo -e "${CYAN}CSR 簽署工具 - 管理員專用${NC}"
-    echo -e "${CYAN}========================================${NC}"
-    echo -e "${BLUE}環境: $environment${NC}"
-    echo -e "${BLUE}CSR 文件: $csr_file${NC}"
-    echo -e "${BLUE}有效天數: $days_valid${NC}"
-    echo -e "${BLUE}輸出目錄: $output_dir${NC}"
-    echo -e "${BLUE}S3 存儲桶: $S3_BUCKET${NC}"
-    echo -e "${BLUE}AWS Profile: $AWS_PROFILE${NC}"
+    show_env_aware_header "CSR 簽署工具 - 管理員專用"
+    
+    # 顯示 AWS Profile 資訊
+    local current_profile
+    current_profile=$(env_get_profile "$CURRENT_ENVIRONMENT" 2>/dev/null)
+    if [[ -n "$current_profile" ]]; then
+        local account_id region
+        account_id=$(aws_with_profile sts get-caller-identity --query Account --output text 2>/dev/null)
+        region=$(aws_with_profile configure get region 2>/dev/null)
+        
+        echo -e "${CYAN}AWS 配置狀態:${NC}"
+        echo -e "  Profile: ${GREEN}$current_profile${NC}"
+        if [[ -n "$account_id" ]]; then
+            echo -e "  帳戶 ID: ${account_id}"
+        fi
+        if [[ -n "$region" ]]; then
+            echo -e "  區域: ${region}"
+        fi
+        
+        # 驗證 profile 匹配環境
+        if validate_profile_matches_environment "$current_profile" "$CURRENT_ENVIRONMENT" 2>/dev/null; then
+            echo -e "  狀態: ${GREEN}✓ 有效且匹配環境${NC}"
+        else
+            echo -e "  狀態: ${YELLOW}⚠ 有效但可能不匹配環境${NC}"
+        fi
+    else
+        echo -e "${CYAN}AWS 配置狀態:${NC}"
+        echo -e "  Profile: ${YELLOW}未設定${NC}"
+    fi
+    echo -e ""
+    
+    echo -e "${BLUE}簽署配置:${NC}"
+    echo -e "  環境: $environment"
+    echo -e "  CSR 文件: $csr_file"
+    echo -e "  有效天數: $days_valid"
+    echo -e "  輸出目錄: $output_dir"
+    echo -e "  S3 存儲桶: $S3_BUCKET"
+    echo -e "  AWS Profile: $AWS_PROFILE"
     echo -e ""
     
     # 檢查 S3 訪問（如果需要）
