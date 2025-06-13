@@ -9,6 +9,7 @@ This is an AWS Client VPN dual-environment management toolkit designed for macOS
 ## Key Architecture Components
 
 - **Dual Environment Architecture**: Complete separation between Staging (🟡) and Production (🔴) environments
+- **Dual AWS Profile Management**: Intelligent profile detection, cross-account validation, and automatic profile switching
 - **Modular Library Design**: Core functionality split across `lib/` directory with specialized libraries
 - **Environment Manager**: Centralized environment switching and health monitoring via `lib/env_manager.sh`
 - **Enhanced Security**: Production operations require multi-factor confirmation and additional security checks
@@ -21,6 +22,50 @@ Each environment has its own configuration structure:
 - `configs/production/production.env` - Production environment settings  
 - `.current_env` - Tracks currently active environment
 - Environment-specific directories for certs, logs, and user configs
+
+## AWS Profile Management
+
+The toolkit includes comprehensive dual AWS profile management with the following features:
+
+### Profile Detection and Validation
+- **Automatic Detection**: Intelligently detects available AWS profiles and suggests appropriate ones for each environment
+- **Cross-Account Validation**: Prevents accidental operations in wrong AWS accounts by validating account IDs
+- **Smart Recommendations**: Suggests profiles based on naming conventions (e.g., "staging", "production", "prod")
+- **Configuration Persistence**: Saves and loads profile preferences from environment configurations
+
+### Profile Configuration
+Each environment configuration supports these AWS profile variables:
+
+```bash
+# Environment-specific AWS Profile (optional, uses auto-detection if empty)
+ENV_AWS_PROFILE=""
+
+# Suggested profile names for auto-recommendation
+SUGGESTED_PROFILES="staging,company-staging,dev-staging"
+
+# Account ID for cross-account validation (required)
+STAGING_ACCOUNT_ID="123456789012"  # Replace with actual account ID
+PRODUCTION_ACCOUNT_ID="987654321098"  # Replace with actual account ID
+
+# S3 bucket names for zero-touch workflow
+STAGING_S3_BUCKET="staging-vpn-csr-exchange"
+PRODUCTION_S3_BUCKET="production-vpn-csr-exchange"
+```
+
+### Profile Operations
+```bash
+# View current AWS profile status
+./vpn_env.sh status
+
+# Set specific profile for current environment
+./admin-tools/aws_vpn_admin.sh --set-profile my-staging-profile
+
+# Reset to automatic profile detection
+./admin-tools/aws_vpn_admin.sh --reset-profile
+
+# View detailed profile information
+./admin-tools/aws_vpn_admin.sh --profile-status
+```
 
 ## Common Development Commands
 
@@ -172,13 +217,21 @@ route 169.254.169.253 255.255.255.255  # VPC DNS resolver
 
 The `lib/` directory contains modular libraries:
 
-- `core_functions.sh` - Basic utilities, logging, validation functions
-- `env_manager.sh` - Environment switching and health checks
+- `core_functions.sh` - Basic utilities, logging, validation functions, AWS CLI wrappers
+- `env_manager.sh` - Environment switching, health checks, and profile management
+- `env_core.sh` - Core profile management functions and cross-account validation
 - `aws_setup.sh` - AWS CLI setup and configuration
 - `cert_management.sh` - Certificate generation and management
 - `endpoint_management.sh` - VPN endpoint operations
 - `endpoint_creation.sh` - VPN endpoint creation logic
 - `enhanced_confirmation.sh` - Security confirmation prompts
+
+### Key Profile Management Functions
+- `aws_with_profile()` - Wrapper for AWS CLI commands with automatic profile selection
+- `aws_with_env_profile()` - Environment-aware AWS CLI wrapper
+- `validate_profile_matches_environment()` - Cross-account validation
+- `env_validate_profile_integration()` - Comprehensive profile-environment validation
+- `select_aws_profile_for_environment()` - Interactive profile selection with smart recommendations
 
 ## Environment-Specific Behavior
 
@@ -199,6 +252,9 @@ Scripts create/modify files in environment-specific locations:
 
 - **CA Private Key Isolation**: Zero-touch workflow ensures CA private keys never leave admin systems
 - **S3 Encrypted Exchange**: All CSR/certificate exchanges use KMS-encrypted S3 storage
+- **Dual AWS Profile Management**: Cross-account validation prevents accidental operations in wrong AWS accounts
+- **Profile-Aware Operations**: All admin tools validate AWS profile matches target environment
+- **Account ID Verification**: Automatic verification of AWS account IDs to prevent cross-account mistakes
 - Production environment operations require enhanced confirmation
 - Certificate private keys have restricted file permissions (600)
 - Environment isolation prevents cross-contamination
@@ -218,7 +274,32 @@ The toolkit requires and will auto-install:
 
 ## Testing
 
-Currently no automated test framework is present. The `tests/` directory exists but is empty. Manual testing is performed through the diagnostic tools in `admin-tools/tools/`.
+The toolkit now includes comprehensive automated tests in the `tests/` directory:
+
+### Test Scripts
+- `test_profile_management.sh` - Tests all profile management functions, AWS wrappers, and configuration integration
+- `test_team_member_setup.sh` - Tests team member setup workflow with dual profile configuration
+- `test_admin_tools.sh` - Tests all admin tools for profile integration and environment awareness
+
+### Running Tests
+```bash
+# Run all profile management tests
+./tests/test_profile_management.sh
+
+# Test team member setup integration
+./tests/test_team_member_setup.sh
+
+# Test admin tools profile integration
+./tests/test_admin_tools.sh
+```
+
+### Test Results
+All tests generate detailed reports with success rates and recommendations. Tests validate:
+- Function existence and availability
+- AWS profile detection and validation
+- Cross-account safety mechanisms
+- Environment-aware configurations
+- Error handling and security checks
 
 ## Zero-Touch VPN Workflow
 
@@ -248,9 +329,35 @@ The zero-touch workflow eliminates manual file transfers between admins and team
 
 ## Important Notes
 
-- Always verify current environment before operations using `./vpn_env.sh status`
+- **Always verify current environment and AWS profile** before operations using `./vpn_env.sh status`
+- **Profile Configuration Required**: Each environment needs proper AWS profile configuration in `configs/{env}/{env}.env`
+- **Account ID Validation**: Set correct `STAGING_ACCOUNT_ID` and `PRODUCTION_ACCOUNT_ID` in environment configs
 - Production operations have additional safety checks and confirmations
 - The toolkit is specifically designed for macOS environments
 - All scripts use bash and include Chinese language prompts and documentation
 - Configuration issues (especially fake endpoint IDs) can be resolved using tools in `admin-tools/tools/`
 - Zero-touch workflow requires proper S3 bucket setup and IAM policies
+- **Profile Troubleshooting**: If profile detection fails, see `docs/DUAL_AWS_PROFILE_SETUP_GUIDE.md` for troubleshooting steps
+
+## Quick Profile Setup Commands
+
+```bash
+# Initial setup - configure your AWS profiles
+aws configure --profile staging     # Configure staging profile
+aws configure --profile production  # Configure production profile
+
+# Verify profiles work
+aws sts get-caller-identity --profile staging
+aws sts get-caller-identity --profile production
+
+# Update environment configs with account IDs
+# Edit configs/staging/staging.env and configs/production/production.env
+# Set STAGING_ACCOUNT_ID and PRODUCTION_ACCOUNT_ID
+
+# Test environment switching with profile validation
+./vpn_env.sh switch staging
+./vpn_env.sh switch production
+
+# View current status (shows environment + profile info)
+./vpn_env.sh status
+```
