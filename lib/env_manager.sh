@@ -163,6 +163,23 @@ env_load_config() {
     if [[ -f "$env_file" ]]; then
         source "$env_file"
         
+        # 確保 AWS_PROFILE 環境變數被正確設定和匯出
+        if [[ -n "$ENV_AWS_PROFILE" ]]; then
+            export AWS_PROFILE="$ENV_AWS_PROFILE"
+        elif [[ -n "$AWS_PROFILE" ]]; then
+            export AWS_PROFILE="$AWS_PROFILE"
+        else
+            # 回退到環境預設 profile
+            if [[ -f "$PROJECT_ROOT/lib/env_core.sh" ]]; then
+                source "$PROJECT_ROOT/lib/env_core.sh"
+                local default_profile
+                default_profile=$(get_env_profile "$env_name" 2>/dev/null)
+                if [[ -n "$default_profile" ]]; then
+                    export AWS_PROFILE="$default_profile"
+                fi
+            fi
+        fi
+        
         # 設定環境特定的目錄路徑 - 跨平台兼容
         export VPN_CERT_DIR="$PROJECT_ROOT/${CERT_DIR#./}"
         export VPN_CONFIG_DIR="$PROJECT_ROOT/${CONFIG_DIR#./}"
