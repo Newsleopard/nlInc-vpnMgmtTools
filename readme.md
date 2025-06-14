@@ -79,7 +79,43 @@ logs/
 - **切換環境**：允許用戶在 Staging 和 Production 環境之間進行切換。切換至 Production 環境時會有額外的安全確認步驟。
 - **環境健康檢查**：提供對各個環境健康狀況的快速檢查。
 
-詳細的環境管理操作、指令範例及 `enhanced_env_selector.sh`（增強環境選擇器）的使用方法，請參閱 `vpn_connection_manual.md`。
+### 🔗 AWS Profile 與環境設定關聯
+
+本工具套件透過環境設置檔自動管理 AWS Profile 設定，確保在正確的 AWS 帳戶中執行操作：
+
+#### 設置檔結構
+```bash
+configs/staging/staging.env       # Staging 環境設定
+configs/production/production.env # Production 環境設定
+```
+
+#### AWS Profile 設定
+環境設置檔中的 `AWS_PROFILE` 變數決定該環境使用的 AWS 認證：
+```bash
+# configs/staging/staging.env
+AWS_PROFILE=staging-vpn-admin
+AWS_REGION=ap-northeast-1
+
+# configs/production/production.env
+AWS_PROFILE=production-vpn-admin
+AWS_REGION=ap-northeast-1
+```
+
+#### 優先順序機制
+當執行 VPN 管理操作時，系統依照以下順序確定 AWS Profile：
+1. **環境設置檔中的 `ENV_AWS_PROFILE`** - 環境特定覆寫設定
+2. **環境設置檔中的 `AWS_PROFILE`** - 標準設定 ⭐ **建議使用**
+3. **系統預設對應** - staging → `default`, production → `production`
+4. **AWS CLI 預設 profile** - 系統回退選項
+
+#### 驗證工具
+使用內建驗證腳本檢查設定正確性：
+```bash
+# 驗證 AWS Profile 與環境設定關聯
+./validate_aws_profile_config.sh
+```
+
+詳細的環境管理操作、指令範例及 `enhanced_env_selector.sh`（增強環境選擇器）的使用方法，請參閱 `vpn_connection_manual.md` 和 `AWS_PROFILE_配置關聯說明.md`。
 
 ---
 
