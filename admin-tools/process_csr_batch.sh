@@ -8,6 +8,24 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PARENT_DIR="$(dirname "$SCRIPT_DIR")"
 
+# 載入環境管理器 (必須第一個載入)
+source "$PARENT_DIR/lib/env_manager.sh"
+
+# 初始化環境
+if ! env_init_for_script "process_csr_batch.sh"; then
+    echo -e "${RED}錯誤: 無法初始化環境管理器${NC}"
+    exit 1
+fi
+
+# 驗證 AWS Profile 整合
+echo -e "${BLUE}正在驗證 AWS Profile 設定...${NC}"
+if ! env_validate_profile_integration "$CURRENT_ENVIRONMENT" "true"; then
+    echo -e "${YELLOW}警告: AWS Profile 設定可能有問題，但繼續執行批次處理工具${NC}"
+fi
+
+# 設定環境特定路徑
+env_setup_paths
+
 # 載入核心函式庫
 source "$PARENT_DIR/lib/core_functions.sh"
 
@@ -22,8 +40,22 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
-# 預設配置
-DEFAULT_BUCKET_NAME="vpn-csr-exchange"
+# 預設配置 (環境感知)
+get_default_bucket_name() {
+    case "$CURRENT_ENVIRONMENT" in
+        staging)
+            echo "staging-vpn-csr-exchange"
+            ;;
+        production)
+            echo "production-vpn-csr-exchange"
+            ;;
+        *)
+            echo "vpn-csr-exchange"
+            ;;
+    esac
+}
+
+DEFAULT_BUCKET_NAME="$(get_default_bucket_name)"
 DEFAULT_DAYS_VALID=365
 
 # 使用說明
@@ -119,14 +151,14 @@ download_csrs_from_s3() {
     echo -e "${BLUE}從 S3 下載 CSR 文件...${NC}"
     
     # 檢查 S3 連接
-    if ! aws s3 ls "s3://$BUCKET_NAME/csr/" --profile "$AWS_PROFILE" &>/dev/null; then
+    if ! aws_with_profile s3 ls "s3://$BUCKET_NAME/csr/" --profile "$AWS_PROFILE" &>/dev/null; then
         echo -e "${RED}無法訪問 S3 存儲桶: $BUCKET_NAME${NC}"
         return 1
     fi
     
     # 列出待處理的 CSR
     local csr_files
-    csr_files=$(aws s3 ls "s3://$BUCKET_NAME/csr/" --profile "$AWS_PROFILE" | awk '{print $4}' | grep '\.csr$')
+    csr_files=$(aws_with_profile s3 ls "s3://$BUCKET_NAME/csr/" --profile "$AWS_PROFILE" | awk '{print $4}' | grep '\.csr$')
     
     if [ -z "$csr_files" ]; then
         echo -e "${YELLOW}沒有待處理的 CSR 文件${NC}"
@@ -141,7 +173,7 @@ download_csrs_from_s3() {
             echo -e "  📄 $csr_file"
             
             # 下載 CSR
-            if aws s3 cp "s3://$BUCKET_NAME/csr/$csr_file" "$INPUT_DIR/$csr_file" --profile "$AWS_PROFILE"; then
+            if aws_with_profile s3 cp "s3://$BUCKET_NAME/csr/$csr_file" "$INPUT_DIR/$csr_file" --profile "$AWS_PROFILE"; then
                 log_message "下載 CSR: $csr_file"
                 ((download_count++))
             else
@@ -250,7 +282,7 @@ upload_certificates_to_s3() {
             echo -e "  📤 $basename"
             
             # 上傳證書
-            if aws s3 cp "$cert_file" "s3://$BUCKET_NAME/cert/$basename" --profile "$AWS_PROFILE"; then
+            if aws_with_profile s3 cp "$cert_file" "s3://$BUCKET_NAME/cert/$basename" --profile "$AWS_PROFILE"; then
                 log_message "上傳證書: $basename"
                 ((upload_count++))
                 
@@ -322,12 +354,12 @@ show_status() {
     echo -e ""
     
     # 檢查 S3 狀態
-    if aws s3 ls "s3://$BUCKET_NAME/csr/" --profile "$AWS_PROFILE" &>/dev/null; then
+    if aws_with_profile s3 ls "s3://$BUCKET_NAME/csr/" --profile "$AWS_PROFILE" &>/dev/null; then
         local s3_csrs
-        s3_csrs=$(aws s3 ls "s3://$BUCKET_NAME/csr/" --profile "$AWS_PROFILE" | grep -c '\.csr$' || echo "0")
+        s3_csrs=$(aws_with_profile s3 ls "s3://$BUCKET_NAME/csr/" --profile "$AWS_PROFILE" | grep -c '\.csr$' || echo "0")
         
         local s3_certs
-        s3_certs=$(aws s3 ls "s3://$BUCKET_NAME/cert/" --profile "$AWS_PROFILE" | grep -c '\.crt$' || echo "0")
+        s3_certs=$(aws_with_profile s3 ls "s3://$BUCKET_NAME/cert/" --profile "$AWS_PROFILE" | grep -c '\.crt$' || echo "0")
         
         echo -e "${BLUE}S3 狀態：${NC}"
         echo -e "  📄 S3 中的 CSR: $s3_csrs"
@@ -397,7 +429,8 @@ main() {
     INPUT_DIR="./csr-inbox"
     OUTPUT_DIR="./cert-outbox"
     WORK_DIR="./csr-work"
-    AWS_PROFILE="$(aws configure list-profiles 2>/dev/null | head -1 || echo default)"
+    # Get AWS profile from environment manager
+    AWS_PROFILE="$(env_get_profile "$CURRENT_ENVIRONMENT" 2>/dev/null || echo default)"
     AUTO_UPLOAD=false
     NOTIFY=false
     VERBOSE=false
@@ -477,12 +510,41 @@ main() {
     # 設置信號處理
     trap cleanup INT TERM
     
-    echo -e "${CYAN}========================================${NC}"
-    echo -e "${CYAN}CSR 批次處理工具${NC}"
-    echo -e "${CYAN}========================================${NC}"
-    echo -e "${BLUE}操作: $OPERATION${NC}"
-    echo -e "${BLUE}環境: ${ENVIRONMENT:-N/A}${NC}"
-    echo -e "${BLUE}存儲桶: $BUCKET_NAME${NC}"
+    show_env_aware_header "CSR 批次處理工具"
+    
+    # 顯示 AWS Profile 資訊
+    local current_profile
+    current_profile=$(env_get_profile "$CURRENT_ENVIRONMENT" 2>/dev/null)
+    if [[ -n "$current_profile" ]]; then
+        local account_id region
+        account_id=$(aws_with_profile sts get-caller-identity --query Account --output text 2>/dev/null)
+        region=$(aws_with_profile configure get region 2>/dev/null)
+        
+        echo -e "${CYAN}AWS 配置狀態:${NC}"
+        echo -e "  Profile: ${GREEN}$current_profile${NC}"
+        if [[ -n "$account_id" ]]; then
+            echo -e "  帳戶 ID: ${account_id}"
+        fi
+        if [[ -n "$region" ]]; then
+            echo -e "  區域: ${region}"
+        fi
+        
+        # 驗證 profile 匹配環境
+        if validate_profile_matches_environment "$current_profile" "$CURRENT_ENVIRONMENT" 2>/dev/null; then
+            echo -e "  狀態: ${GREEN}✓ 有效且匹配環境${NC}"
+        else
+            echo -e "  狀態: ${YELLOW}⚠ 有效但可能不匹配環境${NC}"
+        fi
+    else
+        echo -e "${CYAN}AWS 配置狀態:${NC}"
+        echo -e "  Profile: ${YELLOW}未設定${NC}"
+    fi
+    echo -e ""
+    
+    echo -e "${BLUE}批次處理配置:${NC}"
+    echo -e "  操作: $OPERATION"
+    echo -e "  環境: ${ENVIRONMENT:-N/A}"
+    echo -e "  存儲桶: $BUCKET_NAME"
     echo -e ""
     
     # 檢查依賴

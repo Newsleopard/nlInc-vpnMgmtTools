@@ -8,6 +8,24 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PARENT_DIR="$(dirname "$SCRIPT_DIR")"
 
+# 載入環境管理器 (必須第一個載入)
+source "$PARENT_DIR/lib/env_manager.sh"
+
+# 初始化環境
+if ! env_init_for_script "setup_csr_s3_bucket.sh"; then
+    echo -e "${RED}錯誤: 無法初始化環境管理器${NC}"
+    exit 1
+fi
+
+# 驗證 AWS Profile 整合
+echo -e "${BLUE}正在驗證 AWS Profile 設定...${NC}"
+if ! env_validate_profile_integration "$CURRENT_ENVIRONMENT" "true"; then
+    echo -e "${YELLOW}警告: AWS Profile 設定可能有問題，但繼續執行 S3 設定工具${NC}"
+fi
+
+# 設定環境特定路徑
+env_setup_paths
+
 # 載入核心函式庫
 source "$PARENT_DIR/lib/core_functions.sh"
 
@@ -22,9 +40,23 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
-# 預設配置
-DEFAULT_BUCKET_NAME="vpn-csr-exchange"
-DEFAULT_REGION="us-east-1"
+# 預設配置 (環境感知)
+get_default_bucket_name() {
+    case "$CURRENT_ENVIRONMENT" in
+        staging)
+            echo "staging-vpn-csr-exchange"
+            ;;
+        production)
+            echo "production-vpn-csr-exchange"
+            ;;
+        *)
+            echo "vpn-csr-exchange"
+            ;;
+    esac
+}
+
+DEFAULT_BUCKET_NAME="$(get_default_bucket_name)"
+DEFAULT_REGION="$AWS_REGION"
 
 # 使用說明
 show_usage() {
@@ -77,14 +109,14 @@ check_aws_config() {
     fi
     
     # 檢查 AWS 憑證
-    if ! aws sts get-caller-identity --profile "$AWS_PROFILE" &>/dev/null; then
+    if ! aws_with_profile sts get-caller-identity --profile "$AWS_PROFILE" &>/dev/null; then
         echo -e "${RED}AWS 憑證無效或未設置 (profile: $AWS_PROFILE)${NC}"
         return 1
     fi
     
     # 獲取帳戶資訊
-    ACCOUNT_ID=$(aws sts get-caller-identity --profile "$AWS_PROFILE" --query 'Account' --output text)
-    USER_ARN=$(aws sts get-caller-identity --profile "$AWS_PROFILE" --query 'Arn' --output text)
+    ACCOUNT_ID=$(aws_with_profile sts get-caller-identity --profile "$AWS_PROFILE" --query 'Account' --output text)
+    USER_ARN=$(aws_with_profile sts get-caller-identity --profile "$AWS_PROFILE" --query 'Arn' --output text)
     
     echo -e "${GREEN}✓ AWS 配置有效${NC}"
     echo -e "${GREEN}✓ 帳戶 ID: $ACCOUNT_ID${NC}"
@@ -98,7 +130,7 @@ create_s3_bucket() {
     echo -e "${BLUE}創建 S3 存儲桶...${NC}"
     
     # 檢查存儲桶是否已存在
-    if aws s3 ls "s3://$BUCKET_NAME" --profile "$AWS_PROFILE" &>/dev/null; then
+    if aws_with_profile s3 ls "s3://$BUCKET_NAME" --profile "$AWS_PROFILE" &>/dev/null; then
         echo -e "${YELLOW}存儲桶已存在: $BUCKET_NAME${NC}"
         return 0
     fi
@@ -106,9 +138,9 @@ create_s3_bucket() {
     # 創建存儲桶
     if [ "$REGION" = "us-east-1" ]; then
         # us-east-1 不需要 location constraint
-        aws s3 mb "s3://$BUCKET_NAME" --profile "$AWS_PROFILE"
+        aws_with_profile s3 mb "s3://$BUCKET_NAME" --profile "$AWS_PROFILE"
     else
-        aws s3 mb "s3://$BUCKET_NAME" --region "$REGION" --profile "$AWS_PROFILE"
+        aws_with_profile s3 mb "s3://$BUCKET_NAME" --region "$REGION" --profile "$AWS_PROFILE"
     fi
     
     if [ $? -ne 0 ]; then
@@ -119,7 +151,7 @@ create_s3_bucket() {
     echo -e "${GREEN}✓ 存儲桶已創建: $BUCKET_NAME${NC}"
     
     # 啟用版本控制
-    aws s3api put-bucket-versioning \
+    aws_with_profile s3api put-bucket-versioning \
         --bucket "$BUCKET_NAME" \
         --versioning-configuration Status=Enabled \
         --profile "$AWS_PROFILE"
@@ -127,7 +159,7 @@ create_s3_bucket() {
     echo -e "${GREEN}✓ 版本控制已啟用${NC}"
     
     # 設置預設加密
-    aws s3api put-bucket-encryption \
+    aws_with_profile s3api put-bucket-encryption \
         --bucket "$BUCKET_NAME" \
         --server-side-encryption-configuration '{
             "Rules": [
@@ -209,7 +241,7 @@ setup_bucket_policy() {
 }
 EOF
     
-    if aws s3api put-bucket-policy \
+    if aws_with_profile s3api put-bucket-policy \
         --bucket "$BUCKET_NAME" \
         --policy "file://$policy_file" \
         --profile "$AWS_PROFILE"; then
@@ -229,26 +261,26 @@ create_folder_structure() {
     echo -e "${BLUE}創建文件夾結構...${NC}"
     
     # 創建 csr/, cert/, 和 public/ 前綴
-    aws s3api put-object \
+    aws_with_profile s3api put-object \
         --bucket "$BUCKET_NAME" \
         --key "csr/.keep" \
         --body /dev/null \
         --profile "$AWS_PROFILE"
     
-    aws s3api put-object \
+    aws_with_profile s3api put-object \
         --bucket "$BUCKET_NAME" \
         --key "cert/.keep" \
         --body /dev/null \
         --profile "$AWS_PROFILE"
     
-    aws s3api put-object \
+    aws_with_profile s3api put-object \
         --bucket "$BUCKET_NAME" \
         --key "public/.keep" \
         --body /dev/null \
         --profile "$AWS_PROFILE"
     
     # 可選：創建日誌前綴
-    aws s3api put-object \
+    aws_with_profile s3api put-object \
         --bucket "$BUCKET_NAME" \
         --key "log/.keep" \
         --body /dev/null \
@@ -302,7 +334,7 @@ setup_lifecycle_policy() {
 }
 EOF
     
-    if aws s3api put-bucket-lifecycle-configuration \
+    if aws_with_profile s3api put-bucket-lifecycle-configuration \
         --bucket "$BUCKET_NAME" \
         --lifecycle-configuration "file://$lifecycle_file" \
         --profile "$AWS_PROFILE"; then
@@ -393,11 +425,11 @@ create_iam_resources() {
     local admin_policy_name="VPN-CSR-Admin-Policy"
     
     # 檢查政策是否已存在
-    if aws iam get-policy --policy-arn "arn:aws:iam::$ACCOUNT_ID:policy/$policy_name" --profile "$AWS_PROFILE" &>/dev/null; then
+    if aws_with_profile iam get-policy --policy-arn "arn:aws:iam::$ACCOUNT_ID:policy/$policy_name" --profile "$AWS_PROFILE" &>/dev/null; then
         echo -e "${YELLOW}團隊成員政策已存在: $policy_name${NC}"
     else
         # 創建團隊成員政策
-        aws iam create-policy \
+        aws_with_profile iam create-policy \
             --policy-name "$policy_name" \
             --policy-document "file://$PARENT_DIR/iam-policies/team-member-csr-policy.json" \
             --description "Allow team members to upload CSR and download certificates" \
@@ -411,11 +443,11 @@ create_iam_resources() {
     fi
     
     # 檢查管理員政策是否已存在
-    if aws iam get-policy --policy-arn "arn:aws:iam::$ACCOUNT_ID:policy/$admin_policy_name" --profile "$AWS_PROFILE" &>/dev/null; then
+    if aws_with_profile iam get-policy --policy-arn "arn:aws:iam::$ACCOUNT_ID:policy/$admin_policy_name" --profile "$AWS_PROFILE" &>/dev/null; then
         echo -e "${YELLOW}管理員政策已存在: $admin_policy_name${NC}"
     else
         # 創建管理員政策
-        aws iam create-policy \
+        aws_with_profile iam create-policy \
             --policy-name "$admin_policy_name" \
             --policy-document "file://$PARENT_DIR/iam-policies/admin-csr-policy.json" \
             --description "Allow admin full access to CSR exchange bucket" \
@@ -439,7 +471,7 @@ list_iam_users() {
     local policy_arn="arn:aws:iam::$ACCOUNT_ID:policy/VPN-CSR-TeamMember-Policy"
     
     echo -e "${CYAN}擁有 CSR 政策的用戶：${NC}"
-    aws iam list-entities-for-policy \
+    aws_with_profile iam list-entities-for-policy \
         --policy-arn "$policy_arn" \
         --query 'PolicyUsers[].UserName' \
         --output table \
@@ -461,18 +493,18 @@ cleanup_resources() {
     echo -e "${BLUE}清理資源...${NC}"
     
     # 刪除存儲桶內容
-    aws s3 rm "s3://$BUCKET_NAME" --recursive --profile "$AWS_PROFILE"
+    aws_with_profile s3 rm "s3://$BUCKET_NAME" --recursive --profile "$AWS_PROFILE"
     
     # 刪除存儲桶
-    aws s3 rb "s3://$BUCKET_NAME" --profile "$AWS_PROFILE"
+    aws_with_profile s3 rb "s3://$BUCKET_NAME" --profile "$AWS_PROFILE"
     
     echo -e "${GREEN}✓ S3 存儲桶已刪除${NC}"
     
     # 可選：刪除 IAM 政策（謹慎操作）
     read -p "是否也要刪除 IAM 政策? (y/n): " delete_policies
     if [[ "$delete_policies" =~ ^[Yy]$ ]]; then
-        aws iam delete-policy --policy-arn "arn:aws:iam::$ACCOUNT_ID:policy/VPN-CSR-TeamMember-Policy" --profile "$AWS_PROFILE" 2>/dev/null
-        aws iam delete-policy --policy-arn "arn:aws:iam::$ACCOUNT_ID:policy/VPN-CSR-Admin-Policy" --profile "$AWS_PROFILE" 2>/dev/null
+        aws_with_profile iam delete-policy --policy-arn "arn:aws:iam::$ACCOUNT_ID:policy/VPN-CSR-TeamMember-Policy" --profile "$AWS_PROFILE" 2>/dev/null
+        aws_with_profile iam delete-policy --policy-arn "arn:aws:iam::$ACCOUNT_ID:policy/VPN-CSR-Admin-Policy" --profile "$AWS_PROFILE" 2>/dev/null
         echo -e "${GREEN}✓ IAM 政策已刪除${NC}"
     fi
     
@@ -502,7 +534,7 @@ publish_initial_assets() {
     echo -e ""
     echo -e "${BLUE}2. 或使用以下命令手動上傳：${NC}"
     echo -e "   ${CYAN}# 上傳 CA 證書${NC}"
-    echo -e "   ${CYAN}aws s3 cp certs/ca.crt s3://$BUCKET_NAME/public/ca.crt --sse aws:kms${NC}"
+    echo -e "   ${CYAN}aws_with_profile s3 cp certs/ca.crt s3://$BUCKET_NAME/public/ca.crt --sse aws:kms${NC}"
     echo -e ""
     echo -e "   ${CYAN}# 創建並上傳端點配置 JSON${NC}"
     echo -e "   ${CYAN}# (參考 publish_endpoints.sh 中的格式)${NC}"
@@ -551,8 +583,8 @@ show_completion_info() {
         echo -e "   ${CYAN}./admin-tools/publish_endpoints.sh -b $BUCKET_NAME${NC}"
         echo -e ""
         echo -e "${BLUE}3. 傳統 CSR 命令：${NC}"
-        echo -e "   ${CYAN}aws s3 cp user.csr s3://$BUCKET_NAME/csr/user.csr${NC}"
-        echo -e "   ${CYAN}aws s3 cp s3://$BUCKET_NAME/cert/user.crt user.crt${NC}"
+        echo -e "   ${CYAN}aws_with_profile s3 cp user.csr s3://$BUCKET_NAME/csr/user.csr${NC}"
+        echo -e "   ${CYAN}aws_with_profile s3 cp s3://$BUCKET_NAME/cert/user.crt user.crt${NC}"
     fi
     echo -e ""
     echo -e "${YELLOW}💡 安全提醒：${NC}"
@@ -566,7 +598,8 @@ main() {
     # 預設值
     BUCKET_NAME="$DEFAULT_BUCKET_NAME"
     REGION="$DEFAULT_REGION"
-    AWS_PROFILE="$(aws configure list-profiles 2>/dev/null | head -1 || echo default)"
+    # Get AWS profile from environment manager
+    AWS_PROFILE="$(env_get_profile "$CURRENT_ENVIRONMENT" 2>/dev/null || echo default)"
     ENVIRONMENT=""
     CREATE_USERS=false
     LIST_USERS=false
@@ -630,7 +663,36 @@ main() {
     mkdir -p "$(dirname "$LOG_FILE")"
     
     echo -e "${CYAN}========================================${NC}"
-    echo -e "${CYAN}S3 CSR 交換桶設置工具${NC}"
+    show_env_aware_header "S3 CSR 交換桶設置工具"
+    
+    # 顯示 AWS Profile 資訊
+    local current_profile
+    current_profile=$(env_get_profile "$CURRENT_ENVIRONMENT" 2>/dev/null)
+    if [[ -n "$current_profile" ]]; then
+        local account_id region
+        account_id=$(aws_with_profile sts get-caller-identity --query Account --output text 2>/dev/null)
+        region=$(aws_with_profile configure get region 2>/dev/null)
+        
+        echo -e "${CYAN}AWS 配置狀態:${NC}"
+        echo -e "  Profile: ${GREEN}$current_profile${NC}"
+        if [[ -n "$account_id" ]]; then
+            echo -e "  帳戶 ID: ${account_id}"
+        fi
+        if [[ -n "$region" ]]; then
+            echo -e "  區域: ${region}"
+        fi
+        
+        # 驗證 profile 匹配環境
+        if validate_profile_matches_environment "$current_profile" "$CURRENT_ENVIRONMENT" 2>/dev/null; then
+            echo -e "  狀態: ${GREEN}✓ 有效且匹配環境${NC}"
+        else
+            echo -e "  狀態: ${YELLOW}⚠ 有效但可能不匹配環境${NC}"
+        fi
+    else
+        echo -e "${CYAN}AWS 配置狀態:${NC}"
+        echo -e "  Profile: ${YELLOW}未設定${NC}"
+    fi
+    echo -e ""
     echo -e "${CYAN}========================================${NC}"
     echo -e ""
     

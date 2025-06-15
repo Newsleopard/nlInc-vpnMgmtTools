@@ -8,6 +8,24 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PARENT_DIR="$(dirname "$SCRIPT_DIR")"
 
+# 載入環境管理器 (必須第一個載入)
+source "$PARENT_DIR/lib/env_manager.sh"
+
+# 初始化環境
+if ! env_init_for_script "publish_endpoints.sh"; then
+    echo -e "${RED}錯誤: 無法初始化環境管理器${NC}"
+    exit 1
+fi
+
+# 驗證 AWS Profile 整合
+echo -e "${BLUE}正在驗證 AWS Profile 設定...${NC}"
+if ! env_validate_profile_integration "$CURRENT_ENVIRONMENT" "true"; then
+    echo -e "${YELLOW}警告: AWS Profile 設定可能有問題，但繼續執行發布工具${NC}"
+fi
+
+# 設定環境特定路徑
+env_setup_paths
+
 # 載入核心函式庫
 source "$PARENT_DIR/lib/core_functions.sh"
 
@@ -22,8 +40,22 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
-# 預設配置
-DEFAULT_BUCKET_NAME="vpn-csr-exchange"
+# 預設配置 (環境感知)
+get_default_bucket_name() {
+    case "$CURRENT_ENVIRONMENT" in
+        staging)
+            echo "staging-vpn-csr-exchange"
+            ;;
+        production)
+            echo "production-vpn-csr-exchange"
+            ;;
+        *)
+            echo "vpn-csr-exchange"
+            ;;
+    esac
+}
+
+DEFAULT_BUCKET_NAME="$(get_default_bucket_name)"
 
 # 使用說明
 show_usage() {
@@ -69,7 +101,7 @@ check_aws_config() {
         return 1
     fi
     
-    if ! aws sts get-caller-identity --profile "$AWS_PROFILE" &>/dev/null; then
+    if ! aws_with_profile sts get-caller-identity --profile "$AWS_PROFILE" &>/dev/null; then
         echo -e "${RED}AWS 憑證無效或未設置 (profile: $AWS_PROFILE)${NC}"
         return 1
     fi
@@ -82,7 +114,7 @@ check_aws_config() {
 check_s3_bucket() {
     echo -e "${BLUE}檢查 S3 存儲桶...${NC}"
     
-    if ! aws s3 ls "s3://$BUCKET_NAME" --profile "$AWS_PROFILE" &>/dev/null; then
+    if ! aws_with_profile s3 ls "s3://$BUCKET_NAME" --profile "$AWS_PROFILE" &>/dev/null; then
         echo -e "${RED}無法訪問 S3 存儲桶: $BUCKET_NAME${NC}"
         echo -e "${YELLOW}請先運行 setup_csr_s3_bucket.sh 創建存儲桶${NC}"
         return 1
@@ -228,7 +260,7 @@ publish_ca_certificate() {
     
     # 檢查是否需要覆蓋
     if [ "$FORCE" = false ]; then
-        if aws s3 ls "$s3_path" --profile "$AWS_PROFILE" &>/dev/null; then
+        if aws_with_profile s3 ls "$s3_path" --profile "$AWS_PROFILE" &>/dev/null; then
             local overwrite
             read -p "CA 證書已存在於 S3。是否覆蓋? (y/n): " overwrite
             if [[ ! "$overwrite" =~ ^[Yy]$ ]]; then
@@ -239,7 +271,7 @@ publish_ca_certificate() {
     fi
     
     # 上傳 CA 證書
-    if aws s3 cp "$CA_CERT" "$s3_path" \
+    if aws_with_profile s3 cp "$CA_CERT" "$s3_path" \
         --sse aws:kms \
         --acl bucket-owner-full-control \
         --profile "$AWS_PROFILE"; then
@@ -255,7 +287,7 @@ publish_ca_certificate() {
     ca_hash=$(openssl dgst -sha256 "$CA_CERT" | awk '{print $2}')
     if [ -n "$ca_hash" ]; then
         echo "$ca_hash" > "/tmp/ca.crt.sha256"
-        if aws s3 cp "/tmp/ca.crt.sha256" "s3://$BUCKET_NAME/public/ca.crt.sha256" \
+        if aws_with_profile s3 cp "/tmp/ca.crt.sha256" "s3://$BUCKET_NAME/public/ca.crt.sha256" \
             --sse aws:kms \
             --acl bucket-owner-full-control \
             --profile "$AWS_PROFILE"; then
@@ -275,7 +307,7 @@ publish_endpoints() {
     
     # 檢查是否需要覆蓋
     if [ "$FORCE" = false ]; then
-        if aws s3 ls "$s3_path" --profile "$AWS_PROFILE" &>/dev/null; then
+        if aws_with_profile s3 ls "$s3_path" --profile "$AWS_PROFILE" &>/dev/null; then
             local overwrite
             read -p "端點資訊已存在於 S3。是否覆蓋? (y/n): " overwrite
             if [[ ! "$overwrite" =~ ^[Yy]$ ]]; then
@@ -286,7 +318,7 @@ publish_endpoints() {
     fi
     
     # 上傳端點資訊
-    if aws s3 cp "$ENDPOINTS_JSON" "$s3_path" \
+    if aws_with_profile s3 cp "$ENDPOINTS_JSON" "$s3_path" \
         --sse aws:kms \
         --acl bucket-owner-full-control \
         --profile "$AWS_PROFILE"; then
@@ -343,7 +375,8 @@ main() {
     # 預設值
     BUCKET_NAME="$DEFAULT_BUCKET_NAME"
     ENVIRONMENT="all"
-    AWS_PROFILE="$(aws configure list-profiles 2>/dev/null | head -1 || echo default)"
+    # Get AWS profile from environment manager
+    AWS_PROFILE="$(env_get_profile "$CURRENT_ENVIRONMENT" 2>/dev/null || echo default)"
     CA_ONLY=false
     ENDPOINTS_ONLY=false
     FORCE=false
@@ -411,12 +444,41 @@ main() {
     LOG_FILE="$PARENT_DIR/logs/publish_endpoints.log"
     mkdir -p "$(dirname "$LOG_FILE")"
     
-    echo -e "${CYAN}========================================${NC}"
-    echo -e "${CYAN}VPN 公用資產發布工具${NC}"
-    echo -e "${CYAN}========================================${NC}"
-    echo -e "${BLUE}存儲桶: $BUCKET_NAME${NC}"
-    echo -e "${BLUE}環境: $ENVIRONMENT${NC}"
-    echo -e "${BLUE}AWS Profile: $AWS_PROFILE${NC}"
+    show_env_aware_header "VPN 公用資產發布工具"
+    
+    # 顯示 AWS Profile 資訊
+    local current_profile
+    current_profile=$(env_get_profile "$CURRENT_ENVIRONMENT" 2>/dev/null)
+    if [[ -n "$current_profile" ]]; then
+        local account_id region
+        account_id=$(aws_with_profile sts get-caller-identity --query Account --output text 2>/dev/null)
+        region=$(aws_with_profile configure get region 2>/dev/null)
+        
+        echo -e "${CYAN}AWS 配置狀態:${NC}"
+        echo -e "  Profile: ${GREEN}$current_profile${NC}"
+        if [[ -n "$account_id" ]]; then
+            echo -e "  帳戶 ID: ${account_id}"
+        fi
+        if [[ -n "$region" ]]; then
+            echo -e "  區域: ${region}"
+        fi
+        
+        # 驗證 profile 匹配環境
+        if validate_profile_matches_environment "$current_profile" "$CURRENT_ENVIRONMENT" 2>/dev/null; then
+            echo -e "  狀態: ${GREEN}✓ 有效且匹配環境${NC}"
+        else
+            echo -e "  狀態: ${YELLOW}⚠ 有效但可能不匹配環境${NC}"
+        fi
+    else
+        echo -e "${CYAN}AWS 配置狀態:${NC}"
+        echo -e "  Profile: ${YELLOW}未設定${NC}"
+    fi
+    echo -e ""
+    
+    echo -e "${BLUE}發布配置:${NC}"
+    echo -e "  存儲桶: $BUCKET_NAME"
+    echo -e "  環境: $ENVIRONMENT"
+    echo -e "  AWS Profile: $AWS_PROFILE"
     echo -e ""
     
     # 檢查前置條件
