@@ -935,3 +935,398 @@ show_multi_vpc_topology_lib() {
     log_message_core "顯示多 VPC 拓撲完成"
     return 0
 }
+
+# 關聯子網路到端點 (庫函式版本)
+# 參數: $1 = AWS_REGION, $2 = ENDPOINT_ID
+associate_subnet_to_endpoint_lib() {
+    local aws_region="$1"
+    local endpoint_id="$2"
+    
+    if [ -z "$aws_region" ] || [ -z "$endpoint_id" ]; then
+        echo -e "${RED}錯誤: AWS 區域和端點 ID 不能為空${NC}"
+        return 1
+    fi
+    
+    # 參數驗證
+    if ! validate_aws_region "$aws_region"; then
+        return 1
+    fi
+    
+    if ! validate_endpoint_id "$endpoint_id"; then
+        return 1
+    fi
+    
+    log_message_core "開始關聯子網路到端點 (lib) - Endpoint: $endpoint_id, Region: $aws_region"
+    
+    echo -e "${BLUE}=== 關聯子網路到 VPN 端點 ===${NC}"
+    echo -e "${BLUE}端點 ID: $endpoint_id${NC}"
+    echo -e "${BLUE}AWS 區域: $aws_region${NC}"
+    echo ""
+    
+    # 顯示當前關聯的網絡
+    echo -e "${CYAN}當前關聯的網絡:${NC}"
+    view_associated_networks_lib "$aws_region" "$endpoint_id"
+    echo ""
+    
+    # 獲取可用的子網路
+    echo -e "${BLUE}正在獲取可用的子網路...${NC}"
+    local subnets_json
+    subnets_json=$(aws ec2 describe-subnets --region "$aws_region" 2>/dev/null)
+    
+    if [ $? -ne 0 ] || [ -z "$subnets_json" ]; then
+        echo -e "${RED}錯誤: 無法獲取子網路列表。請檢查 AWS 憑證和區域設定。${NC}"
+        return 1
+    fi
+    
+    # 解析並顯示可用子網路
+    if command -v jq >/dev/null 2>&1; then
+        local subnet_count
+        subnet_count=$(echo "$subnets_json" | jq '.Subnets | length' 2>/dev/null)
+        
+        if [ -n "$subnet_count" ] && [ "$subnet_count" -gt 0 ]; then
+            echo -e "${BLUE}找到 $subnet_count 個可用子網路:${NC}"
+            echo ""
+            echo "$subnets_json" | jq -r '.Subnets[] | "  子網路 ID: \(.SubnetId)\n    VPC ID: \(.VpcId)\n    CIDR: \(.CidrBlock)\n    可用區: \(.AvailabilityZone)\n    名稱: \(.Tags[]? | select(.Key=="Name") | .Value // "未命名")\n"'
+        else
+            echo -e "${YELLOW}未找到可用的子網路${NC}"
+            return 1
+        fi
+    else
+        echo -e "${YELLOW}警告: 未安裝 jq，將使用基本顯示方式${NC}"
+        echo "$subnets_json" | grep -o '"SubnetId":"[^"]*"' | sed 's/"SubnetId":"\([^"]*\)"/  子網路 ID: \1/'
+    fi
+    
+    echo ""
+    
+    # 檢查是否有配置的預設子網路 (第一優先級: vpn_endpoint.conf)
+    local default_subnet_id=""
+    local default_prompt=""
+    local default_source=""
+    
+    if [ -n "$SUBNET_ID" ]; then
+        # 驗證配置的子網路是否存在且可訪問
+        if aws ec2 describe-subnets --subnet-ids "$SUBNET_ID" --region "$aws_region" &>/dev/null; then
+            default_subnet_id="$SUBNET_ID"
+            default_prompt=" [預設: $SUBNET_ID]"
+            default_source="vpn_endpoint.conf"
+            echo -e "${CYAN}發現配置的預設子網路 (vpn_endpoint.conf): ${YELLOW}$SUBNET_ID${NC}"
+            
+            # 顯示預設子網路的詳細資訊
+            if command -v jq >/dev/null 2>&1; then
+                local subnet_info
+                subnet_info=$(aws ec2 describe-subnets --subnet-ids "$SUBNET_ID" --region "$aws_region" 2>/dev/null)
+                if [ $? -eq 0 ] && [ -n "$subnet_info" ]; then
+                    echo -e "${BLUE}預設子網路詳情:${NC}"
+                    echo "$subnet_info" | jq -r '.Subnets[0] | "  VPC ID: \(.VpcId)\n  CIDR: \(.CidrBlock)\n  可用區: \(.AvailabilityZone)\n  名稱: \(.Tags[]? | select(.Key=="Name") | .Value // "未命名")"'
+                fi
+            fi
+            echo ""
+        else
+            echo -e "${YELLOW}警告: 配置的子網路 $SUBNET_ID 不存在或無法訪問${NC}"
+        fi
+    fi
+    
+    # 第二優先級: 從環境配置檔案讀取 PRIMARY_SUBNET_ID
+    if [ -z "$default_subnet_id" ] && [ -n "$PRIMARY_SUBNET_ID" ]; then
+        # 驗證環境配置的子網路是否存在且可訪問
+        if aws ec2 describe-subnets --subnet-ids "$PRIMARY_SUBNET_ID" --region "$aws_region" &>/dev/null; then
+            default_subnet_id="$PRIMARY_SUBNET_ID"
+            default_prompt=" [預設: $PRIMARY_SUBNET_ID]"
+            default_source="${CURRENT_ENVIRONMENT}.env"
+            echo -e "${CYAN}發現環境配置的預設子網路 (${CURRENT_ENVIRONMENT}.env): ${YELLOW}$PRIMARY_SUBNET_ID${NC}"
+            
+            # 顯示預設子網路的詳細資訊
+            if command -v jq >/dev/null 2>&1; then
+                local subnet_info
+                subnet_info=$(aws ec2 describe-subnets --subnet-ids "$PRIMARY_SUBNET_ID" --region "$aws_region" 2>/dev/null)
+                if [ $? -eq 0 ] && [ -n "$subnet_info" ]; then
+                    echo -e "${BLUE}預設子網路詳情:${NC}"
+                    echo "$subnet_info" | jq -r '.Subnets[0] | "  VPC ID: \(.VpcId)\n  CIDR: \(.CidrBlock)\n  可用區: \(.AvailabilityZone)\n  名稱: \(.Tags[]? | select(.Key=="Name") | .Value // "未命名")"'
+                fi
+            fi
+            echo ""
+        else
+            echo -e "${YELLOW}警告: 環境配置的子網路 $PRIMARY_SUBNET_ID 不存在或無法訪問${NC}"
+        fi
+    fi
+    
+    # 如果沒有找到任何預設子網路，提供提示
+    if [ -z "$default_subnet_id" ]; then
+        echo -e "${YELLOW}未找到可用的預設子網路配置，將要求手動輸入${NC}"
+    fi
+    
+    # 提示用戶輸入子網路 ID
+    local subnet_id
+    while true; do
+        if [ -n "$default_subnet_id" ]; then
+            read -p "請輸入要關聯的子網路 ID${default_prompt} (或輸入 'cancel' 取消): " subnet_id
+            
+            # 如果用戶直接按 Enter，使用預設值
+            if [ -z "$subnet_id" ]; then
+                subnet_id="$default_subnet_id"
+                echo -e "${GREEN}使用預設子網路 (來源: $default_source): $subnet_id${NC}"
+            fi
+        else
+            read -p "請輸入要關聯的子網路 ID (或輸入 'cancel' 取消): " subnet_id
+        fi
+        
+        if [ "$subnet_id" = "cancel" ]; then
+            echo -e "${YELLOW}操作已取消${NC}"
+            return 1
+        fi
+        
+        # 驗證子網路 ID 格式
+        if [[ ! "$subnet_id" =~ ^subnet-[0-9a-f]{8,17}$ ]]; then
+            echo -e "${RED}子網路 ID 格式無效。格式應為: subnet-xxxxxxxxx${NC}"
+            continue
+        fi
+        
+        # 驗證子網路是否存在
+        if aws ec2 describe-subnets --subnet-ids "$subnet_id" --region "$aws_region" &>/dev/null; then
+            break
+        else
+            echo -e "${RED}子網路 ID '$subnet_id' 不存在或無法訪問。請檢查輸入。${NC}"
+        fi
+    done
+    
+    # 執行關聯操作
+    echo -e "${BLUE}正在關聯子網路 $subnet_id 到端點 $endpoint_id...${NC}"
+    
+    local start_time end_time output exit_code
+    start_time=$(date)
+    
+    output=$(aws ec2 associate-client-vpn-target-network \
+        --client-vpn-endpoint-id "$endpoint_id" \
+        --subnet-id "$subnet_id" \
+        --region "$aws_region" 2>&1)
+    exit_code=$?
+    
+    end_time=$(date)
+    
+    log_message_core "AWS CLI 命令執行: associate-client-vpn-target-network, exit code: $exit_code, 開始時間: $start_time, 結束時間: $end_time"
+    
+    if [ $exit_code -eq 0 ]; then
+        local association_id
+        if command -v jq >/dev/null 2>&1; then
+            association_id=$(echo "$output" | jq -r '.AssociationId' 2>/dev/null)
+        else
+            association_id=$(echo "$output" | grep -o '"AssociationId":"[^"]*"' | cut -d'"' -f4)
+        fi
+        
+        echo -e "${GREEN}✓ 子網路關聯成功${NC}"
+        echo -e "${BLUE}關聯 ID: $association_id${NC}"
+        log_message_core "子網路關聯成功: subnet_id=$subnet_id, association_id=$association_id"
+        
+        # 等待關聯完成
+        echo -e "${BLUE}等待關聯狀態更新...${NC}"
+        sleep 5
+        
+        # 顯示更新後的關聯網絡
+        echo ""
+        echo -e "${CYAN}更新後的關聯網絡:${NC}"
+        view_associated_networks_lib "$aws_region" "$endpoint_id"
+        
+        return 0
+    else
+        echo -e "${RED}錯誤: 關聯子網路失敗${NC}"
+        echo -e "${YELLOW}錯誤詳情: $output${NC}"
+        log_message_core "錯誤: 關聯子網路失敗 - $output"
+        return 1
+    fi
+}
+
+# 解除 VPC 關聯 (庫函式版本)
+# 參數: $1 = CONFIG_FILE, $2 = AWS_REGION, $3 = ENDPOINT_ID  
+disassociate_vpc_lib() {
+    local config_file="$1"
+    local aws_region="$2"
+    local endpoint_id="$3"
+    
+    if [ -z "$config_file" ] || [ -z "$aws_region" ] || [ -z "$endpoint_id" ]; then
+        echo -e "${RED}錯誤: 配置文件、AWS 區域和端點 ID 不能為空${NC}"
+        return 1
+    fi
+    
+    # 參數驗證
+    if [ ! -f "$config_file" ]; then
+        echo -e "${RED}錯誤: 配置文件不存在: $config_file${NC}"
+        return 1
+    fi
+    
+    if ! validate_aws_region "$aws_region"; then
+        return 1
+    fi
+    
+    if ! validate_endpoint_id "$endpoint_id"; then
+        return 1
+    fi
+    
+    log_message_core "開始解除 VPC 關聯 (lib) - Endpoint: $endpoint_id, Region: $aws_region"
+    
+    echo -e "${BLUE}=== 解除 VPC 關聯 ===${NC}"
+    echo -e "${BLUE}端點 ID: $endpoint_id${NC}"
+    echo -e "${BLUE}AWS 區域: $aws_region${NC}"
+    echo ""
+    
+    # 獲取當前關聯的網絡
+    echo -e "${BLUE}正在獲取當前關聯的網絡...${NC}"
+    local networks_json
+    networks_json=$(aws ec2 describe-client-vpn-target-networks \
+        --client-vpn-endpoint-id "$endpoint_id" \
+        --region "$aws_region" 2>/dev/null)
+    
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}錯誤: 無法獲取端點關聯的網絡。請檢查端點 ID 和 AWS 憑證。${NC}"
+        return 1
+    fi
+    
+    local networks_count
+    if command -v jq >/dev/null 2>&1; then
+        networks_count=$(echo "$networks_json" | jq '.ClientVpnTargetNetworks | length' 2>/dev/null)
+    else
+        networks_count=$(echo "$networks_json" | grep -c '"AssociationId"' || echo "0")
+    fi
+    
+    if [ -z "$networks_count" ] || [ "$networks_count" -eq 0 ]; then
+        echo -e "${YELLOW}沒有發現任何關聯的網絡${NC}"
+        return 0
+    fi
+    
+    echo -e "${BLUE}找到 $networks_count 個關聯的網絡:${NC}"
+    echo ""
+    
+    # 顯示當前關聯並讓用戶選擇
+    if command -v jq >/dev/null 2>&1; then
+        echo "$networks_json" | jq -r '.ClientVpnTargetNetworks[] | 
+            "關聯 ID: \(.AssociationId)\n  子網路 ID: \(.TargetNetworkId)\n  VPC ID: \(.VpcId)\n  狀態: \(.Status.Code)\n"'
+    else
+        echo "$networks_json" | grep -E '"AssociationId"|"TargetNetworkId"|"VpcId"|"Code"'
+    fi
+    
+    echo ""
+    echo -e "${YELLOW}選擇解除關聯的方式:${NC}"
+    echo -e "  ${GREEN}1.${NC} 解除特定關聯 (輸入關聯 ID)"
+    echo -e "  ${GREEN}2.${NC} 解除所有關聯"
+    echo -e "  ${GREEN}3.${NC} 取消操作"
+    echo ""
+    
+    local choice
+    read -p "請選擇操作 (1-3): " choice
+    
+    case "$choice" in
+        1)
+            # 解除特定關聯
+            local association_id
+            read -p "請輸入要解除的關聯 ID: " association_id
+            
+            if [ -z "$association_id" ]; then
+                echo -e "${RED}錯誤: 關聯 ID 不能為空${NC}"
+                return 1
+            fi
+            
+            echo -e "${BLUE}正在解除關聯: $association_id${NC}"
+            
+            local output exit_code
+            output=$(aws ec2 disassociate-client-vpn-target-network \
+                --client-vpn-endpoint-id "$endpoint_id" \
+                --association-id "$association_id" \
+                --region "$aws_region" 2>&1)
+            exit_code=$?
+            
+            if [ $exit_code -eq 0 ]; then
+                echo -e "${GREEN}✓ 關聯解除成功${NC}"
+                log_message_core "關聯解除成功: association_id=$association_id"
+            else
+                echo -e "${RED}錯誤: 解除關聯失敗${NC}"
+                echo -e "${YELLOW}錯誤詳情: $output${NC}"
+                log_message_core "錯誤: 解除關聯失敗 - $output"
+                return 1
+            fi
+            ;;
+        2)
+            # 解除所有關聯
+            echo -e "${YELLOW}警告: 即將解除所有 VPC 關聯。此操作將影響所有用戶對此 VPN 端點的連接。${NC}"
+            read -p "您確定要繼續嗎？(輸入 'yes' 確認): " confirm
+            
+            if [ "$confirm" != "yes" ]; then
+                echo -e "${YELLOW}操作已取消${NC}"
+                return 1
+            fi
+            
+            echo -e "${BLUE}正在解除所有關聯...${NC}"
+            
+            # 解除所有網絡關聯
+            if command -v jq >/dev/null 2>&1; then
+                echo "$networks_json" | jq -r '.ClientVpnTargetNetworks[] | 
+                    select(.Status.Code != "disassociating" and .Status.Code != "disassociated") | 
+                    "\(.AssociationId)"' | while read -r assoc_id; do
+                    if [ -n "$assoc_id" ] && [ "$assoc_id" != "null" ]; then
+                        echo -e "${YELLOW}解除關聯: $assoc_id${NC}"
+                        aws ec2 disassociate-client-vpn-target-network \
+                            --client-vpn-endpoint-id "$endpoint_id" \
+                            --association-id "$assoc_id" \
+                            --region "$aws_region" >/dev/null 2>&1 || {
+                            echo -e "${YELLOW}警告: 無法解除關聯 $assoc_id (可能已被解除)${NC}"
+                        }
+                    fi
+                done
+            else
+                # 備用方法當沒有 jq 時
+                echo "$networks_json" | grep -o '"AssociationId":"[^"]*"' | cut -d'"' -f4 | while read -r assoc_id; do
+                    if [ -n "$assoc_id" ]; then
+                        echo -e "${YELLOW}解除關聯: $assoc_id${NC}"
+                        aws ec2 disassociate-client-vpn-target-network \
+                            --client-vpn-endpoint-id "$endpoint_id" \
+                            --association-id "$assoc_id" \
+                            --region "$aws_region" >/dev/null 2>&1 || {
+                            echo -e "${YELLOW}警告: 無法解除關聯 $assoc_id${NC}"
+                        }
+                    fi
+                done
+            fi
+            
+            # 等待所有關聯解除完成
+            echo -e "${BLUE}等待所有關聯解除完成...${NC}"
+            local wait_attempts=0
+            local max_wait_attempts=30
+            
+            while [ $wait_attempts -lt $max_wait_attempts ]; do
+                local current_networks
+                current_networks=$(aws ec2 describe-client-vpn-target-networks \
+                    --client-vpn-endpoint-id "$endpoint_id" \
+                    --region "$aws_region" \
+                    --query 'ClientVpnTargetNetworks[?Status.Code!=`disassociated`] | length(@)' \
+                    --output text 2>/dev/null)
+                
+                if [ "$current_networks" = "0" ]; then
+                    echo -e "${GREEN}✓ 所有關聯已成功解除${NC}"
+                    break
+                fi
+                
+                echo -e "${YELLOW}仍有 $current_networks 個關聯尚未解除，等待中... ($((wait_attempts + 1))/$max_wait_attempts)${NC}"
+                sleep 10
+                ((wait_attempts++))
+            done
+            
+            if [ $wait_attempts -eq $max_wait_attempts ]; then
+                echo -e "${YELLOW}警告: 部分關聯可能仍在解除過程中${NC}"
+            fi
+            
+            log_message_core "所有 VPC 關聯解除操作完成"
+            ;;
+        3)
+            echo -e "${YELLOW}操作已取消${NC}"
+            return 1
+            ;;
+        *)
+            echo -e "${RED}無效選擇${NC}"
+            return 1
+            ;;
+    esac
+    
+    echo ""
+    echo -e "${CYAN}更新後的關聯網絡:${NC}"
+    view_associated_networks_lib "$aws_region" "$endpoint_id"
+    
+    return 0
+}
