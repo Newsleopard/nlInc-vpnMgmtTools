@@ -998,15 +998,18 @@ associate_subnet_to_endpoint_lib() {
     
     echo ""
     
-    # 檢查是否有配置的預設子網路
+    # 檢查是否有配置的預設子網路 (第一優先級: vpn_endpoint.conf)
     local default_subnet_id=""
     local default_prompt=""
+    local default_source=""
+    
     if [ -n "$SUBNET_ID" ]; then
         # 驗證配置的子網路是否存在且可訪問
         if aws ec2 describe-subnets --subnet-ids "$SUBNET_ID" --region "$aws_region" &>/dev/null; then
             default_subnet_id="$SUBNET_ID"
             default_prompt=" [預設: $SUBNET_ID]"
-            echo -e "${CYAN}發現配置的預設子網路: ${YELLOW}$SUBNET_ID${NC}"
+            default_source="vpn_endpoint.conf"
+            echo -e "${CYAN}發現配置的預設子網路 (vpn_endpoint.conf): ${YELLOW}$SUBNET_ID${NC}"
             
             # 顯示預設子網路的詳細資訊
             if command -v jq >/dev/null 2>&1; then
@@ -1019,8 +1022,37 @@ associate_subnet_to_endpoint_lib() {
             fi
             echo ""
         else
-            echo -e "${YELLOW}警告: 配置的子網路 $SUBNET_ID 不存在或無法訪問，將要求手動輸入${NC}"
+            echo -e "${YELLOW}警告: 配置的子網路 $SUBNET_ID 不存在或無法訪問${NC}"
         fi
+    fi
+    
+    # 第二優先級: 從環境配置檔案讀取 PRIMARY_SUBNET_ID
+    if [ -z "$default_subnet_id" ] && [ -n "$PRIMARY_SUBNET_ID" ]; then
+        # 驗證環境配置的子網路是否存在且可訪問
+        if aws ec2 describe-subnets --subnet-ids "$PRIMARY_SUBNET_ID" --region "$aws_region" &>/dev/null; then
+            default_subnet_id="$PRIMARY_SUBNET_ID"
+            default_prompt=" [預設: $PRIMARY_SUBNET_ID]"
+            default_source="${CURRENT_ENVIRONMENT}.env"
+            echo -e "${CYAN}發現環境配置的預設子網路 (${CURRENT_ENVIRONMENT}.env): ${YELLOW}$PRIMARY_SUBNET_ID${NC}"
+            
+            # 顯示預設子網路的詳細資訊
+            if command -v jq >/dev/null 2>&1; then
+                local subnet_info
+                subnet_info=$(aws ec2 describe-subnets --subnet-ids "$PRIMARY_SUBNET_ID" --region "$aws_region" 2>/dev/null)
+                if [ $? -eq 0 ] && [ -n "$subnet_info" ]; then
+                    echo -e "${BLUE}預設子網路詳情:${NC}"
+                    echo "$subnet_info" | jq -r '.Subnets[0] | "  VPC ID: \(.VpcId)\n  CIDR: \(.CidrBlock)\n  可用區: \(.AvailabilityZone)\n  名稱: \(.Tags[]? | select(.Key=="Name") | .Value // "未命名")"'
+                fi
+            fi
+            echo ""
+        else
+            echo -e "${YELLOW}警告: 環境配置的子網路 $PRIMARY_SUBNET_ID 不存在或無法訪問${NC}"
+        fi
+    fi
+    
+    # 如果沒有找到任何預設子網路，提供提示
+    if [ -z "$default_subnet_id" ]; then
+        echo -e "${YELLOW}未找到可用的預設子網路配置，將要求手動輸入${NC}"
     fi
     
     # 提示用戶輸入子網路 ID
@@ -1032,7 +1064,7 @@ associate_subnet_to_endpoint_lib() {
             # 如果用戶直接按 Enter，使用預設值
             if [ -z "$subnet_id" ]; then
                 subnet_id="$default_subnet_id"
-                echo -e "${GREEN}使用預設子網路: $subnet_id${NC}"
+                echo -e "${GREEN}使用預設子網路 (來源: $default_source): $subnet_id${NC}"
             fi
         else
             read -p "請輸入要關聯的子網路 ID (或輸入 'cancel' 取消): " subnet_id
