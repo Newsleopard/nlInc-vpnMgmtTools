@@ -13,6 +13,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # 載入核心函數
 source "$PROJECT_ROOT/lib/core_functions.sh"
 source "$PROJECT_ROOT/lib/env_manager.sh"
+source "$PROJECT_ROOT/lib/enhanced_confirmation.sh"
 
 # 配置文件路径
 TEMPLATE_FILE="$PROJECT_ROOT/configs/template.env.example"
@@ -23,7 +24,21 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+DIM='\033[2m'
 NC='\033[0m' # No Color
+
+# 全局變數
+sync_mode="basic"
+
+# 狀態圖示定義
+STATUS_SYNCING="🔄"
+STATUS_SUCCESS="✅"
+STATUS_WARNING="⚠️"
+STATUS_ERROR="❌"
+STATUS_INFO="ℹ️"
 
 # 日志函數
 log_info() {
@@ -42,6 +57,405 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+# 顯示增強版標題
+show_enhanced_header() {
+    clear
+    echo -e "${CYAN}${BOLD}╔═══════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}${BOLD}║                    環境配置同步工具 v2.0                          ║${NC}"
+    echo -e "${CYAN}${BOLD}║                Environment Configuration Sync Tool                ║${NC}"
+    echo -e "${CYAN}${BOLD}╚═══════════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    
+    # 顯示模板狀態
+    if [[ -f "$TEMPLATE_FILE" ]]; then
+        echo -e "${GREEN}${STATUS_SUCCESS} 模板文件: ${NC}$TEMPLATE_FILE"
+    else
+        echo -e "${RED}${STATUS_ERROR} 模板文件不存在: ${NC}$TEMPLATE_FILE"
+    fi
+    
+    # 顯示可用環境
+    local env_count=0
+    echo -e "${BLUE}${STATUS_INFO} 可用環境:${NC}"
+    
+    # 檢查目錄式環境
+    for dir in "$CONFIGS_DIR"/*; do
+        if [[ -d "$dir" ]]; then
+            local env_name=$(basename "$dir")
+            if [[ "$env_name" != "template" ]]; then
+                echo -e "  ${GREEN}•${NC} $env_name"
+                env_count=$((env_count + 1))
+            fi
+        fi
+    done
+    
+    # 檢查文件式環境
+    for file in "$CONFIGS_DIR"/*.env; do
+        if [[ -f "$file" ]]; then
+            local env_name=$(basename "$file" .env)
+            if [[ "$env_name" != "template" ]]; then
+                echo -e "  ${GREEN}•${NC} $env_name (單檔)"
+                env_count=$((env_count + 1))
+            fi
+        fi
+    done
+    
+    if [[ $env_count -eq 0 ]]; then
+        echo -e "  ${YELLOW}${STATUS_WARNING} 未發現任何環境${NC}"
+    fi
+    
+    echo ""
+}
+
+# 互動式環境選擇
+interactive_environment_selection() {
+    local available_envs=()
+    
+    # 收集可用環境
+    for dir in "$CONFIGS_DIR"/*; do
+        if [[ -d "$dir" ]]; then
+            local env_name=$(basename "$dir")
+            if [[ "$env_name" != "template" ]]; then
+                available_envs+=("$env_name")
+            fi
+        fi
+    done
+    
+    for file in "$CONFIGS_DIR"/*.env; do
+        if [[ -f "$file" ]]; then
+            local env_name=$(basename "$file" .env)
+            if [[ "$env_name" != "template" ]]; then
+                # 避免重複
+                if [[ ! " ${available_envs[@]} " =~ " ${env_name} " ]]; then
+                    available_envs+=("$env_name")
+                fi
+            fi
+        fi
+    done
+    
+    if [[ ${#available_envs[@]} -eq 0 ]]; then
+        echo -e "${RED}${STATUS_ERROR} 未發現任何可用環境${NC}" >&2
+        return 1
+    fi
+    
+    echo -e "${PURPLE}${BOLD}選擇要同步的環境:${NC}" >&2
+    echo -e "  ${BOLD}[A]${NC} 全部環境 (${#available_envs[@]} 個)" >&2
+    echo "" >&2
+    
+    local i=1
+    for env in "${available_envs[@]}"; do
+        # 檢查環境狀態
+        local config_file=$(get_env_config_path "$env")
+        local status_icon="${STATUS_INFO}"
+        local status_text=""
+        
+        if [[ -f "$config_file" ]]; then
+            status_icon="${STATUS_SUCCESS}"
+            status_text=" (已配置)"
+        else
+            status_icon="${STATUS_WARNING}"
+            status_text=" (未配置)"
+        fi
+        
+        echo -e "  ${BOLD}[$i]${NC} $env${status_icon}${status_text}" >&2
+        i=$((i + 1))
+    done
+    
+    echo -e "  ${BOLD}[Q]${NC} 退出" >&2
+    echo "" >&2
+    
+    while true; do
+        read -p "請選擇 [1-${#available_envs[@]}/A/Q]: " choice >&2
+        
+        case "$choice" in
+            [Aa])
+                echo "all"
+                return 0
+                ;;
+            [Qq])
+                echo "quit"
+                return 0
+                ;;
+            [1-9]*)
+                if [[ "$choice" -ge 1 && "$choice" -le ${#available_envs[@]} ]]; then
+                    local selected_env="${available_envs[$((choice - 1))]}"
+                    echo "$selected_env"
+                    return 0
+                else
+                    echo -e "${YELLOW}${STATUS_WARNING} 請輸入有效的選項 (1-${#available_envs[@]}/A/Q)${NC}" >&2
+                fi
+                ;;
+            *)
+                echo -e "${YELLOW}${STATUS_WARNING} 請輸入有效的選項 (1-${#available_envs[@]}/A/Q)${NC}" >&2
+                ;;
+        esac
+    done
+}
+
+# 互動式操作模式選擇
+interactive_operation_mode_selection() {
+    echo -e "${PURPLE}${BOLD}選擇同步模式:${NC}" >&2
+    echo -e "  ${BOLD}[1]${NC} 基本同步 - 僅更新缺失的變數" >&2
+    echo -e "  ${BOLD}[2]${NC} 完整同步 - 同步所有變數 + 創建備份" >&2
+    echo -e "  ${BOLD}[3]${NC} AWS同步 - 從AWS獲取動態值 + 完整同步" >&2
+    echo -e "  ${BOLD}[4]${NC} 預覽模式 - 顯示變更但不實際修改" >&2
+    echo -e "  ${BOLD}[5]${NC} 強制同步 - 覆蓋所有現有值" >&2
+    echo -e "  ${BOLD}[Q]${NC} 返回" >&2
+    echo "" >&2
+    
+    while true; do
+        read -p "請選擇模式 [1-5/Q]: " mode >&2
+        
+        case "$mode" in
+            1)
+                echo "basic"
+                return 0
+                ;;
+            2)
+                echo "full"
+                return 0
+                ;;
+            3)
+                echo "aws"
+                return 0
+                ;;
+            4)
+                echo "preview"
+                return 0
+                ;;
+            5)
+                echo "force"
+                return 0
+                ;;
+            [Qq])
+                echo "quit"
+                return 0
+                ;;
+            *)
+                echo -e "${YELLOW}${STATUS_WARNING} 請輸入有效的選項 (1-5/Q)${NC}" >&2
+                ;;
+        esac
+    done
+}
+
+# 顯示操作摘要並確認
+show_operation_summary() {
+    local env_names=("$@")
+    local env_list=""
+    
+    # 創建環境列表字串
+    for env in "${env_names[@]}"; do
+        if [[ -n "$env_list" ]]; then
+            env_list="$env_list, $env"
+        else
+            env_list="$env"
+        fi
+    done
+    
+    echo -e "${CYAN}${BOLD}╔═══════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}${BOLD}║                           操作摘要                                ║${NC}"
+    echo -e "${CYAN}${BOLD}╚═══════════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    
+    echo -e "${BOLD}將執行以下操作:${NC}"
+    echo -e "  模板文件: ${BLUE}$(basename "$TEMPLATE_FILE")${NC}"
+    echo -e "  目標環境: ${GREEN}$env_list${NC}"
+    echo -e "  同步模式: ${YELLOW}$(get_mode_description)${NC}"
+    echo -e "  總環境數: ${PURPLE}${#env_names[@]}${NC} 個"
+    echo ""
+    
+    # 顯示每個環境的狀態
+    echo -e "${BOLD}環境詳情:${NC}"
+    for env_name in "${env_names[@]}"; do
+        local config_file=$(get_env_config_path "$env_name")
+        local status=""
+        local action=""
+        
+        if [[ -f "$config_file" ]]; then
+            status="${GREEN}已存在${NC}"
+            action="更新配置"
+        else
+            status="${YELLOW}新建${NC}"
+            action="創建配置"
+        fi
+        
+        echo -e "  ${BOLD}•${NC} $env_name: $status → $action"
+    done
+    echo ""
+}
+
+# 獲取模式描述
+get_mode_description() {
+    case "${sync_mode:-basic}" in
+        "basic") echo "基本同步" ;;
+        "full") echo "完整同步 + 備份" ;;
+        "aws") echo "AWS同步 + 完整同步" ;;
+        "preview") echo "預覽模式 (僅顯示)" ;;
+        "force") echo "強制覆蓋模式" ;;
+        *) echo "未知模式" ;;
+    esac
+}
+
+# 互動式主介面
+interactive_main() {
+    show_enhanced_header
+    
+    # 環境選擇
+    echo -e "${PURPLE}${BOLD}步驟 1/3: 選擇環境${NC}"
+    local selected_env
+    selected_env=$(interactive_environment_selection)
+    
+    if [[ "$selected_env" == "quit" ]]; then
+        echo -e "${BLUE}${STATUS_INFO} 操作已取消${NC}"
+        exit 0
+    fi
+    
+    # 操作模式選擇
+    echo ""
+    echo -e "${PURPLE}${BOLD}步驟 2/3: 選擇同步模式${NC}"
+    local selected_mode
+    selected_mode=$(interactive_operation_mode_selection)
+    
+    if [[ "$selected_mode" == "quit" ]]; then
+        echo -e "${BLUE}${STATUS_INFO} 操作已取消${NC}"
+        exit 0
+    fi
+    
+    # 設定全域變數
+    sync_mode="$selected_mode"
+    
+    # 根據選擇設定參數
+    local dry_run="false"
+    local force="false"
+    local fetch_aws="false"
+    local backup="false"
+    local sync_all="false"
+    local env_names=()
+    
+    case "$selected_mode" in
+        "basic")
+            # 基本同步，無特殊參數
+            ;;
+        "full")
+            backup="true"
+            ;;
+        "aws")
+            backup="true"
+            fetch_aws="true"
+            ;;
+        "preview")
+            dry_run="true"
+            ;;
+        "force")
+            force="true"
+            backup="true"
+            ;;
+    esac
+    
+    # 設定環境列表
+    if [[ "$selected_env" == "all" ]]; then
+        sync_all="true"
+        # 自動發現所有環境
+        for dir in "$CONFIGS_DIR"/*; do
+            if [[ -d "$dir" ]]; then
+                local env_name=$(basename "$dir")
+                if [[ "$env_name" != "template" ]]; then
+                    env_names+=("$env_name")
+                fi
+            fi
+        done
+        
+        for file in "$CONFIGS_DIR"/*.env; do
+            if [[ -f "$file" ]]; then
+                local env_name=$(basename "$file" .env)
+                if [[ "$env_name" != "template" ]]; then
+                    # 避免重複
+                    if [[ ! " ${env_names[@]} " =~ " ${env_name} " ]]; then
+                        env_names+=("$env_name")
+                    fi
+                fi
+            fi
+        done
+    else
+        env_names=("$selected_env")
+    fi
+    
+    # 顯示操作摘要
+    echo ""
+    echo -e "${PURPLE}${BOLD}步驟 3/3: 確認操作${NC}"
+    show_operation_summary "${env_names[@]}"
+    
+    # 簡單確認
+    echo -e "${BOLD}確認執行同步操作？${NC}"
+    read -p "請輸入 [Y/n]: " confirm
+    
+    if [[ ! "$confirm" =~ ^[Yy]?$ ]]; then
+        echo -e "${BLUE}${STATUS_INFO} 操作已取消${NC}"
+        exit 0
+    fi
+    
+    # 執行同步
+    execute_sync_operation "$dry_run" "$force" "$fetch_aws" "$backup" "${env_names[@]}"
+}
+
+# 執行同步操作
+execute_sync_operation() {
+    local dry_run="$1"
+    local force="$2"
+    local fetch_aws="$3"
+    local backup="$4"
+    shift 4
+    local env_names=("$@")
+    
+    echo -e "${CYAN}${BOLD}╔═══════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}${BOLD}║                        開始執行同步                               ║${NC}"
+    echo -e "${CYAN}${BOLD}╚═══════════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    
+    local success_count=0
+    local total_count=${#env_names[@]}
+    local current_count=0
+    
+    for env_name in "${env_names[@]}"; do
+        current_count=$((current_count + 1))
+        
+        echo -e "${PURPLE}${BOLD}┌─ 處理環境 $current_count/$total_count: $env_name ─┐${NC}"
+        echo -e "${STATUS_SYNCING} ${BLUE}正在同步環境: $env_name${NC}"
+        
+        if sync_environment "$env_name" "$dry_run" "$force" "$fetch_aws" "$backup"; then
+            success_count=$((success_count + 1))
+            echo -e "${STATUS_SUCCESS} ${GREEN}環境 $env_name 同步完成${NC}"
+        else
+            echo -e "${STATUS_ERROR} ${RED}環境 $env_name 同步失敗${NC}"
+        fi
+        
+        echo -e "${PURPLE}${BOLD}└─────────────────────────────────────┘${NC}"
+        echo ""
+    done
+    
+    # 顯示最終結果
+    echo -e "${CYAN}${BOLD}╔═══════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}${BOLD}║                         同步結果                                  ║${NC}"
+    echo -e "${CYAN}${BOLD}╚═══════════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    
+    if [[ $success_count -eq $total_count ]]; then
+        echo -e "${STATUS_SUCCESS} ${GREEN}${BOLD}所有環境同步成功！${NC}"
+        echo -e "  成功: ${GREEN}$success_count${NC}/$total_count 個環境"
+    else
+        echo -e "${STATUS_WARNING} ${YELLOW}${BOLD}部分環境同步失敗${NC}"
+        echo -e "  成功: ${GREEN}$success_count${NC}/$total_count 個環境"
+        echo -e "  失敗: ${RED}$((total_count - success_count))${NC}/$total_count 個環境"
+    fi
+    
+    if [[ "$dry_run" == "true" ]]; then
+        echo ""
+        echo -e "${STATUS_INFO} ${BLUE}這是預覽模式，沒有實際修改文件${NC}"
+        echo -e "要應用更改，請選擇其他同步模式"
+    fi
+    
+    echo ""
+}
+
 # 顯示幫助信息
 show_help() {
     cat << EOF
@@ -51,6 +465,7 @@ show_help() {
 
 選項:
   -h, --help              顯示此幫助信息
+  -i, --interactive       啟動互動式界面 (推薦)
   -d, --dry-run          試跑模式，只顯示將要進行的更改
   -f, --force            強制覆蓋現有值
   --fetch-aws            從AWS獲取動態值（VPC、子網、端點ID等）
@@ -60,11 +475,20 @@ show_help() {
 參數:
   環境名稱               要同步的環境名稱（staging, production等）
 
+互動模式:
+  如果不提供任何參數，會自動進入互動式界面，提供：
+  • 環境選擇菜單
+  • 同步模式選擇
+  • 操作預覽和確認
+  • 可視化進度顯示
+
 示例:
-  $0 staging                    # 同步staging環境
-  $0 --fetch-aws production     # 同步production環境並從AWS獲取值
-  $0 --all --backup             # 同步所有環境並創建備份
-  $0 --dry-run staging          # 預覽staging環境的更改
+  $0                                  # 啟動互動式界面 (推薦)
+  $0 --interactive                    # 啟動互動式界面
+  $0 staging                          # 同步staging環境
+  $0 --fetch-aws production           # 同步production環境並從AWS獲取值
+  $0 --all --backup                   # 同步所有環境並創建備份
+  $0 --dry-run staging                # 預覽staging環境的更改
 
 EOF
 }
@@ -424,16 +848,16 @@ sync_environment() {
     local fetch_aws="$4"
     local backup="$5"
     
-    log_info "開始同步環境: $env_name"
+    echo -e "  ${STATUS_SYNCING} 分析環境配置..."
     
     local config_file
     config_file=$(get_env_config_path "$env_name")
     
     # 檢查配置文件狀態
     if [[ -f "$config_file" ]]; then
-        log_info "發現現有配置文件: $config_file"
+        echo -e "  ${STATUS_INFO} 發現現有配置: $(basename "$config_file")"
     else
-        log_warning "配置文件不存在，將從模板創建: $config_file"
+        echo -e "  ${STATUS_WARNING} 配置文件不存在，將新建: $(basename "$config_file")"
     fi
     
     # 確保配置文件目錄存在
@@ -441,10 +865,10 @@ sync_environment() {
     config_dir=$(dirname "$config_file")
     if [[ ! -d "$config_dir" ]]; then
         if [[ "$dry_run" == "true" ]]; then
-            log_info "[DRY-RUN] 將創建目錄: $config_dir"
+            echo -e "  ${STATUS_INFO} [預覽] 將創建目錄: $(basename "$config_dir")"
         else
             mkdir -p "$config_dir"
-            log_success "創建目錄: $config_dir"
+            echo -e "  ${STATUS_SUCCESS} 創建目錄: $(basename "$config_dir")"
         fi
     fi
     
@@ -453,9 +877,11 @@ sync_environment() {
         if [[ "$dry_run" == "false" ]]; then
             backup_config "$config_file"
         else
-            log_info "[DRY-RUN] 將備份配置文件"
+            echo -e "  ${STATUS_INFO} [預覽] 將備份現有配置"
         fi
     fi
+    
+    echo -e "  ${STATUS_SYNCING} 讀取模板和現有配置..."
     
     # 讀取現有配置
     local existing_vars_list=""
@@ -470,6 +896,7 @@ sync_environment() {
     # 從AWS獲取動態值
     local aws_values_list=""
     if [[ "$fetch_aws" == "true" ]]; then
+        echo -e "  ${STATUS_SYNCING} 檢測AWS配置..."
         local aws_profile="default"
         local aws_region="us-east-1"
         
@@ -486,13 +913,13 @@ sync_environment() {
             fi
         else
             # 配置文件不存在，智能檢測AWS Profile
-            log_info "配置文件不存在，正在智能檢測AWS Profile..."
+            echo -e "  ${STATUS_SYNCING} 智能檢測AWS Profile..."
             
             # 先獲取可用profiles用於顯示
             local available_profiles
             available_profiles=$(aws configure list-profiles 2>/dev/null || echo "")
             if [[ -n "$available_profiles" ]]; then
-                log_info "可用的AWS Profiles: $(echo "$available_profiles" | tr '\n' ' ')"
+                echo -e "  ${STATUS_INFO} 可用AWS Profiles: $(echo "$available_profiles" | tr '\n' ' ')"
             fi
             
             aws_profile=$(detect_aws_profile_for_environment "$env_name")
@@ -500,32 +927,35 @@ sync_environment() {
             
             # 檢查是否成功檢測到特定profile
             if [[ "$aws_profile" != "default" ]] && echo "$available_profiles" | grep -q "^$aws_profile$"; then
-                log_success "自動檢測到AWS Profile: $aws_profile"
+                echo -e "  ${STATUS_SUCCESS} 自動檢測到AWS Profile: $aws_profile"
             else
-                log_warning "未找到與環境 '$env_name' 匹配的AWS Profile，使用: $aws_profile"
+                echo -e "  ${STATUS_WARNING} 使用默認AWS Profile: $aws_profile"
             fi
         fi
         
-        log_info "最終使用AWS配置: Profile=$aws_profile, Region=$aws_region"
+        echo -e "  ${STATUS_INFO} 使用AWS配置: Profile=$aws_profile, Region=$aws_region"
         
         if [[ "$dry_run" == "false" ]]; then
-            log_info "開始執行AWS資源掃描..."
+            echo -e "  ${STATUS_SYNCING} 正在掃描AWS資源..."
             aws_values_list=$(fetch_aws_values "$env_name" "$aws_profile" "$aws_region" || true)
             if [[ -n "$aws_values_list" ]]; then
-                log_success "AWS掃描完成，獲取到 $(echo "$aws_values_list" | wc -l) 個值"
-                log_info "AWS獲取的值："
+                local aws_count=$(echo "$aws_values_list" | wc -l)
+                echo -e "  ${STATUS_SUCCESS} AWS掃描完成，獲取到 $aws_count 個值"
+                echo -e "  ${STATUS_INFO} AWS獲取的值："
                 while IFS= read -r line; do
                     if [[ -n "$line" ]]; then
-                        log_info "  - $line"
+                        echo -e "    ${GREEN}•${NC} $line"
                     fi
                 done <<< "$aws_values_list"
             else
-                log_warning "AWS掃描完成，但未獲取到任何值"
+                echo -e "  ${STATUS_WARNING} AWS掃描完成，但未獲取到任何值"
             fi
         else
-            log_info "[DRY-RUN] 將從AWS獲取動態值 (Profile: $aws_profile, Region: $aws_region)"
+            echo -e "  ${STATUS_INFO} [預覽] 將從AWS獲取動態值 (Profile: $aws_profile, Region: $aws_region)"
         fi
     fi
+    
+    echo -e "  ${STATUS_SYNCING} 生成新配置..."
     
     # 準備新配置內容
     local new_config=""
@@ -615,9 +1045,9 @@ sync_environment() {
         if [[ "$current_value" != "$final_value" ]]; then
             changes_made=$((changes_made + 1))
             if [[ "$dry_run" == "true" ]]; then
-                log_info "[DRY-RUN] $var_name: '$current_value' -> '$final_value'"
+                echo -e "    ${STATUS_INFO} [預覽] $var_name: '$current_value' → '$final_value'"
             else
-                log_info "更新 $var_name: '$current_value' -> '$final_value'"
+                echo -e "    ${STATUS_SUCCESS} 更新 $var_name: '$current_value' → '$final_value'"
             fi
         fi
         
@@ -633,7 +1063,7 @@ sync_environment() {
         while IFS='=' read -r key value; do
             if [[ "$key" =~ ^[A-Z_][A-Z0-9_]*$ ]] && ! echo "$template_vars" | grep -q "^$key|"; then
                 new_config+="$key=$value\n"
-                log_warning "保留現有變量: $key"
+                echo -e "    ${STATUS_WARNING} 保留現有變量: $key"
                 found_extra=true
             fi
         done <<< "$existing_vars_list"
@@ -645,17 +1075,18 @@ sync_environment() {
     
     # 寫入配置文件
     if [[ "$dry_run" == "false" ]]; then
+        echo -e "  ${STATUS_SYNCING} 寫入配置文件..."
         echo -e "$new_config" > "$config_file"
         if [[ ! -f "$config_file.backup."* ]]; then
-            log_success "已創建新環境配置: $config_file ($changes_made 個變數)"
+            echo -e "  ${STATUS_SUCCESS} 新環境配置已創建: $(basename "$config_file") ($changes_made 個變數)"
         else
-            log_success "已同步環境配置: $config_file ($changes_made 個變更)"
+            echo -e "  ${STATUS_SUCCESS} 環境配置已同步: $(basename "$config_file") ($changes_made 個變更)"
         fi
     else
         if [[ -f "$config_file" ]]; then
-            log_info "[DRY-RUN] 將更新現有配置文件，寫入 $changes_made 個變更到: $config_file"
+            echo -e "  ${STATUS_INFO} [預覽] 將更新配置文件，$changes_made 個變更"
         else
-            log_info "[DRY-RUN] 將創建新配置文件，寫入 $changes_made 個變數到: $config_file"
+            echo -e "  ${STATUS_INFO} [預覽] 將創建新配置文件，$changes_made 個變數"
         fi
     fi
     
@@ -664,6 +1095,12 @@ sync_environment() {
 
 # 主函數
 main() {
+    # 如果沒有提供任何參數，進入互動模式
+    if [[ $# -eq 0 ]]; then
+        interactive_main
+        return $?
+    fi
+    
     local dry_run="false"
     local force="false"
     local fetch_aws="false"
@@ -677,6 +1114,10 @@ main() {
             -h|--help)
                 show_help
                 exit 0
+                ;;
+            -i|--interactive)
+                interactive_main
+                return $?
                 ;;
             -d|--dry-run)
                 dry_run="true"
@@ -714,6 +1155,19 @@ main() {
     if [[ ! -f "$TEMPLATE_FILE" ]]; then
         log_error "模板文件不存在: $TEMPLATE_FILE"
         exit 1
+    fi
+    
+    # 設定CLI模式的sync_mode
+    if [[ "$dry_run" == "true" ]]; then
+        sync_mode="preview"
+    elif [[ "$force" == "true" ]]; then
+        sync_mode="force"
+    elif [[ "$fetch_aws" == "true" ]]; then
+        sync_mode="aws"
+    elif [[ "$backup" == "true" ]]; then
+        sync_mode="full"
+    else
+        sync_mode="basic"
     fi
     
     # 確定要同步的環境
@@ -770,25 +1224,7 @@ main() {
     fi
     
     # 同步每個環境
-    local success_count=0
-    local total_count=${#env_names[@]}
-    
-    for env_name in "${env_names[@]}"; do
-        if sync_environment "$env_name" "$dry_run" "$force" "$fetch_aws" "$backup"; then
-            success_count=$((success_count + 1))
-        else
-            log_error "同步環境失敗: $env_name"
-        fi
-        echo
-    done
-    
-    # 顯示最終結果
-    log_success "同步完成: $success_count/$total_count 個環境"
-    
-    if [[ "$dry_run" == "true" ]]; then
-        log_info "這是試跑模式，沒有實際修改文件"
-        log_info "要應用更改，請移除 --dry-run 參數"
-    fi
+    execute_sync_operation "$dry_run" "$force" "$fetch_aws" "$backup" "${env_names[@]}"
 }
 
 # 執行主函數
