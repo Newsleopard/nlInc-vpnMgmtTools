@@ -8,6 +8,9 @@
 # 日誌文件
 *.log
 
+# 測試結果文件
+*test_results*.txt
+
 # 證書目錄
 certificates/
 user-certificates/
