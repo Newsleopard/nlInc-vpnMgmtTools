@@ -222,83 +222,44 @@ create_vpn_endpoint() {
     # 3. 調用庫函式創建端點
     # 將 ARNs 作為參數傳遞
     # create_vpn_endpoint_lib 會處理網絡資訊提示、端點創建、關聯、授權、路由和保存配置
-    # 提示使用者選擇 VPC 和子網路，並獲取 VPN 設定資訊
-    # get_vpc_subnet_vpn_details_lib 現在返回 JSON
-    local vpn_details_json
-    if ! vpn_details_json=$(get_vpc_subnet_vpn_details_lib "$AWS_REGION"); then
-        handle_error "獲取 VPC/子網路詳細資訊失敗。"
-        return 1
-    fi
-
+    # 使用環境配置中的 VPC 和子網路設定，不再需要使用者互動選擇
     local vpc_id subnet_id vpn_cidr vpn_name security_groups
     
-    # 解析 VPC 詳細資訊 JSON
-    if command -v jq >/dev/null 2>&1; then
-        # 如果系統有 jq，使用 jq 解析
-        if ! vpc_id=$(echo "$vpn_details_json" | jq -r '.vpc_id' 2>/dev/null); then
-            handle_error "無法從詳細資訊中解析 VPC ID。"
-            return 1
-        fi
-        if ! subnet_id=$(echo "$vpn_details_json" | jq -r '.subnet_id' 2>/dev/null); then
-            handle_error "無法從詳細資訊中解析子網路 ID。"
-            return 1
-        fi
-        if ! vpn_cidr=$(echo "$vpn_details_json" | jq -r '.vpn_cidr' 2>/dev/null); then
-            handle_error "無法從詳細資訊中解析 VPN CIDR。"
-            return 1
-        fi
-        if ! vpn_name=$(echo "$vpn_details_json" | jq -r '.vpn_name' 2>/dev/null); then
-            handle_error "無法從詳細資訊中解析 VPN 名稱。"
-            return 1
-        fi
-        if ! security_groups=$(echo "$vpn_details_json" | jq -r '.security_groups' 2>/dev/null); then
-            handle_error "無法從詳細資訊中解析 Security Groups。"
-            return 1
-        fi
-        # 如果 security_groups 是 "null"，設為空字串
-        if [ "$security_groups" == "null" ]; then
-            security_groups=""
-        fi
-    else
-        # 備用解析方法：使用 sed 和 grep 從 JSON 中提取值
-        vpc_id=$(echo "$vpn_details_json" | grep -o '"vpc_id":"[^"]*"' | sed 's/"vpc_id":"\([^"]*\)"/\1/')
-        subnet_id=$(echo "$vpn_details_json" | grep -o '"subnet_id":"[^"]*"' | sed 's/"subnet_id":"\([^"]*\)"/\1/')
-        vpn_cidr=$(echo "$vpn_details_json" | grep -o '"vpn_cidr":"[^"]*"' | sed 's/"vpn_cidr":"\([^"]*\)"/\1/')
-        vpn_name=$(echo "$vpn_details_json" | grep -o '"vpn_name":"[^"]*"' | sed 's/"vpn_name":"\([^"]*\)"/\1/')
-        security_groups=$(echo "$vpn_details_json" | grep -o '"security_groups":"[^"]*"' | sed 's/"security_groups":"\([^"]*\)"/\1/')
-        
-        # 使用通用驗證函數進行錯誤檢查，並提供適當的驗證函數
-        if ! validate_json_parse_result "$vpc_id" "VPC ID" "validate_vpc_id"; then
-            return 1
-        fi
-        
-        if ! validate_json_parse_result "$subnet_id" "子網路 ID" "validate_subnet_id"; then
-            return 1
-        fi
-        
-        if ! validate_json_parse_result "$vpn_cidr" "VPN CIDR" "validate_cidr_block"; then
-            return 1
-        fi
-        
-        # VPN 名稱允許包含空白字符，所以不使用額外驗證函數
-        if ! validate_json_parse_result "$vpn_name" "VPN 名稱"; then
-            return 1
-        fi
-    fi
-
-    if [ -z "$vpc_id" ] || [ "$vpc_id" == "null" ] || \
-       [ -z "$subnet_id" ] || [ "$subnet_id" == "null" ] || \
-       [ -z "$vpn_cidr" ] || [ "$vpn_cidr" == "null" ] || \
-       [ -z "$vpn_name" ] || [ "$vpn_name" == "null" ]; then
-        handle_error "從 get_vpc_subnet_vpn_details_lib 獲取的詳細資訊無效。"
+    # 從環境配置獲取網路設定
+    vpc_id="$PRIMARY_VPC_ID"
+    subnet_id="$PRIMARY_SUBNET_ID"
+    vpn_cidr="$VPN_CIDR"
+    vpn_name="$VPN_NAME"
+    
+    # 驗證環境配置中的網路設定是否有效
+    echo -e "\\n${BLUE}驗證環境配置中的網路設定...${NC}"
+    
+    # 驗證 VPC 是否存在
+    if ! aws ec2 describe-vpcs --vpc-ids "$vpc_id" --region "$AWS_REGION" >/dev/null 2>&1; then
+        handle_error "環境配置中的 VPC ID '$vpc_id' 無效或不存在於區域 '$AWS_REGION'。請檢查 PRIMARY_VPC_ID 設定。"
         return 1
     fi
-
-    echo -e "${BLUE}選定的 VPC ID: $vpc_id${NC}"
-    echo -e "${BLUE}選定的子網路 ID: $subnet_id${NC}"
-    echo -e "${BLUE}VPN CIDR: $vpn_cidr${NC}"
-    echo -e "${BLUE}VPN 名稱: $vpn_name${NC}"
-    echo -e "${BLUE}Security Groups: ${security_groups:-無 (使用預設)}${NC}"
+    
+    # 驗證子網路是否存在且屬於指定的 VPC
+    local subnet_vpc_id
+    if ! subnet_vpc_id=$(aws ec2 describe-subnets --subnet-ids "$subnet_id" --region "$AWS_REGION" --query 'Subnets[0].VpcId' --output text 2>/dev/null); then
+        handle_error "環境配置中的子網路 ID '$subnet_id' 無效或不存在於區域 '$AWS_REGION'。請檢查 PRIMARY_SUBNET_ID 設定。"
+        return 1
+    fi
+    
+    if [ "$subnet_vpc_id" != "$vpc_id" ]; then
+        handle_error "子網路 '$subnet_id' 不屬於 VPC '$vpc_id'。請檢查環境配置中的 PRIMARY_VPC_ID 和 PRIMARY_SUBNET_ID 設定。"
+        return 1
+    fi
+    
+    echo -e "${GREEN}✓ VPC ID: $vpc_id${NC}"
+    echo -e "${GREEN}✓ 子網路 ID: $subnet_id${NC}"
+    echo -e "${GREEN}✓ VPN CIDR: $vpn_cidr${NC}"
+    echo -e "${GREEN}✓ VPN 名稱: $vpn_name${NC}"
+    
+    # 設定空的 security_groups (可選參數)
+    security_groups=""
+    echo -e "${GREEN}✓ Security Groups: ${security_groups:-無 (使用預設)}${NC}"
 
     # 更新配置文件
     update_config "$CONFIG_FILE" "VPC_ID" "$vpc_id"

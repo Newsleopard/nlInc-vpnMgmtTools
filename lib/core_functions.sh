@@ -693,7 +693,7 @@ validate_main_config() {
     fi
     
     # 檢查基本必要變數 - 只驗證實際使用的變數
-    local required_vars_main=("AWS_REGION")
+    local required_vars_main=("AWS_REGION" "PRIMARY_VPC_ID" "PRIMARY_SUBNET_ID")
     local missing_vars=()
     for var in "${required_vars_main[@]}"; do
         if [ -z "${!var}" ]; then
@@ -704,6 +704,19 @@ validate_main_config() {
     if [ ${#missing_vars[@]} -gt 0 ]; then
         echo -e "${RED}錯誤：主配置文件 (\"$config_file\") 中缺少以下必要變數: ${missing_vars[*]}${NC}" >&2 # Quoted $config_file
         log_message_core "錯誤：主配置文件 (\"$config_file\") 中缺少以下必要變數: ${missing_vars[*]}" # Quoted $config_file
+        return 1
+    fi
+    
+    # 驗證 VPC ID 和 Subnet ID 格式
+    if ! validate_vpc_id "$PRIMARY_VPC_ID"; then
+        echo -e "${RED}錯誤：PRIMARY_VPC_ID 格式無效: $PRIMARY_VPC_ID${NC}" >&2
+        log_message_core "錯誤：PRIMARY_VPC_ID 格式無效: $PRIMARY_VPC_ID"
+        return 1
+    fi
+    
+    if ! validate_subnet_id "$PRIMARY_SUBNET_ID"; then
+        echo -e "${RED}錯誤：PRIMARY_SUBNET_ID 格式無效: $PRIMARY_SUBNET_ID${NC}" >&2
+        log_message_core "錯誤：PRIMARY_SUBNET_ID 格式無效: $PRIMARY_SUBNET_ID"
         return 1
     fi
     

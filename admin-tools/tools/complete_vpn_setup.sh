@@ -43,9 +43,9 @@ source "$CONFIG_FILE"
 echo -e "${GREEN}✅ Configuration loaded from $CONFIG_FILE${NC}"
 
 # Verify required variables
-if [ -z "$VPN_ENDPOINT_ID" ] || [ -z "$VPC_ID" ] || [ -z "$SUBNET_ID" ] || [ -z "$VPN_CIDR" ] || [ -z "$AWS_REGION" ]; then
+if [ -z "$VPN_ENDPOINT_ID" ] || [ -z "$PRIMARY_VPC_ID" ] || [ -z "$PRIMARY_SUBNET_ID" ] || [ -z "$VPN_CIDR" ] || [ -z "$AWS_REGION" ]; then
     echo -e "${RED}❌ Missing required configuration variables${NC}"
-    echo "Required: VPN_ENDPOINT_ID, VPC_ID, SUBNET_ID, VPN_CIDR, AWS_REGION"
+    echo "Required: VPN_ENDPOINT_ID, PRIMARY_VPC_ID, PRIMARY_SUBNET_ID, VPN_CIDR, AWS_REGION"
     exit 1
 fi
 
@@ -79,14 +79,14 @@ if [ -n "$associations" ]; then
     target_associated=$(aws ec2 describe-client-vpn-target-networks \
         --client-vpn-endpoint-id "$VPN_ENDPOINT_ID" \
         --region "$AWS_REGION" \
-        --query "ClientVpnTargetNetworks[?TargetNetworkId=='$SUBNET_ID'].AssociationId" \
+        --query "ClientVpnTargetNetworks[?TargetNetworkId=='$PRIMARY_SUBNET_ID'].AssociationId" \
         --output text 2>/dev/null || echo "")
     
     if [ -n "$target_associated" ] && [ "$target_associated" != "None" ]; then
-        echo -e "${GREEN}✅ 目標子網 $SUBNET_ID 已經關聯${NC}"
+        echo -e "${GREEN}✅ 目標子網 $PRIMARY_SUBNET_ID 已經關聯${NC}"
         SUBNET_ALREADY_ASSOCIATED=true
     else
-        echo -e "${YELLOW}⚠️ 目標子網 $SUBNET_ID 尚未關聯${NC}"
+        echo -e "${YELLOW}⚠️ 目標子網 $PRIMARY_SUBNET_ID 尚未關聯${NC}"
         SUBNET_ALREADY_ASSOCIATED=false
     fi
 else
@@ -97,11 +97,11 @@ fi
 # Step 1: Associate subnet if not already done
 if [ "$SUBNET_ALREADY_ASSOCIATED" = "false" ]; then
     echo -e "\n${CYAN}=== 步驟 1: 關聯子網到 VPN 端點 ===${NC}"
-    echo -e "${BLUE}關聯子網 $SUBNET_ID 到端點 $VPN_ENDPOINT_ID...${NC}"
+    echo -e "${BLUE}關聯子網 $PRIMARY_SUBNET_ID 到端點 $VPN_ENDPOINT_ID...${NC}"
     
     association_result=$(aws ec2 associate-client-vpn-target-network \
         --client-vpn-endpoint-id "$VPN_ENDPOINT_ID" \
-        --subnet-id "$SUBNET_ID" \
+        --subnet-id "$PRIMARY_SUBNET_ID" \
         --region "$AWS_REGION" 2>&1)
     
     if [ $? -eq 0 ]; then
@@ -129,7 +129,7 @@ echo -e "\n${CYAN}=== 步驟 2: 添加授權規則 ===${NC}"
 
 # Get VPC CIDR
 vpc_cidr=$(aws ec2 describe-vpcs \
-    --vpc-ids "$VPC_ID" \
+    --vpc-ids "$PRIMARY_VPC_ID" \
     --region "$AWS_REGION" \
     --query 'Vpcs[0].CidrBlock' \
     --output text 2>/dev/null)
@@ -186,7 +186,7 @@ else
     route_result=$(aws ec2 create-client-vpn-route \
         --client-vpn-endpoint-id "$VPN_ENDPOINT_ID" \
         --destination-cidr-block "$vpc_cidr" \
-        --target-vpc-subnet-id "$SUBNET_ID" \
+        --target-vpc-subnet-id "$PRIMARY_SUBNET_ID" \
         --region "$AWS_REGION" 2>&1)
     
     if [ $? -eq 0 ]; then
@@ -217,7 +217,7 @@ if [[ "$add_default_route" =~ ^[Yy]$ ]]; then
         default_route_result=$(aws ec2 create-client-vpn-route \
             --client-vpn-endpoint-id "$VPN_ENDPOINT_ID" \
             --destination-cidr-block "0.0.0.0/0" \
-            --target-vpc-subnet-id "$SUBNET_ID" \
+            --target-vpc-subnet-id "$PRIMARY_SUBNET_ID" \
             --region "$AWS_REGION" 2>&1)
         
         if [ $? -eq 0 ]; then
@@ -259,8 +259,8 @@ echo -e "${BLUE}VPN 端點最終狀態: ${GREEN}$final_status${NC}"
 echo -e "\n${CYAN}=== 當前配置摘要 ===${NC}"
 echo -e "${GREEN}VPN 端點 ID: $VPN_ENDPOINT_ID${NC}"
 echo -e "${GREEN}狀態: $final_status${NC}"
-echo -e "${GREEN}VPC ID: $VPC_ID${NC}"
-echo -e "${GREEN}子網 ID: $SUBNET_ID${NC}"
+echo -e "${GREEN}VPC ID: $PRIMARY_VPC_ID${NC}"
+echo -e "${GREEN}子網 ID: $PRIMARY_SUBNET_ID${NC}"
 echo -e "${GREEN}VPN CIDR: $VPN_CIDR${NC}"
 echo -e "${GREEN}VPC CIDR: $vpc_cidr${NC}"
 
