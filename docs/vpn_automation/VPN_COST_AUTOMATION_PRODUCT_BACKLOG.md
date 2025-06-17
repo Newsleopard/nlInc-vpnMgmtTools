@@ -1,8 +1,81 @@
 # VPN Cost Automation - Product Backlog Implementation Guide
 
+## 📑 目錄
+
+- [Overview](#overview)
+- [📋 Epic Structure](#-epic-structure)
+  - [Epic 1: Core Infrastructure & Lambda Foundation](#epic-1-core-infrastructure--lambda-foundation)
+  - [Epic 2: Slack Integration & Command Router](#epic-2-slack-integration--command-router)
+  - [Epic 3: Automated Monitoring & Cost Optimization](#epic-3-automated-monitoring--cost-optimization)
+  - [Epic 4: Observability & Operational Excellence](#epic-4-observability--operational-excellence)
+  - [Epic 5: Security & Configuration Management](#epic-5-security--configuration-management)
+- [🎯 Epic 1: Core Infrastructure & Lambda Foundation](#-epic-1-core-infrastructure--lambda-foundation)
+  - [User Story 1.1: AWS CDK Infrastructure Stack](#user-story-11-aws-cdk-infrastructure-stack)
+  - [User Story 1.2: Parameter Store Schema Implementation](#user-story-12-parameter-store-schema-implementation)
+  - [User Story 1.3: VPN Control Lambda Function](#user-story-13-vpn-control-lambda-function)
+- [🎯 Epic 2: Slack Integration & Command Router](#-epic-2-slack-integration--command-router)
+  - [User Story 2.1: Slack Command Handler](#user-story-21-slack-command-handler)
+  - [User Story 2.2: Multi-Environment Command Routing](#user-story-22-multi-environment-command-routing)
+  - [User Story 2.3: Slack Response Formatting](#user-story-23-slack-response-formatting)
+- [🎯 Epic 3: Automated Monitoring & Cost Optimization](#-epic-3-automated-monitoring--cost-optimization)
+  - [User Story 3.1: Idle Detection System](#user-story-31-idle-detection-system)
+  - [User Story 3.2: Automatic Cost-Saving Actions](#user-story-32-automatic-cost-saving-actions)
+  - [User Story 3.3: Cost Tracking and Metrics](#user-story-33-cost-tracking-and-metrics)
+- [🎯 Epic 4: Observability & Operational Excellence](#-epic-4-observability--operational-excellence)
+  - [User Story 4.1: Comprehensive Logging](#user-story-41-comprehensive-logging)
+  - [User Story 4.2: Error Handling and Alerting](#user-story-42-error-handling-and-alerting)
+  - [User Story 4.3: Health Monitoring](#user-story-43-health-monitoring)
+- [🎯 Epic 5: Security & Configuration Management](#-epic-5-security--configuration-management)
+  - [User Story 5.1: Secure Parameter Management](#user-story-51-secure-parameter-management)
+  - [User Story 5.2: IAM Security Model](#user-story-52-iam-security-model)
+  - [User Story 5.3: Configuration Validation](#user-story-53-configuration-validation)
+- [📊 Implementation Priority Matrix](#-implementation-priority-matrix)
+  - [Phase 1: Foundation (Weeks 1-3)](#phase-1-foundation-weeks-1-3)
+  - [Phase 2: Enhanced Features (Weeks 4-6)](#phase-2-enhanced-features-weeks-4-6)
+  - [Phase 3: Operations & Polish (Weeks 7-9)](#phase-3-operations--polish-weeks-7-9)
+  - [Phase 4: Advanced Features (Weeks 10+)](#phase-4-advanced-features-weeks-10)
+- [🏗️ Technical Architecture Alignment](#%EF%B8%8F-technical-architecture-alignment)
+  - [Integration Points with Existing Toolkit](#integration-points-with-existing-toolkit)
+- [🚀 Getting Started Checklist](#-getting-started-checklist)
+  - [Prerequisites](#prerequisites)
+  - [Initial Setup](#initial-setup)
+  - [Validation](#validation)
+
+---
+
 ## Overview
 
 This document outlines the detailed product backlog for implementing the VPN Cost Automation system on top of the existing AWS Client VPN dual-environment management toolkit. The backlog is organized into epics, user stories, and tasks with clear acceptance criteria and implementation priorities.
+
+## 📚 Key Documentation References
+
+Before starting development, developers should familiarize themselves with these essential documents:
+
+### Core Implementation Documents
+- **[`VPN_COST_AUTOMATION_IMPLEMENTATION.md`](VPN_COST_AUTOMATION_IMPLEMENTATION.md)** - Main technical implementation guide with architecture, Lambda functions, and code examples
+- **[`VPN_COST_AUTOMATION_DEPLOYMENT.md`](VPN_COST_AUTOMATION_DEPLOYMENT.md)** - Deployment procedures, CDK setup, and environment configuration
+- **[`VPN_COST_AUTOMATION_SLACK_SETUP.md`](VPN_COST_AUTOMATION_SLACK_SETUP.md)** - Complete Slack app configuration and integration setup
+
+### Specialized Guides
+- **[`VPN_COST_AUTOMATION_ARCHITECTURE.md`](VPN_COST_AUTOMATION_ARCHITECTURE.md)** - Detailed system architecture and component interactions
+- **[`VPN_COST_AUTOMATION_SECURITY.md`](VPN_COST_AUTOMATION_SECURITY.md)** - Security best practices, IAM policies, and encryption requirements
+- **[`VPN_COST_AUTOMATION_COST_ANALYSIS.md`](VPN_COST_AUTOMATION_COST_ANALYSIS.md)** - Cost calculation methodologies and savings projections
+- **[`VPN_COST_AUTOMATION_OPERATIONS_RUNBOOK.md`](VPN_COST_AUTOMATION_OPERATIONS_RUNBOOK.md)** - Day-to-day operational procedures and troubleshooting
+
+### Project Foundation Documents
+- **[`README.md`](../../README.md)** - Project overview, dual-environment architecture, and existing toolkit capabilities
+- **[`CLAUDE.md`](../../CLAUDE.md)** - Development guidelines, existing admin tools, and library functions
+- **[`DUAL_AWS_PROFILE_SETUP_GUIDE.md`](../DUAL_AWS_PROFILE_SETUP_GUIDE.md)** - AWS profile configuration for multi-account setup
+
+### 🔍 How to Use Documentation References
+
+Each epic, user story, and task includes specific documentation references marked with 📚. These references point to:
+- **Section numbers** for precise location of relevant information
+- **Existing code patterns** to reuse from `admin-tools/` and `lib/` directories
+- **Configuration examples** and deployment procedures
+- **Security requirements** and best practices
+
+**Example**: `📚 Reference: VPN_COST_AUTOMATION_IMPLEMENTATION.md Section 4.2 "vpnManager.ts"` means you should review that specific section for implementation guidance.
 
 ---
 
@@ -11,17 +84,42 @@ This document outlines the detailed product backlog for implementing the VPN Cos
 ### Epic 1: Core Infrastructure & Lambda Foundation
 **Goal**: Establish the foundational serverless architecture for VPN cost automation
 
+📚 **Reference Documentation**: 
+- [VPN_COST_AUTOMATION_IMPLEMENTATION.md](VPN_COST_AUTOMATION_IMPLEMENTATION.md) - Section 2 "High-Level Architecture"
+- [VPN_COST_AUTOMATION_IMPLEMENTATION.md](VPN_COST_AUTOMATION_IMPLEMENTATION.md) - Section 5 "CDK Stacks (cdklib/)"
+- [VPN_COST_AUTOMATION_DEPLOYMENT.md](VPN_COST_AUTOMATION_DEPLOYMENT.md) - CDK deployment procedures
+
 ### Epic 2: Slack Integration & Command Router
 **Goal**: Enable Slack-based VPN control with multi-environment routing
+
+📚 **Reference Documentation**: 
+- [VPN_COST_AUTOMATION_IMPLEMENTATION.md](VPN_COST_AUTOMATION_IMPLEMENTATION.md) - Section 2.1 "Multi-Account Slack Integration Challenge"
+- [VPN_COST_AUTOMATION_IMPLEMENTATION.md](VPN_COST_AUTOMATION_IMPLEMENTATION.md) - Section 2.2 "Slack 指令路由流程"
+- [VPN_COST_AUTOMATION_SLACK_SETUP.md](VPN_COST_AUTOMATION_SLACK_SETUP.md) - Complete Slack app configuration
 
 ### Epic 3: Automated Monitoring & Cost Optimization
 **Goal**: Implement intelligent idle detection and automatic cost-saving measures
 
+📚 **Reference Documentation**: 
+- [VPN_COST_AUTOMATION_IMPLEMENTATION.md](VPN_COST_AUTOMATION_IMPLEMENTATION.md) - Section 2.5 "自動監控與成本節省流程"
+- [VPN_COST_AUTOMATION_IMPLEMENTATION.md](VPN_COST_AUTOMATION_IMPLEMENTATION.md) - Section 4.3 "vpn-monitor/index.ts (idle logic)"
+- [VPN_COST_AUTOMATION_COST_ANALYSIS.md](VPN_COST_AUTOMATION_COST_ANALYSIS.md) - Cost calculation methodologies
+
 ### Epic 4: Observability & Operational Excellence
 **Goal**: Provide comprehensive monitoring, alerting, and operational visibility
 
+📚 **Reference Documentation**: 
+- [VPN_COST_AUTOMATION_IMPLEMENTATION.md](VPN_COST_AUTOMATION_IMPLEMENTATION.md) - Section 7 "Error Handling & Observability"
+- [VPN_COST_AUTOMATION_IMPLEMENTATION.md](VPN_COST_AUTOMATION_IMPLEMENTATION.md) - Section 11 "Monitoring & Observability"
+- [VPN_COST_AUTOMATION_OPERATIONS_RUNBOOK.md](VPN_COST_AUTOMATION_OPERATIONS_RUNBOOK.md) - Operational procedures
+
 ### Epic 5: Security & Configuration Management
 **Goal**: Ensure secure parameter management and proper access controls
+
+📚 **Reference Documentation**: 
+- [VPN_COST_AUTOMATION_IMPLEMENTATION.md](VPN_COST_AUTOMATION_IMPLEMENTATION.md) - Section 6 "IAM Roles"
+- [VPN_COST_AUTOMATION_IMPLEMENTATION.md](VPN_COST_AUTOMATION_IMPLEMENTATION.md) - Section 3 "Parameter Store Schema"
+- [VPN_COST_AUTOMATION_SECURITY.md](VPN_COST_AUTOMATION_SECURITY.md) - Security best practices and configurations
 
 ---
 
@@ -36,6 +134,7 @@ This document outlines the detailed product backlog for implementing the VPN Cos
 - [ ] **1.1.1**: Create base CDK stack structure in `cdklib/`
   - **Priority**: High
   - **Estimate**: 5 story points
+  - **📚 Reference**: [VPN_COST_AUTOMATION_IMPLEMENTATION.md](VPN_COST_AUTOMATION_IMPLEMENTATION.md) Section 5.1 "Stack Overview", Section 2.6 "關鍵優勢"
   - **Acceptance Criteria**:
     - CDK stack supports environment-specific deployment (staging/production)
     - Stack includes Lambda functions, IAM roles, and API Gateway
@@ -45,6 +144,7 @@ This document outlines the detailed product backlog for implementing the VPN Cos
 - [ ] **1.1.2**: Implement Lambda shared layer
   - **Priority**: High
   - **Estimate**: 8 story points
+  - **📚 Reference**: [VPN_COST_AUTOMATION_IMPLEMENTATION.md](VPN_COST_AUTOMATION_IMPLEMENTATION.md) Section 4 "Lambda Package Layout", Section 2.4 "共享 Lambda Layer"
   - **Acceptance Criteria**:
     - Shared TypeScript utilities in `lambda/shared/`
     - Common interfaces defined in `types.ts`
@@ -55,6 +155,7 @@ This document outlines the detailed product backlog for implementing the VPN Cos
 - [ ] **1.1.3**: Configure deployment pipeline
   - **Priority**: Medium
   - **Estimate**: 3 story points
+  - **📚 Reference**: [VPN_COST_AUTOMATION_IMPLEMENTATION.md](VPN_COST_AUTOMATION_IMPLEMENTATION.md) Section 2.1 "部署流程與腳本", [VPN_COST_AUTOMATION_DEPLOYMENT.md](VPN_COST_AUTOMATION_DEPLOYMENT.md)
   - **Acceptance Criteria**:
     - `deploy.sh` script supports production/staging/both deployment modes
     - Automatic URL dependency resolution between environments
@@ -70,6 +171,7 @@ This document outlines the detailed product backlog for implementing the VPN Cos
 - [ ] **1.2.1**: Design Parameter Store schema
   - **Priority**: High
   - **Estimate**: 2 story points
+  - **📚 Reference**: [VPN_COST_AUTOMATION_IMPLEMENTATION.md](VPN_COST_AUTOMATION_IMPLEMENTATION.md) Section 3 "Parameter Store Schema", Section 4.1 "types.ts"
   - **Acceptance Criteria**:
     - `/vpn/endpoint/state` stores JSON with associated status and lastActivity
     - `/vpn/endpoint/conf` stores JSON with ENDPOINT_ID and SUBNET_ID
@@ -79,6 +181,7 @@ This document outlines the detailed product backlog for implementing the VPN Cos
 - [ ] **1.2.2**: Implement stateStore wrapper
   - **Priority**: High
   - **Estimate**: 5 story points
+  - **📚 Reference**: [VPN_COST_AUTOMATION_IMPLEMENTATION.md](VPN_COST_AUTOMATION_IMPLEMENTATION.md) Section 4.2.1 "stateStore.ts", review existing [`lib/core_functions.sh`](../../lib/core_functions.sh) patterns
   - **Acceptance Criteria**:
     - TypeScript interfaces match Parameter Store schema
     - Read/write functions for all parameter types
@@ -94,6 +197,7 @@ This document outlines the detailed product backlog for implementing the VPN Cos
 - [ ] **1.3.1**: Implement vpn-control Lambda core functions
   - **Priority**: High
   - **Estimate**: 8 story points
+  - **📚 Reference**: [VPN_COST_AUTOMATION_IMPLEMENTATION.md](VPN_COST_AUTOMATION_IMPLEMENTATION.md) Section 4.2 "vpnManager.ts", review [`admin-tools/vpn_subnet_manager.sh`](../../admin-tools/vpn_subnet_manager.sh) and [`lib/endpoint_management.sh`](../../lib/endpoint_management.sh)
   - **Acceptance Criteria**:
     - `open` command associates subnets to VPN endpoint
     - `close` command disassociates subnets from VPN endpoint
@@ -104,6 +208,7 @@ This document outlines the detailed product backlog for implementing the VPN Cos
 - [ ] **1.3.2**: Add VPN status monitoring
   - **Priority**: Medium
   - **Estimate**: 5 story points
+  - **📚 Reference**: [VPN_COST_AUTOMATION_IMPLEMENTATION.md](VPN_COST_AUTOMATION_IMPLEMENTATION.md) Section 4.2 "fetchStatus()", review [`admin-tools/aws_vpn_admin.sh`](../../admin-tools/aws_vpn_admin.sh) health check functions
   - **Acceptance Criteria**:
     - Query active connections from EC2 Client VPN API
     - Calculate idle time based on lastActivity
@@ -123,6 +228,7 @@ This document outlines the detailed product backlog for implementing the VPN Cos
 - [ ] **2.1.1**: Implement slack-handler Lambda
   - **Priority**: High
   - **Estimate**: 8 story points
+  - **📚 Reference**: [VPN_COST_AUTOMATION_IMPLEMENTATION.md](VPN_COST_AUTOMATION_IMPLEMENTATION.md) Section 2.1 "實作範例", [VPN_COST_AUTOMATION_SLACK_SETUP.md](VPN_COST_AUTOMATION_SLACK_SETUP.md)
   - **Acceptance Criteria**:
     - Verify Slack request signatures for security
     - Parse `/vpn` commands with environment parameters
@@ -133,6 +239,7 @@ This document outlines the detailed product backlog for implementing the VPN Cos
 - [ ] **2.1.2**: Add command validation and parsing
   - **Priority**: Medium
   - **Estimate**: 3 story points
+  - **📚 Reference**: [VPN_COST_AUTOMATION_IMPLEMENTATION.md](VPN_COST_AUTOMATION_IMPLEMENTATION.md) Section 2.2 "Slack 指令路由流程", review existing validation in [`lib/core_functions.sh`](../../lib/core_functions.sh)
   - **Acceptance Criteria**:
     - Support commands: `/vpn open [staging|production]`
     - Support commands: `/vpn close [staging|production]`
@@ -149,6 +256,7 @@ This document outlines the detailed product backlog for implementing the VPN Cos
 - [ ] **2.2.1**: Implement cross-account routing logic
   - **Priority**: High
   - **Estimate**: 8 story points
+  - **📚 Reference**: [VPN_COST_AUTOMATION_IMPLEMENTATION.md](VPN_COST_AUTOMATION_IMPLEMENTATION.md) Section 2.1 "單一指令路由器", Section 2.1 "Lambda 運行時實作"
   - **Acceptance Criteria**:
     - Staging slack-handler routes local commands to local vpn-control
     - Production commands are routed via HTTPS to production API Gateway
@@ -158,6 +266,7 @@ This document outlines the detailed product backlog for implementing the VPN Cos
 - [ ] **2.2.2**: Add production API Gateway integration
   - **Priority**: Medium
   - **Estimate**: 5 story points
+  - **📚 Reference**: [VPN_COST_AUTOMATION_IMPLEMENTATION.md](VPN_COST_AUTOMATION_IMPLEMENTATION.md) Section 2.1 "CDK 部署與跨帳號 URL 管理", [VPN_COST_AUTOMATION_SECURITY.md](VPN_COST_AUTOMATION_SECURITY.md) API Gateway security
   - **Acceptance Criteria**:
     - Production API Gateway accepts requests from staging account
     - API key authentication for cross-account calls
@@ -201,6 +310,7 @@ This document outlines the detailed product backlog for implementing the VPN Cos
 - [ ] **3.1.1**: Implement vpn-monitor Lambda
   - **Priority**: High
   - **Estimate**: 8 story points
+  - **📚 Reference**: [VPN_COST_AUTOMATION_IMPLEMENTATION.md](VPN_COST_AUTOMATION_IMPLEMENTATION.md) Section 4.3 "vpn-monitor/index.ts", review [`admin-tools/process_csr_batch.sh`](../../admin-tools/process_csr_batch.sh) monitoring patterns
   - **Acceptance Criteria**:
     - Scheduled execution every 5 minutes via CloudWatch Events
     - Check VPN association status and active connections
@@ -210,6 +320,7 @@ This document outlines the detailed product backlog for implementing the VPN Cos
 - [ ] **3.1.2**: Add intelligent idle detection logic
   - **Priority**: Medium
   - **Estimate**: 5 story points
+  - **📚 Reference**: [VPN_COST_AUTOMATION_IMPLEMENTATION.md](VPN_COST_AUTOMATION_IMPLEMENTATION.md) Section 2.5 "自動監控與成本節省流程", review existing monitoring patterns in [`admin-tools/process_csr_batch.sh`](../../admin-tools/process_csr_batch.sh)
   - **Acceptance Criteria**:
     - Only trigger on truly idle endpoints (no active connections)
     - Consider both association status and connection activity
@@ -225,6 +336,7 @@ This document outlines the detailed product backlog for implementing the VPN Cos
 - [ ] **3.2.1**: Implement auto-disassociation
   - **Priority**: High
   - **Estimate**: 5 story points
+  - **📚 Reference**: [VPN_COST_AUTOMATION_IMPLEMENTATION.md](VPN_COST_AUTOMATION_IMPLEMENTATION.md) Section 4.3 "vpn-monitor", reuse [`lib/endpoint_management.sh`](../../lib/endpoint_management.sh) disassociate functions
   - **Acceptance Criteria**:
     - Automatically disassociate subnets after idle threshold
     - Update Parameter Store state after disassociation
@@ -234,6 +346,7 @@ This document outlines the detailed product backlog for implementing the VPN Cos
 - [ ] **3.2.2**: Add safety mechanisms
   - **Priority**: Medium
   - **Estimate**: 3 story points
+  - **📚 Reference**: [VPN_COST_AUTOMATION_IMPLEMENTATION.md](VPN_COST_AUTOMATION_IMPLEMENTATION.md) Section 4.3 "vpn-monitor", review existing safety patterns in [`admin-tools/tools/`](../../admin-tools/tools/) directory
   - **Acceptance Criteria**:
     - Prevent disassociation during business hours (configurable)
     - Skip action if manual activity detected recently
@@ -249,6 +362,7 @@ This document outlines the detailed product backlog for implementing the VPN Cos
 - [ ] **3.3.1**: Implement CloudWatch metrics
   - **Priority**: Medium
   - **Estimate**: 3 story points
+  - **📚 Reference**: [VPN_COST_AUTOMATION_IMPLEMENTATION.md](VPN_COST_AUTOMATION_IMPLEMENTATION.md) Section 7 "自訂 CloudWatch 指標", [VPN_COST_AUTOMATION_COST_ANALYSIS.md](VPN_COST_AUTOMATION_COST_ANALYSIS.md)
   - **Acceptance Criteria**:
     - `IdleSubnetDisassociations` metric per environment
     - VPN uptime/downtime duration metrics
@@ -277,6 +391,7 @@ This document outlines the detailed product backlog for implementing the VPN Cos
 - [ ] **4.1.1**: Implement structured logging
   - **Priority**: Medium
   - **Estimate**: 3 story points
+  - **📚 Reference**: [VPN_COST_AUTOMATION_IMPLEMENTATION.md](VPN_COST_AUTOMATION_IMPLEMENTATION.md) Section 7 "Error Handling & Observability", review existing [`lib/core_functions.sh`](../../lib/core_functions.sh) logging patterns
   - **Acceptance Criteria**:
     - All Lambda functions use structured JSON logging
     - Include request IDs, environment, and operation context
@@ -301,6 +416,7 @@ This document outlines the detailed product backlog for implementing the VPN Cos
 - [ ] **4.2.1**: Implement comprehensive error handling
   - **Priority**: High
   - **Estimate**: 5 story points
+  - **📚 Reference**: [VPN_COST_AUTOMATION_IMPLEMENTATION.md](VPN_COST_AUTOMATION_IMPLEMENTATION.md) Section 7 "Error Handling", review existing error handling in [`admin-tools/tools/`](../../admin-tools/tools/)
   - **Acceptance Criteria**:
     - Try-catch blocks around all AWS API calls
     - Graceful degradation for non-critical failures
@@ -325,6 +441,7 @@ This document outlines the detailed product backlog for implementing the VPN Cos
 - [ ] **4.3.1**: Implement Lambda health checks
   - **Priority**: Medium
   - **Estimate**: 3 story points
+  - **📚 Reference**: [VPN_COST_AUTOMATION_OPERATIONS_RUNBOOK.md](VPN_COST_AUTOMATION_OPERATIONS_RUNBOOK.md) health monitoring procedures, review existing health checks in [`admin-tools/aws_vpn_admin.sh`](../../admin-tools/aws_vpn_admin.sh)
   - **Acceptance Criteria**:
     - Health check endpoints for all Lambda functions
     - Validate AWS service connectivity
@@ -353,6 +470,7 @@ This document outlines the detailed product backlog for implementing the VPN Cos
 - [ ] **5.1.1**: Implement secure parameter storage
   - **Priority**: High
   - **Estimate**: 3 story points
+  - **📚 Reference**: [VPN_COST_AUTOMATION_IMPLEMENTATION.md](VPN_COST_AUTOMATION_IMPLEMENTATION.md) Section 3 "Parameter Store Schema", [VPN_COST_AUTOMATION_SECURITY.md](VPN_COST_AUTOMATION_SECURITY.md) encryption practices
   - **Acceptance Criteria**:
     - Slack webhook URLs stored as SecureString
     - Slack signing secrets encrypted in Parameter Store
@@ -377,6 +495,7 @@ This document outlines the detailed product backlog for implementing the VPN Cos
 - [ ] **5.2.1**: Design minimal IAM policies
   - **Priority**: High
   - **Estimate**: 3 story points
+  - **📚 Reference**: [VPN_COST_AUTOMATION_IMPLEMENTATION.md](VPN_COST_AUTOMATION_IMPLEMENTATION.md) Section 6 "IAM Roles", [VPN_COST_AUTOMATION_SECURITY.md](VPN_COST_AUTOMATION_SECURITY.md) IAM best practices
   - **Acceptance Criteria**:
     - slack-handler: only SSM read access for secrets
     - vpn-control: EC2 ClientVPN and SSM parameter access
@@ -401,6 +520,7 @@ This document outlines the detailed product backlog for implementing the VPN Cos
 - [ ] **5.3.1**: Implement configuration validation
   - **Priority**: Medium
   - **Estimate**: 3 story points
+  - **📚 Reference**: [VPN_COST_AUTOMATION_IMPLEMENTATION.md](VPN_COST_AUTOMATION_IMPLEMENTATION.md) Section 9 "Configuration & Environment Variables", review [`admin-tools/tools/validate_config.sh`](../../admin-tools/tools/validate_config.sh)
   - **Acceptance Criteria**:
     - Validate VPN endpoint IDs exist and are accessible
     - Verify subnet IDs are in correct VPC
@@ -410,6 +530,7 @@ This document outlines the detailed product backlog for implementing the VPN Cos
 - [ ] **5.3.2**: Add deployment smoke tests
   - **Priority**: Low
   - **Estimate**: 3 story points
+  - **📚 Reference**: [VPN_COST_AUTOMATION_IMPLEMENTATION.md](VPN_COST_AUTOMATION_IMPLEMENTATION.md) Section 8 "Testing", review existing validation patterns in [`admin-tools/tools/validate_config.sh`](../../admin-tools/tools/validate_config.sh)
   - **Acceptance Criteria**:
     - End-to-end test after deployment
     - Validate Slack integration works
