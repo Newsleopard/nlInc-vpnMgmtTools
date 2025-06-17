@@ -1198,7 +1198,7 @@ disassociate_vpc_lib() {
     # 顯示當前關聯並讓用戶選擇
     if command -v jq >/dev/null 2>&1; then
         echo "$networks_json" | jq -r '.ClientVpnTargetNetworks[] | 
-            "關聯 ID: \(.AssociationId)\n  子網路 ID: \(.TargetNetworkId)\n  VPC ID: \(.VpcId)\n  狀態: \(.Status.Code)\n"'
+            "🔗 關聯 ID: \(.AssociationId) ← 用此 ID 解除關聯\n  子網路 ID: \(.TargetNetworkId)\n  VPC ID: \(.VpcId)\n  狀態: \(.Status.Code)\n"'
     else
         echo "$networks_json" | grep -E '"AssociationId"|"TargetNetworkId"|"VpcId"|"Code"'
     fi
@@ -1217,10 +1217,22 @@ disassociate_vpc_lib() {
         1)
             # 解除特定關聯
             local association_id
-            read -p "請輸入要解除的關聯 ID: " association_id
+            read -p "請輸入要解除的關聯 ID (格式: cvpn-assoc-xxxxxxxxx): " association_id
             
             if [ -z "$association_id" ]; then
                 echo -e "${RED}錯誤: 關聯 ID 不能為空${NC}"
+                return 1
+            fi
+            
+            # 驗證關聯 ID 格式
+            if [[ ! "$association_id" =~ ^cvpn-assoc-[0-9a-f]+$ ]]; then
+                if [[ "$association_id" =~ ^subnet- ]]; then
+                    echo -e "${RED}錯誤: 您輸入的是子網路 ID ($association_id)${NC}"
+                    echo -e "${YELLOW}請輸入關聯 ID (格式: cvpn-assoc-xxxxxxxxx)，而不是子網路 ID${NC}"
+                else
+                    echo -e "${RED}錯誤: 無效的關聯 ID 格式${NC}"
+                    echo -e "${YELLOW}關聯 ID 格式應為: cvpn-assoc-xxxxxxxxx${NC}"
+                fi
                 return 1
             fi
             
