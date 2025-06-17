@@ -1,0 +1,49 @@
+{
+  "slackOpenStaging": {
+    "httpMethod": "POST",
+    "path": "/slack",
+    "headers": {
+      "Content-Type": "application/x-www-form-urlencoded",
+      "X-Slack-Signature": "v0=test_signature",
+      "X-Slack-Request-Timestamp": "1687000000"
+    },
+    "body": "token=test_token&team_id=T123456&team_domain=test-team&channel_id=C123456&channel_name=general&user_id=U123456&user_name=testuser&command=/vpn&text=open+staging&response_url=https://hooks.slack.com/commands/123&trigger_id=trigger123",
+    "isBase64Encoded": false
+  },
+  
+  "slackCloseProduction": {
+    "httpMethod": "POST",
+    "path": "/slack",
+    "headers": {
+      "Content-Type": "application/x-www-form-urlencoded",
+      "X-Slack-Signature": "v0=test_signature",
+      "X-Slack-Request-Timestamp": "1687000000"
+    },
+    "body": "token=test_token&team_id=T123456&team_domain=test-team&channel_id=C123456&channel_name=general&user_id=U123456&user_name=testuser&command=/vpn&text=close+production&response_url=https://hooks.slack.com/commands/123&trigger_id=trigger123",
+    "isBase64Encoded": false
+  },
+
+  "slackCheckStaging": {
+    "httpMethod": "POST",
+    "path": "/slack",
+    "headers": {
+      "Content-Type": "application/x-www-form-urlencoded",
+      "X-Slack-Signature": "v0=test_signature",
+      "X-Slack-Request-Timestamp": "1687000000"
+    },
+    "body": "token=test_token&team_id=T123456&team_domain=test-team&channel_id=C123456&channel_name=general&user_id=U123456&user_name=testuser&command=/vpn&text=check+staging&response_url=https://hooks.slack.com/commands/123&trigger_id=trigger123",
+    "isBase64Encoded": false
+  },
+
+  "slackInvalidCommand": {
+    "httpMethod": "POST",
+    "path": "/slack",
+    "headers": {
+      "Content-Type": "application/x-www-form-urlencoded",
+      "X-Slack-Signature": "v0=test_signature",
+      "X-Slack-Request-Timestamp": "1687000000"
+    },
+    "body": "token=test_token&team_id=T123456&team_domain=test-team&channel_id=C123456&channel_name=general&user_id=U123456&user_name=testuser&command=/vpn&text=invalid+command&response_url=https://hooks.slack.com/commands/123&trigger_id=trigger123",
+    "isBase64Encoded": false
+  }
+}

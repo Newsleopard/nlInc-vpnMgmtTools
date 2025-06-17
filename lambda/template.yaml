@@ -1,0 +1,83 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: SAM template for local VPN Cost Automation testing
+
+Globals:
+  Function:
+    Timeout: 30
+    Runtime: nodejs18.x
+    Environment:
+      Variables:
+        ENVIRONMENT: test
+        IDLE_MINUTES: 60
+        VPN_STATE_PREFIX: /vpn/
+        SIGNING_SECRET_PARAM: /vpn/slack/signing_secret
+        WEBHOOK_PARAM: /vpn/slack/webhook
+
+Resources:
+  # Shared Lambda Layer
+  VpnSharedLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: vpn-shared-layer-local
+      Description: Shared utilities for VPN Cost Automation (local testing)
+      ContentUri: shared/
+      CompatibleRuntimes:
+        - nodejs18.x
+
+  # Slack Handler Lambda
+  SlackHandlerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: slack-handler-local
+      CodeUri: slack-handler/
+      Handler: index.handler
+      Layers:
+        - !Ref VpnSharedLayer
+      Events:
+        SlackApi:
+          Type: Api
+          Properties:
+            Path: /slack
+            Method: post
+
+  # VPN Control Lambda
+  VpnControlFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: vpn-control-local
+      CodeUri: vpn-control/
+      Handler: index.handler
+      Layers:
+        - !Ref VpnSharedLayer
+      Events:
+        VpnApi:
+          Type: Api
+          Properties:
+            Path: /vpn
+            Method: post
+
+  # VPN Monitor Lambda
+  VpnMonitorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: vpn-monitor-local
+      CodeUri: vpn-monitor/
+      Handler: index.handler
+      Layers:
+        - !Ref VpnSharedLayer
+      Events:
+        ScheduleEvent:
+          Type: Schedule
+          Properties:
+            Schedule: rate(5 minutes)
+            Enabled: false # Disabled for local testing
+
+Outputs:
+  SlackApi:
+    Description: "API Gateway endpoint URL for Slack function"
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/slack/"
+  
+  VpnApi:
+    Description: "API Gateway endpoint URL for VPN control function"
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/vpn/"

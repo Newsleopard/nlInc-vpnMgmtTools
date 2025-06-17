@@ -1,0 +1,14 @@
+{
+  "name": "slack-handler-lambda",
+  "version": "1.0.0",
+  "description": "Slack Handler Lambda function for VPN commands",
+  "main": "index.js",
+  "dependencies": {
+    "aws-sdk": "^2.1490.0"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.109",
+    "@types/node": "^18.14.6",
+    "typescript": "~4.9.5"
+  }
+}

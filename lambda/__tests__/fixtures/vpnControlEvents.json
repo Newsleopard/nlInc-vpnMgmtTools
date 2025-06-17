@@ -1,0 +1,72 @@
+{
+  "vpnOpenStaging": {
+    "httpMethod": "POST",
+    "path": "/vpn",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": "{\"action\":\"open\",\"environment\":\"staging\",\"user\":\"testuser\",\"requestId\":\"vpn-123-abc\"}",
+    "isBase64Encoded": false
+  },
+
+  "vpnCloseStaging": {
+    "httpMethod": "POST",
+    "path": "/vpn",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": "{\"action\":\"close\",\"environment\":\"staging\",\"user\":\"testuser\",\"requestId\":\"vpn-124-def\"}",
+    "isBase64Encoded": false
+  },
+
+  "vpnCheckStaging": {
+    "httpMethod": "POST",
+    "path": "/vpn",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": "{\"action\":\"check\",\"environment\":\"staging\",\"user\":\"testuser\",\"requestId\":\"vpn-125-ghi\"}",
+    "isBase64Encoded": false
+  },
+
+  "vpnCrossAccountRequest": {
+    "httpMethod": "POST",
+    "path": "/vpn",
+    "headers": {
+      "Content-Type": "application/json",
+      "X-API-Key": "test-api-key"
+    },
+    "body": "{\"command\":{\"action\":\"open\",\"environment\":\"production\",\"user\":\"testuser\",\"requestId\":\"vpn-126-jkl\"},\"requestId\":\"vpn-126-jkl\",\"sourceAccount\":\"staging\"}",
+    "isBase64Encoded": false
+  },
+
+  "vpnInvalidEnvironment": {
+    "httpMethod": "POST",
+    "path": "/vpn",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": "{\"action\":\"open\",\"environment\":\"production\",\"user\":\"testuser\",\"requestId\":\"vpn-127-mno\"}",
+    "isBase64Encoded": false
+  },
+
+  "vpnInvalidAction": {
+    "httpMethod": "POST",
+    "path": "/vpn",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": "{\"action\":\"invalid\",\"environment\":\"staging\",\"user\":\"testuser\",\"requestId\":\"vpn-128-pqr\"}",
+    "isBase64Encoded": false
+  },
+
+  "vpnMalformedJson": {
+    "httpMethod": "POST",
+    "path": "/vpn",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": "{invalid json",
+    "isBase64Encoded": false
+  }
+}

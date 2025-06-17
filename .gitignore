@@ -55,3 +55,63 @@ pki/
 certs/
 .claude/settings.local.json
 configs/staging/*.env.backup.*
+
+# Lambda/Node.js 專案忽略規則
+lambda/node_modules/
+lambda/*/node_modules/
+lambda/dist/
+lambda/*/dist/
+lambda/build/
+lambda/*/build/
+lambda/coverage/
+lambda/*/coverage/
+lambda/.nyc_output/
+lambda/*/.nyc_output/
+
+# TypeScript 編譯輸出
+lambda/**/*.js
+lambda/**/*.js.map
+lambda/**/*.d.ts
+!lambda/jest.config.js
+!lambda/jest.setup.js
+
+# Lambda 部署和打包文件
+lambda/*.zip
+lambda/*/*.zip
+lambda/template-generated.yaml
+lambda/samconfig.toml
+lambda/.aws-sam/
+
+# 測試報告和快照
+lambda/test-results.xml
+lambda/*/test-results.xml
+lambda/jest-report.html
+lambda/*/jest-report.html
+lambda/**/__tests__/**/*.snap
+
+# 環境變數和機密配置
+lambda/.env
+lambda/*/.env
+lambda/.env.local
+lambda/*/.env.local
+lambda/.env.*.local
+lambda/*/.env.*.local
+
+
+
+# AWS 相關
+lambda/.aws/
+lambda/*/.aws/
+lambda/aws-exports.js
+lambda/*/aws-exports.js
+
+# CDK 輸出
+lambda/cdk.out/
+lambda/*/cdk.out/
+
+# 日誌和除錯文件
+lambda/**/*.log
+lambda/**/npm-debug.log*
+lambda/**/yarn-debug.log*
+lambda/**/yarn-error.log*
+lambda/**/lerna-debug.log*

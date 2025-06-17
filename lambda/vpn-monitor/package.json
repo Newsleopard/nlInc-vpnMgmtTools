@@ -1,0 +1,14 @@
+{
+  "name": "vpn-monitor-lambda",
+  "version": "1.0.0",
+  "description": "VPN Monitor Lambda function for idle detection and cost optimization",
+  "main": "index.js",
+  "dependencies": {
+    "aws-sdk": "^2.1490.0"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.109",
+    "@types/node": "^18.14.6",
+    "typescript": "~4.9.5"
+  }
+}
