@@ -421,7 +421,7 @@ select_aws_profile_for_environment() {
 # Load profile from config file
 load_profile_from_config() {
     local environment="$1"
-    local config_file="configs/$environment/$environment.env"
+    local config_file="$PROJECT_ROOT/configs/$environment/$environment.env"
     
     if [ ! -f "$config_file" ]; then
         return 1
@@ -453,10 +453,10 @@ load_profile_from_config() {
 save_profile_to_config() {
     local environment="$1"
     local profile="$2"
-    local config_file="configs/$environment/$environment.env"
+    local config_file="$PROJECT_ROOT/configs/$environment/$environment.env"
     
     # Ensure config directory exists
-    mkdir -p "configs/$environment"
+    mkdir -p "$PROJECT_ROOT/configs/$environment"
     
     # Update or add AWS_PROFILE
     if [ -f "$config_file" ]; then
