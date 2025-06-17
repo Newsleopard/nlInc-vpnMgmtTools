@@ -260,8 +260,8 @@ view_available_subnets() {
 perform_health_check() {
     echo -e "\n${CYAN}=== 系統健康檢查 ===${NC}"
     
-    # 調用核心函式的健康檢查
-    system_health_check_core "$CURRENT_ENVIRONMENT"
+    # 調用環境健康檢查
+    env_health_check "$CURRENT_ENVIRONMENT" "true"
     local result=$?
     
     if [ "$result" -eq 0 ]; then
