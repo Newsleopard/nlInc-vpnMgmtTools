@@ -5,6 +5,10 @@
 *.crt
 *.pem
 
+# 配置文件 - 包含敏感信息
+configs/**/*.env
+configs/**/*.conf
+
 # 日誌文件
 *.log
 
@@ -15,8 +19,6 @@
 certificates/
 user-certificates/
 team-configs/
-configs/production/
-configs/staging/
 vpn-config/
 offboarding-logs/
 revocation-logs/
