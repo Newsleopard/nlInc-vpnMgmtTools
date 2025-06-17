@@ -543,23 +543,23 @@ Each epic, user story, and task includes specific documentation references marke
 
 ### Phase 1: Foundation (Weeks 1-3)
 **Must Have - Core Functionality**
-- Epic 1: Core Infrastructure & Lambda Foundation
-- Epic 2.1: Basic Slack Integration
-- Epic 3.1: Basic Idle Detection
+- [Epic 1: Core Infrastructure & Lambda Foundation](#epic-1-core-infrastructure--lambda-foundation)
+- [Epic 2.1: Basic Slack Integration](#user-story-21-slack-command-handler)
+- [Epic 3.1: Basic Idle Detection](#user-story-31-idle-detection-system)
 
 ### Phase 2: Enhanced Features (Weeks 4-6)
 **Should Have - Enhanced Capabilities**
-- Epic 2.2: Multi-Environment Routing
-- Epic 3.2: Automatic Cost-Saving Actions
-- Epic 4.1: Comprehensive Logging
-- Epic 5.1: Secure Parameter Management
+- [Epic 2.2: Multi-Environment Routing](#user-story-22-multi-environment-command-routing)
+- [Epic 3.2: Automatic Cost-Saving Actions](#user-story-32-automatic-cost-saving-actions)
+- [Epic 4.1: Comprehensive Logging](#user-story-41-comprehensive-logging)
+- [Epic 5.1: Secure Parameter Management](#user-story-51-secure-parameter-management)
 
 ### Phase 3: Operations & Polish (Weeks 7-9)
 **Could Have - Operational Excellence**
-- Epic 4.2: Error Handling and Alerting
-- Epic 4.3: Health Monitoring
-- Epic 5.2: IAM Security Model
-- Epic 3.3: Cost Tracking
+- [Epic 4.2: Error Handling and Alerting](#user-story-42-error-handling-and-alerting)
+- [Epic 4.3: Health Monitoring](#user-story-43-health-monitoring)
+- [Epic 5.2: IAM Security Model](#user-story-52-iam-security-model)
+- [Epic 3.3: Cost Tracking](#user-story-33-cost-tracking-and-metrics)
 
 ### Phase 4: Advanced Features (Weeks 10+)
 **Nice to Have - Advanced Features**
