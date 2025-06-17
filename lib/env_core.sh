@@ -219,7 +219,7 @@ map_environment_to_profiles() {
 # Get environment-specific profile preference
 get_env_profile() {
     local environment="$1"
-    local config_file="configs/$environment/$environment.env"
+    local config_file="$PROJECT_ROOT/configs/$environment/$environment.env"
     
     # Try to load from config file first
     if [ -f "$config_file" ]; then
@@ -283,11 +283,12 @@ validate_profile_matches_environment() {
     fi
     
     # Load expected account ID from config if available
-    local config_file="configs/$environment/$environment.env"
+    local config_file="$PROJECT_ROOT/configs/$environment/$environment.env"
     local expected_account_var=""
     case "$environment" in
         staging) expected_account_var="STAGING_ACCOUNT_ID" ;;
         production) expected_account_var="PRODUCTION_ACCOUNT_ID" ;;
+        prod) expected_account_var="PROD_ACCOUNT_ID" ;;
         *) expected_account_var="" ;;
     esac
     local expected_account=""

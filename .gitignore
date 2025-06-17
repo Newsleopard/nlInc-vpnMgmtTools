@@ -54,3 +54,4 @@ pki/
 .current_env
 certs/
 .claude/settings.local.json
+configs/staging/*.env.backup.*
