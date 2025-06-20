@@ -291,7 +291,7 @@ describe('vpnManager', () => {
         promise: () => Promise.reject(new Error('Update failed'))
       });
 
-      await expect(vpnManager.updateLastActivity()).rejects.toThrow('Last activity update failed: Update failed');
+      await expect(vpnManager.updateLastActivity()).rejects.toThrow('Last activity update failed: Unable to update VPN state: Update failed');
     });
   });
 

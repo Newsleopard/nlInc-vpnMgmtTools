@@ -127,6 +127,43 @@ export async function readSlackSigningSecret(): Promise<string> {
   }
 }
 
+// Generic function to read any parameter (returns null if not found)
+export async function readParameter(paramName: string, encrypted: boolean = false): Promise<string | null> {
+  try {
+    const result = await ssm.getParameter({ 
+      Name: paramName, 
+      WithDecryption: encrypted 
+    }).promise();
+    
+    return result.Parameter?.Value || null;
+  } catch (error: any) {
+    // Return null for parameter not found, rather than throwing
+    if (error.code === 'ParameterNotFound') {
+      return null;
+    }
+    console.error(`Failed to read parameter ${paramName}:`, error);
+    return null;
+  }
+}
+
+// Generic function to write any parameter
+export async function writeParameter(paramName: string, value: string, encrypted: boolean = false): Promise<void> {
+  try {
+    await ssm.putParameter({
+      Name: paramName,
+      Value: value,
+      Type: encrypted ? 'SecureString' : 'String',
+      Overwrite: true
+    }).promise();
+    
+    console.log(`Successfully wrote parameter ${paramName}`);
+  } catch (error) {
+    console.error(`Failed to write parameter ${paramName}:`, error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    throw new Error(`Unable to write parameter: ${errorMessage}`);
+  }
+}
+
 // Check if all required parameters exist
 export async function validateParameterStore(): Promise<boolean> {
   const requiredParams = [

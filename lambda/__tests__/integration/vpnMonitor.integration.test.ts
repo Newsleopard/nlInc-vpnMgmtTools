@@ -480,4 +480,273 @@ describe('VPN Monitor Integration Tests', () => {
       );
     });
   });
+
+  describe('Enhanced Idle Detection Features', () => {
+    beforeEach(() => {
+      // Set up environment for enhanced features
+      process.env.COOLDOWN_MINUTES = '30';
+      process.env.BUSINESS_HOURS_PROTECTION = 'true';
+      process.env.BUSINESS_HOURS_TIMEZONE = 'UTC';
+    });
+
+    it('should skip auto-disassociation during cooldown period', async () => {
+      const event = scheduleEvent as ScheduledEvent;
+      const recentCooldown = new Date(Date.now() - 15 * 60 * 1000).toISOString(); // 15 minutes ago
+      const oldActivity = new Date(Date.now() - 90 * 60 * 1000).toISOString(); // 90 minutes ago
+
+      const mockSSMethods = require('../../__mocks__/aws-sdk').mockSSMethods;
+      
+      mockSSMethods.getParameter.mockImplementation((params: any) => {
+        if (params.Name === '/vpn/endpoint/state') {
+          return {
+            promise: () => Promise.resolve({
+              Parameter: {
+                Value: JSON.stringify({
+                  associated: true,
+                  lastActivity: oldActivity
+                })
+              }
+            })
+          };
+        } else if (params.Name === '/vpn/automation/cooldown/staging') {
+          return {
+            promise: () => Promise.resolve({
+              Parameter: { Value: recentCooldown }
+            })
+          };
+        }
+        return {
+          promise: () => Promise.resolve({
+            Parameter: { Value: JSON.stringify({ ENDPOINT_ID: 'test', SUBNET_ID: 'test' }) }
+          })
+        };
+      });
+
+      setMockResponse('EC2', 'describeClientVpnTargetNetworks', {
+        ClientVpnTargetNetworks: [{
+          AssociationId: 'cvpn-assoc-test123',
+          TargetNetworkId: 'subnet-test123',
+          Status: { Code: 'associated' }
+        }]
+      });
+      
+      setMockResponse('EC2', 'describeClientVpnConnections', {
+        Connections: []
+      });
+
+      await handler(event, mockContext);
+
+      // Should publish cooldown skip metric
+      const mockCloudWatchMethods = require('../../__mocks__/aws-sdk').mockCloudWatchMethods;
+      expect(mockCloudWatchMethods.putMetricData).toHaveBeenCalledWith(
+        expect.objectContaining({
+          MetricData: expect.arrayContaining([
+            expect.objectContaining({
+              MetricName: 'CooldownSkips',
+              Value: 1
+            })
+          ])
+        })
+      );
+    });
+
+    it('should skip auto-disassociation when recent manual activity detected', async () => {
+      const event = scheduleEvent as ScheduledEvent;
+      const recentManualActivity = new Date(Date.now() - 10 * 60 * 1000).toISOString(); // 10 minutes ago
+      const oldActivity = new Date(Date.now() - 90 * 60 * 1000).toISOString(); // 90 minutes ago
+
+      const mockSSMethods = require('../../__mocks__/aws-sdk').mockSSMethods;
+      
+      mockSSMethods.getParameter.mockImplementation((params: any) => {
+        if (params.Name === '/vpn/endpoint/state') {
+          return {
+            promise: () => Promise.resolve({
+              Parameter: {
+                Value: JSON.stringify({
+                  associated: true,
+                  lastActivity: oldActivity
+                })
+              }
+            })
+          };
+        } else if (params.Name === '/vpn/automation/manual_activity/staging') {
+          return {
+            promise: () => Promise.resolve({
+              Parameter: { Value: recentManualActivity }
+            })
+          };
+        } else if (params.Name === '/vpn/automation/cooldown/staging') {
+          return {
+            promise: () => Promise.reject({ code: 'ParameterNotFound' })
+          };
+        }
+        return {
+          promise: () => Promise.resolve({
+            Parameter: { Value: JSON.stringify({ ENDPOINT_ID: 'test', SUBNET_ID: 'test' }) }
+          })
+        };
+      });
+
+      setMockResponse('EC2', 'describeClientVpnTargetNetworks', {
+        ClientVpnTargetNetworks: [{
+          AssociationId: 'cvpn-assoc-test123',
+          TargetNetworkId: 'subnet-test123',
+          Status: { Code: 'associated' }
+        }]
+      });
+      
+      setMockResponse('EC2', 'describeClientVpnConnections', {
+        Connections: []
+      });
+
+      await handler(event, mockContext);
+
+      // Should publish manual activity skip metric
+      const mockCloudWatchMethods = require('../../__mocks__/aws-sdk').mockCloudWatchMethods;
+      expect(mockCloudWatchMethods.putMetricData).toHaveBeenCalledWith(
+        expect.objectContaining({
+          MetricData: expect.arrayContaining([
+            expect.objectContaining({
+              MetricName: 'ManualActivitySkips',
+              Value: 1
+            })
+          ])
+        })
+      );
+    });
+
+    it('should record cooldown timestamp after successful auto-disassociation', async () => {
+      const event = scheduleEvent as ScheduledEvent;
+      const oldActivity = new Date(Date.now() - 90 * 60 * 1000).toISOString(); // 90 minutes ago
+
+      const mockSSMethods = require('../../__mocks__/aws-sdk').mockSSMethods;
+      
+      mockSSMethods.getParameter.mockImplementation((params: any) => {
+        if (params.Name === '/vpn/endpoint/state') {
+          return {
+            promise: () => Promise.resolve({
+              Parameter: {
+                Value: JSON.stringify({
+                  associated: true,
+                  lastActivity: oldActivity
+                })
+              }
+            })
+          };
+        } else if (params.Name.includes('/vpn/automation/')) {
+          return {
+            promise: () => Promise.reject({ code: 'ParameterNotFound' })
+          };
+        }
+        return {
+          promise: () => Promise.resolve({
+            Parameter: { Value: JSON.stringify({ ENDPOINT_ID: 'test', SUBNET_ID: 'test' }) }
+          })
+        };
+      });
+
+      setMockResponse('EC2', 'describeClientVpnTargetNetworks', {
+        ClientVpnTargetNetworks: [{
+          AssociationId: 'cvpn-assoc-test123',
+          TargetNetworkId: 'subnet-test123',
+          Status: { Code: 'associated' }
+        }]
+      });
+      
+      setMockResponse('EC2', 'describeClientVpnConnections', {
+        Connections: []
+      });
+
+      // Mock current time outside business hours (e.g., 22:00 UTC = 10 PM)
+      const originalDate = Date;
+      const mockDate = new Date('2025-06-20T22:00:00.000Z');
+      global.Date = jest.fn(() => mockDate) as any;
+      global.Date.now = jest.fn(() => mockDate.getTime());
+
+      global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 200 });
+
+      await handler(event, mockContext);
+
+      // Should record cooldown timestamp
+      expect(mockSSMethods.putParameter).toHaveBeenCalledWith(
+        expect.objectContaining({
+          Name: '/vpn/automation/cooldown/staging',
+          Value: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.\d{3}Z$/)
+        })
+      );
+
+      // Restore original Date
+      global.Date = originalDate;
+    });
+
+    it('should include cost savings in Slack notification', async () => {
+      const event = scheduleEvent as ScheduledEvent;
+      const oldActivity = new Date(Date.now() - 90 * 60 * 1000).toISOString(); // 90 minutes ago
+
+      const mockSSMethods = require('../../__mocks__/aws-sdk').mockSSMethods;
+      
+      mockSSMethods.getParameter.mockImplementation((params: any) => {
+        if (params.Name === '/vpn/endpoint/state') {
+          return {
+            promise: () => Promise.resolve({
+              Parameter: {
+                Value: JSON.stringify({
+                  associated: true,
+                  lastActivity: oldActivity
+                })
+              }
+            })
+          };
+        } else if (params.Name.includes('/vpn/automation/')) {
+          return {
+            promise: () => Promise.reject({ code: 'ParameterNotFound' })
+          };
+        } else if (params.Name === '/vpn/slack/webhook') {
+          return {
+            promise: () => Promise.resolve({
+              Parameter: { Value: 'https://hooks.slack.com/test' }
+            })
+          };
+        }
+        return {
+          promise: () => Promise.resolve({
+            Parameter: { Value: JSON.stringify({ ENDPOINT_ID: 'test', SUBNET_ID: 'test' }) }
+          })
+        };
+      });
+
+      setMockResponse('EC2', 'describeClientVpnTargetNetworks', {
+        ClientVpnTargetNetworks: [{
+          AssociationId: 'cvpn-assoc-test123',
+          TargetNetworkId: 'subnet-test123',
+          Status: { Code: 'associated' }
+        }]
+      });
+      
+      setMockResponse('EC2', 'describeClientVpnConnections', {
+        Connections: []
+      });
+
+      // Mock current time outside business hours
+      const originalDate = Date;
+      const mockDate = new Date('2025-06-20T22:00:00.000Z');
+      global.Date = jest.fn(() => mockDate) as any;
+      global.Date.now = jest.fn(() => mockDate.getTime());
+
+      global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 200 });
+
+      await handler(event, mockContext);
+
+      // Should include cost savings in notification
+      expect(global.fetch).toHaveBeenCalledWith(
+        'https://hooks.slack.com/test',
+        expect.objectContaining({
+          body: expect.stringContaining('~$0.10/hour saved')
+        })
+      );
+
+      // Restore original Date
+      global.Date = originalDate;
+    });
+  });
 });

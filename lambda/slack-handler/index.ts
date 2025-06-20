@@ -209,48 +209,86 @@ async function invokeLocalVpnControl(command: VpnCommandRequest): Promise<VpnCom
   }
 }
 
-// Invoke production API Gateway via HTTPS for cross-account calls
+// Invoke production API Gateway via HTTPS for cross-account calls with retry logic
 async function invokeProductionViaAPIGateway(command: VpnCommandRequest): Promise<VpnCommandResponse> {
-  try {
-    const productionAPIEndpoint = process.env.PRODUCTION_API_ENDPOINT;
-    const apiKey = process.env.PRODUCTION_API_KEY || '';
-    
-    if (!productionAPIEndpoint) {
-      throw new Error('Production API endpoint not configured');
+  const maxRetries = 3;
+  const retryDelay = 1000; // 1 second
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const productionAPIEndpoint = process.env.PRODUCTION_API_ENDPOINT;
+      const apiKey = process.env.PRODUCTION_API_KEY || '';
+      
+      if (!productionAPIEndpoint) {
+        throw new Error('Production API endpoint not configured');
+      }
+
+      console.log(`Calling production API Gateway (attempt ${attempt}/${maxRetries}):`, productionAPIEndpoint);
+      
+      const requestBody: CrossAccountRequest = {
+        command: command,
+        requestId: command.requestId,
+        sourceAccount: 'staging'
+      };
+
+      // Add timeout to fetch request
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+      
+      try {
+        const response = await fetch(productionAPIEndpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-API-Key': apiKey,
+            'User-Agent': 'VPN-Automation-Slack-Handler/1.0'
+          },
+          body: JSON.stringify(requestBody),
+          signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`Production API error: ${response.status} ${response.statusText} - ${errorText}`);
+        }
+
+        const result = await response.json();
+        console.log('Production API response:', result);
+        
+        return result;
+        
+      } catch (fetchError) {
+        clearTimeout(timeoutId);
+        if (fetchError.name === 'AbortError') {
+          throw new Error('Request timeout - production API did not respond within 30 seconds');
+        }
+        throw fetchError;
+      }
+      
+    } catch (error) {
+      console.error(`Attempt ${attempt} failed:`, error);
+      
+      // If this is the last attempt or a configuration error, don't retry
+      if (attempt === maxRetries || error.message.includes('not configured')) {
+        return {
+          success: false,
+          error: `Cross-account VPN operation failed after ${attempt} attempts: ${error.message}`
+        };
+      }
+      
+      // Wait before retrying
+      if (attempt < maxRetries) {
+        console.log(`Retrying in ${retryDelay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, retryDelay));
+      }
     }
-
-    console.log('Calling production API Gateway:', productionAPIEndpoint);
-    
-    const requestBody: CrossAccountRequest = {
-      command: command,
-      requestId: command.requestId,
-      sourceAccount: 'staging'
-    };
-
-    const response = await fetch(productionAPIEndpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-API-Key': apiKey
-      },
-      body: JSON.stringify(requestBody)
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Production API error: ${response.status} ${response.statusText} - ${errorText}`);
-    }
-
-    const result = await response.json();
-    console.log('Production API response:', result);
-    
-    return result;
-    
-  } catch (error) {
-    console.error('Failed to call production API Gateway:', error);
-    return {
-      success: false,
-      error: `Cross-account VPN operation failed: ${error.message}`
-    };
   }
+  
+  // This should never be reached, but just in case
+  return {
+    success: false,
+    error: 'Cross-account VPN operation failed: Maximum retries exceeded'
+  };
 }

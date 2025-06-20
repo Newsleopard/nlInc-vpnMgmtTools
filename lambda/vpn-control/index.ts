@@ -128,6 +128,7 @@ export const handler = async (
         case 'open':
           await vpnManager.associateSubnets();
           await updateLastActivity();
+          await recordManualActivity(); // Track manual operation for idle detection
           const openStatus = await vpnManager.fetchStatus();
           await publishMetric('VpnOpenOperations', 1);
           
@@ -147,6 +148,7 @@ export const handler = async (
         case 'close':
           await vpnManager.disassociateSubnets();
           await updateLastActivity();
+          await recordManualActivity(); // Track manual operation for idle detection
           const closeStatus = await vpnManager.fetchStatus();
           await publishMetric('VpnCloseOperations', 1);
           
@@ -267,5 +269,17 @@ async function publishMetric(metricName: string, value: number): Promise<void> {
   } catch (error) {
     console.error('Failed to publish metric:', error);
     // Don't throw as metric failure shouldn't break the main operation
+  }
+}
+
+// Record manual activity timestamp for intelligent idle detection
+async function recordManualActivity(): Promise<void> {
+  try {
+    const now = new Date().toISOString();
+    await stateStore.writeParameter(`/vpn/automation/manual_activity/${ENVIRONMENT}`, now);
+    console.log(`Recorded manual activity timestamp: ${now}`);
+  } catch (error) {
+    console.error('Failed to record manual activity timestamp:', error);
+    // Don't throw as this shouldn't break the main operation
   }
 }

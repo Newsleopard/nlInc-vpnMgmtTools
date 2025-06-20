@@ -43,23 +43,50 @@ export function verifySlackSignature(
 // Parse Slack slash command into VPN command request
 export function parseSlackCommand(slackCommand: SlackCommand): VpnCommandRequest {
   const text = slackCommand.text.trim();
+  
+  // Handle help commands
+  if (!text || text === 'help' || text === '--help' || text === '-h') {
+    throw new Error(getHelpMessage());
+  }
+  
   const parts = text.split(/\s+/);
   
   if (parts.length < 2) {
-    throw new Error('Invalid command format. Usage: /vpn <action> <environment>');
+    throw new Error('Invalid command format. Usage: /vpn <action> <environment>\n\n' + getHelpMessage());
   }
   
-  const action = parts[0].toLowerCase();
-  const environment = parts[1].toLowerCase();
+  let action = parts[0].toLowerCase();
+  let environment = parts[1].toLowerCase();
+  
+  // Support action aliases
+  if (action === 'start' || action === 'enable' || action === 'on') {
+    action = 'open';
+  } else if (action === 'stop' || action === 'disable' || action === 'off') {
+    action = 'close';
+  } else if (action === 'status' || action === 'state' || action === 'info') {
+    action = 'check';
+  }
+  
+  // Support environment aliases
+  if (environment === 'prod' || environment === 'production-env') {
+    environment = 'production';
+  } else if (environment === 'stage' || environment === 'staging-env' || environment === 'dev') {
+    environment = 'staging';
+  }
   
   // Validate action
   if (!['open', 'close', 'check'].includes(action)) {
-    throw new Error('Invalid action. Must be: open, close, or check');
+    throw new Error(`Invalid action "${parts[0]}". Must be: open, close, or check\n\n` + getHelpMessage());
   }
   
   // Validate environment
   if (!['staging', 'production'].includes(environment)) {
-    throw new Error('Invalid environment. Must be: staging or production');
+    throw new Error(`Invalid environment "${parts[1]}". Must be: staging or production\n\n` + getHelpMessage());
+  }
+  
+  // Validate permissions for production
+  if (environment === 'production' && !isAuthorizedForProduction(slackCommand.user_name)) {
+    throw new Error(`❌ Access denied: User "${slackCommand.user_name}" is not authorized for production VPN operations.\n\nContact your administrator to request production access.`);
   }
   
   return {
@@ -68,6 +95,40 @@ export function parseSlackCommand(slackCommand: SlackCommand): VpnCommandRequest
     user: slackCommand.user_name,
     requestId: generateRequestId()
   };
+}
+
+// Get help message for VPN commands
+function getHelpMessage(): string {
+  return `**VPN Automation Commands:**
+
+**Usage:** \`/vpn <action> <environment>\`
+
+**Actions:**
+• \`open\` (aliases: start, enable, on) - Associate VPN subnets
+• \`close\` (aliases: stop, disable, off) - Disassociate VPN subnets  
+• \`check\` (aliases: status, state, info) - Check VPN status
+
+**Environments:**
+• \`staging\` (aliases: stage, dev) - Staging environment 🟡
+• \`production\` (aliases: prod) - Production environment 🔴
+
+**Examples:**
+• \`/vpn open staging\` - Open staging VPN
+• \`/vpn close prod\` - Close production VPN
+• \`/vpn status staging\` - Check staging VPN status
+• \`/vpn help\` - Show this help message
+
+**Notes:**
+- Production access requires special authorization
+- Commands are logged for audit purposes
+- Auto-monitoring will close idle VPNs after 60 minutes`;
+}
+
+// Check if user is authorized for production operations
+function isAuthorizedForProduction(username: string): boolean {
+  // This could be enhanced to check against Parameter Store or external auth service
+  const authorizedUsers = (process.env.PRODUCTION_AUTHORIZED_USERS || '').split(',');
+  return authorizedUsers.includes(username) || authorizedUsers.includes('*');
 }
 
 // Generate unique request ID for tracking

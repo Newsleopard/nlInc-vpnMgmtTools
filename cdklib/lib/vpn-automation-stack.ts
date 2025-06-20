@@ -47,6 +47,19 @@ export class VpnAutomationStack extends cdk.Stack {
               ]
             })
           ]
+        }),
+        LambdaInvoke: new iam.PolicyDocument({
+          statements: [
+            new iam.PolicyStatement({
+              effect: iam.Effect.ALLOW,
+              actions: [
+                'lambda:InvokeFunction'
+              ],
+              resources: [
+                `arn:aws:lambda:${this.region}:${this.account}:function:VpnAutomationStack-${environment}-VpnControl*`
+              ]
+            })
+          ]
         })
       }
     });
@@ -105,7 +118,15 @@ export class VpnAutomationStack extends cdk.Stack {
       ENVIRONMENT: environment,
       VPN_STATE_PREFIX: '/vpn/',
       SIGNING_SECRET_PARAM: '/vpn/slack/signing_secret',
-      WEBHOOK_PARAM: '/vpn/slack/webhook'
+      WEBHOOK_PARAM: '/vpn/slack/webhook',
+      
+      // Enhanced idle detection configuration
+      COOLDOWN_MINUTES: '30',
+      BUSINESS_HOURS_PROTECTION: 'true',
+      BUSINESS_HOURS_TIMEZONE: 'UTC',
+      
+      // Production authorization (can be overridden via deployment)
+      PRODUCTION_AUTHORIZED_USERS: process.env.PRODUCTION_AUTHORIZED_USERS || '*'
     };
 
     // slack-handler Lambda function
@@ -248,6 +269,21 @@ export class VpnAutomationStack extends cdk.Stack {
       tier: ssm.ParameterTier.STANDARD
     });
 
+    // Create placeholder parameters for Slack integration (to be updated manually)
+    new ssm.StringParameter(this, 'SlackWebhookPlaceholder', {
+      parameterName: '/vpn/slack/webhook',
+      stringValue: 'PLACEHOLDER_WEBHOOK_URL',
+      description: 'Slack webhook URL for notifications (SecureString recommended)',
+      tier: ssm.ParameterTier.STANDARD
+    });
+
+    new ssm.StringParameter(this, 'SlackSigningSecretPlaceholder', {
+      parameterName: '/vpn/slack/signing_secret',
+      stringValue: 'PLACEHOLDER_SIGNING_SECRET',
+      description: 'Slack app signing secret for request verification (SecureString recommended)',
+      tier: ssm.ParameterTier.STANDARD
+    });
+
     // Outputs
     this.apiGatewayUrl = new cdk.CfnOutput(this, 'ApiGatewayUrl', {
       value: api.url,
@@ -277,9 +313,25 @@ export class VpnAutomationStack extends cdk.Stack {
       description: 'Deployment environment'
     });
 
+    new cdk.CfnOutput(this, 'MonitoringSchedule', {
+      value: 'Every 5 minutes',
+      description: 'VPN monitoring schedule (CloudWatch Events)'
+    });
+
+    new cdk.CfnOutput(this, 'IdleThreshold', {
+      value: `${commonEnvironment.IDLE_MINUTES} minutes`,
+      description: 'VPN idle detection threshold'
+    });
+
+    new cdk.CfnOutput(this, 'CooldownPeriod', {
+      value: `${commonEnvironment.COOLDOWN_MINUTES} minutes`,
+      description: 'Anti-cycling cooldown period'
+    });
+
     // Add tags to all resources
     cdk.Tags.of(this).add('Environment', environment);
     cdk.Tags.of(this).add('Project', 'VpnCostAutomation');
     cdk.Tags.of(this).add('Component', 'Infrastructure');
+    cdk.Tags.of(this).add('Phase', '1-Foundation');
   }
 }

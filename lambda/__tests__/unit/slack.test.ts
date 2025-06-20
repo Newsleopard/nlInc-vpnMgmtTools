@@ -81,12 +81,25 @@ describe('slack', () => {
       });
     });
 
-    it('should parse close production command', () => {
-      const command = { ...mockSlackCommand, text: 'close production' };
-      const result = slack.parseSlackCommand(command);
+    it('should parse close production command with authorization', () => {
+      // Mock environment variable for production authorization
+      const originalEnv = process.env.PRODUCTION_AUTHORIZED_USERS;
+      process.env.PRODUCTION_AUTHORIZED_USERS = 'admin,testuser';
 
-      expect(result.action).toBe('close');
-      expect(result.environment).toBe('production');
+      try {
+        const command = { ...mockSlackCommand, text: 'close production' };
+        const result = slack.parseSlackCommand(command);
+
+        expect(result.action).toBe('close');
+        expect(result.environment).toBe('production');
+      } finally {
+        // Restore original environment
+        if (originalEnv) {
+          process.env.PRODUCTION_AUTHORIZED_USERS = originalEnv;
+        } else {
+          delete process.env.PRODUCTION_AUTHORIZED_USERS;
+        }
+      }
     });
 
     it('should parse check command', () => {
@@ -106,19 +119,19 @@ describe('slack', () => {
     it('should throw error for invalid action', () => {
       const command = { ...mockSlackCommand, text: 'invalid staging' };
 
-      expect(() => slack.parseSlackCommand(command)).toThrow('Invalid action. Must be: open, close, or check');
+      expect(() => slack.parseSlackCommand(command)).toThrow('Invalid action "invalid". Must be: open, close, or check');
     });
 
     it('should throw error for invalid environment', () => {
       const command = { ...mockSlackCommand, text: 'open invalid' };
 
-      expect(() => slack.parseSlackCommand(command)).toThrow('Invalid environment. Must be: staging or production');
+      expect(() => slack.parseSlackCommand(command)).toThrow('Invalid environment "invalid". Must be: staging or production');
     });
 
     it('should handle empty text', () => {
       const command = { ...mockSlackCommand, text: '' };
 
-      expect(() => slack.parseSlackCommand(command)).toThrow('Invalid command format. Usage: /vpn <action> <environment>');
+      expect(() => slack.parseSlackCommand(command)).toThrow('VPN Automation Commands');
     });
 
     it('should be case insensitive', () => {
@@ -127,6 +140,92 @@ describe('slack', () => {
 
       expect(result.action).toBe('open');
       expect(result.environment).toBe('staging');
+    });
+
+    it('should support action aliases', () => {
+      const startCommand = { ...mockSlackCommand, text: 'start staging' };
+      expect(slack.parseSlackCommand(startCommand).action).toBe('open');
+
+      const enableCommand = { ...mockSlackCommand, text: 'enable staging' };
+      expect(slack.parseSlackCommand(enableCommand).action).toBe('open');
+
+      const stopCommand = { ...mockSlackCommand, text: 'stop staging' };
+      expect(slack.parseSlackCommand(stopCommand).action).toBe('close');
+
+      const statusCommand = { ...mockSlackCommand, text: 'status staging' };
+      expect(slack.parseSlackCommand(statusCommand).action).toBe('check');
+    });
+
+    it('should support environment aliases', () => {
+      // Mock environment variable for production authorization
+      const originalEnv = process.env.PRODUCTION_AUTHORIZED_USERS;
+      process.env.PRODUCTION_AUTHORIZED_USERS = 'admin,testuser';
+
+      try {
+        const prodCommand = { ...mockSlackCommand, text: 'open prod' };
+        expect(slack.parseSlackCommand(prodCommand).environment).toBe('production');
+
+        const stageCommand = { ...mockSlackCommand, text: 'open stage' };
+        expect(slack.parseSlackCommand(stageCommand).environment).toBe('staging');
+
+        const devCommand = { ...mockSlackCommand, text: 'open dev' };
+        expect(slack.parseSlackCommand(devCommand).environment).toBe('staging');
+      } finally {
+        // Restore original environment
+        if (originalEnv) {
+          process.env.PRODUCTION_AUTHORIZED_USERS = originalEnv;
+        } else {
+          delete process.env.PRODUCTION_AUTHORIZED_USERS;
+        }
+      }
+    });
+
+    it('should show help for help commands', () => {
+      const helpCommand = { ...mockSlackCommand, text: 'help' };
+      expect(() => slack.parseSlackCommand(helpCommand)).toThrow('VPN Automation Commands');
+
+      const helpFlagCommand = { ...mockSlackCommand, text: '--help' };
+      expect(() => slack.parseSlackCommand(helpFlagCommand)).toThrow('VPN Automation Commands');
+
+      const emptyCommand = { ...mockSlackCommand, text: '' };
+      expect(() => slack.parseSlackCommand(emptyCommand)).toThrow('VPN Automation Commands');
+    });
+
+    it('should handle production authorization', () => {
+      // Mock environment variable for production authorization
+      const originalEnv = process.env.PRODUCTION_AUTHORIZED_USERS;
+      process.env.PRODUCTION_AUTHORIZED_USERS = 'admin,testuser';
+
+      try {
+        const prodCommand = { ...mockSlackCommand, text: 'open production' };
+        const result = slack.parseSlackCommand(prodCommand);
+        expect(result.environment).toBe('production');
+      } finally {
+        // Restore original environment
+        if (originalEnv) {
+          process.env.PRODUCTION_AUTHORIZED_USERS = originalEnv;
+        } else {
+          delete process.env.PRODUCTION_AUTHORIZED_USERS;
+        }
+      }
+    });
+
+    it('should reject unauthorized production access', () => {
+      // Mock environment variable for production authorization
+      const originalEnv = process.env.PRODUCTION_AUTHORIZED_USERS;
+      process.env.PRODUCTION_AUTHORIZED_USERS = 'admin,otheruser';
+
+      try {
+        const prodCommand = { ...mockSlackCommand, text: 'open production' };
+        expect(() => slack.parseSlackCommand(prodCommand)).toThrow('Access denied');
+      } finally {
+        // Restore original environment
+        if (originalEnv) {
+          process.env.PRODUCTION_AUTHORIZED_USERS = originalEnv;
+        } else {
+          delete process.env.PRODUCTION_AUTHORIZED_USERS;
+        }
+      }
     });
   });
 
@@ -150,13 +249,14 @@ describe('slack', () => {
     };
 
     it('should format successful open response', () => {
+      const now = new Date();
       const response: VpnCommandResponse = {
         success: true,
         message: 'VPN opened successfully',
         data: {
           associated: true,
           activeConnections: 2,
-          lastActivity: new Date('2025-06-17T10:00:00.000Z'),
+          lastActivity: now, // Use current time
           endpointId: 'cvpn-endpoint-123',
           subnetId: 'subnet-123'
         }

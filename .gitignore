@@ -115,3 +115,4 @@ lambda/**/npm-debug.log*
 lambda/**/yarn-debug.log*
 lambda/**/yarn-error.log*
 lambda/**/lerna-debug.log*
+*chatlog.json
