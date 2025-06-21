@@ -20,26 +20,27 @@
 下圖說明雙 AWS Profile 管理的核心架構與資料流：
 
 ```mermaid
-architecture-beta
-    group staging(cloud)[Staging AWS 帳戶]
-    group production(cloud)[Production AWS 帳戶]
-    group user(server)[本地開發者/管理員]
-
-    service s3s3(database)[Staging S3] in staging
-    service s3p(database)[Production S3] in production
-    service vpn1(server)[Staging VPN] in staging
-    service vpn2(server)[Production VPN] in production
-    service admin(server)[管理員] in user
-    service member(server)[團隊成員] in user
-
-    admin:R -- L:s3s3
-    admin:R -- L:s3p
-    admin:R -- L:vpn1
-    admin:R -- L:vpn2
-    member:R -- L:s3s3
-    member:R -- L:s3p
-    member:R -- L:vpn1
-    member:R -- L:vpn2
+flowchart TB
+    subgraph Staging[Staging AWS 帳戶]
+        S3S3[S3 儲存桶]
+        VPN1[VPN 端點]
+    end
+    subgraph Production[Production AWS 帳戶]
+        S3P[S3 儲存桶]
+        VPN2[VPN 端點]
+    end
+    subgraph User[本地開發者/管理員]
+        Admin[管理員]
+        Member[團隊成員]
+    end
+    Admin -- Profile: staging/production --> S3S3
+    Admin -- Profile: staging/production --> S3P
+    Admin -- Profile: staging/production --> VPN1
+    Admin -- Profile: staging/production --> VPN2
+    Member -- Profile: staging/production --> S3S3
+    Member -- Profile: staging/production --> S3P
+    Member -- Profile: staging/production --> VPN1
+    Member -- Profile: staging/production --> VPN2
 ```
 
 - **Staging/Production AWS 帳戶**：各自擁有獨立的 S3、VPN 端點與 Profile。
