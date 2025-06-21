@@ -53,7 +53,7 @@ show_usage() {
     echo ""
     echo "選項:"
     echo "  -b, --bucket-name NAME     S3 存儲桶名稱 (預設: $DEFAULT_BUCKET_NAME)"
-    echo "  -e, --environment ENV      特定環境 (staging/production) 或 'all' 發布所有"
+    echo "  -e, --environment ENV      環境名稱 (需對應 configs/ENV/ENV.env 配置文件)"
     echo "  -p, --profile PROFILE      AWS CLI profile"
     echo "  --ca-only                  只發布 CA 證書"
     echo "  --endpoints-only           只發布端點資訊"
@@ -66,9 +66,9 @@ show_usage() {
     echo "  供團隊成員自動下載使用，實現零接觸 VPN 設置流程"
     echo ""
     echo "範例:"
-    echo "  $0                                     # 發布所有環境的資產"
-    echo "  $0 -e production                      # 只發布 production 環境"
-    echo "  $0 --ca-only                          # 只發布 CA 證書"
+    echo "  $0                                     # 發布當前環境的資產"
+    echo "  $0 -e production                      # 發布 production 環境"
+    echo "  $0 -e dev                             # 發布 dev 環境"
     echo "  $0 --endpoints-only -e staging        # 只發布 staging 端點資訊"
     echo "  $0 -b my-vpn-bucket --force           # 使用自定義存儲桶並強制覆蓋"
 }
@@ -118,26 +118,11 @@ check_s3_bucket() {
 find_ca_certificate() {
     echo -e "${BLUE}查找 CA 證書...${NC}"
     
-    # 查找各環境的 CA 證書
-    local ca_cert_paths=()
-    
-    if [ "$ENVIRONMENT" = "all" ] || [ "$ENVIRONMENT" = "staging" ]; then
-        ca_cert_paths+=(
-            "$PARENT_DIR/certs/staging/pki/ca.crt"
-            "$PARENT_DIR/certs/staging/ca.crt"
-        )
-    fi
-    
-    if [ "$ENVIRONMENT" = "all" ] || [ "$ENVIRONMENT" = "production" ]; then
-        ca_cert_paths+=(
-            "$PARENT_DIR/certs/production/pki/ca.crt"
-            "$PARENT_DIR/certs/production/ca.crt"
-        )
-    fi
-    
-    # 通用路徑
-    ca_cert_paths+=(
-        "$PARENT_DIR/certs/ca.crt"
+    # 查找指定環境的 CA 證書
+    local ca_cert_paths=(
+        "$PARENT_DIR/certs/$ENVIRONMENT/pki/ca.crt"
+        "$PARENT_DIR/certs/$ENVIRONMENT/ca.crt"
+        "$PARENT_DIR/certs/ca.crt"  # 通用路徑
     )
     
     CA_CERT=""
@@ -172,61 +157,49 @@ find_ca_certificate() {
 generate_endpoints_json() {
     echo -e "${BLUE}生成端點資訊 JSON...${NC}"
     
-    local work_dir="$PARENT_DIR/work"
-    mkdir -p "$work_dir"
+    # 處理指定環境
+    local env="$ENVIRONMENT"
+    local config_dir="$PARENT_DIR/configs/$env"
+    local config_file="$config_dir/${env}.env"
     
-    local endpoints_file="$work_dir/vpn_endpoints.json"
+    # 確保環境配置目錄存在
+    mkdir -p "$config_dir"
+    
+    local endpoints_file="$config_dir/vpn_endpoints.json"
     
     # 開始 JSON 文件
     echo "{" > "$endpoints_file"
     
-    local first_env=true
+    if [ ! -f "$config_file" ]; then
+        echo -e "${RED}✗ 配置文件不存在: $config_file${NC}"
+        echo -e "${RED}無法生成端點資訊${NC}"
+        return 1
+    fi
     
-    # 處理指定環境
-    for env in staging production; do
-        if [ "$ENVIRONMENT" != "all" ] && [ "$ENVIRONMENT" != "$env" ]; then
-            continue
-        fi
-        
-        local config_file="$PARENT_DIR/configs/$env/${env}.env"
-        
-        if [ ! -f "$config_file" ]; then
-            echo -e "${YELLOW}⚠ 配置文件不存在: $config_file${NC}"
-            continue
-        fi
-        
-        # 載入環境配置
-        local endpoint_id region
-        if source "$config_file" 2>/dev/null; then
-            endpoint_id="$ENDPOINT_ID"
-            region="$AWS_REGION"
-        else
-            echo -e "${YELLOW}⚠ 無法載入配置: $config_file${NC}"
-            continue
-        fi
-        
-        if [ -z "$endpoint_id" ] || [ -z "$region" ]; then
-            echo -e "${YELLOW}⚠ $env 環境配置不完整 (endpoint_id: $endpoint_id, region: $region)${NC}"
-            continue
-        fi
-        
-        # 添加逗號分隔符
-        if [ "$first_env" = false ]; then
-            echo "," >> "$endpoints_file"
-        fi
-        first_env=false
-        
-        # 添加環境配置
-        echo "  \"$env\": {" >> "$endpoints_file"
-        echo "    \"endpoint_id\": \"$endpoint_id\"," >> "$endpoints_file"
-        echo "    \"region\": \"$region\"" >> "$endpoints_file"
-        echo -n "  }" >> "$endpoints_file"
-        
-        echo -e "${GREEN}✓ 添加 $env 環境: $endpoint_id ($region)${NC}"
-    done
+    # 載入環境配置
+    local endpoint_id region
+    if source "$config_file" 2>/dev/null; then
+        endpoint_id="$ENDPOINT_ID"
+        region="$AWS_REGION"
+    else
+        echo -e "${RED}✗ 無法載入配置: $config_file${NC}"
+        return 1
+    fi
+    
+    if [ -z "$endpoint_id" ] || [ -z "$region" ]; then
+        echo -e "${RED}✗ $env 環境配置不完整 (endpoint_id: $endpoint_id, region: $region)${NC}"
+        return 1
+    fi
+    
+    # 添加環境配置
+    echo "  \"$env\": {" >> "$endpoints_file"
+    echo "    \"endpoint_id\": \"$endpoint_id\"," >> "$endpoints_file"
+    echo "    \"region\": \"$region\"" >> "$endpoints_file"
+    echo "  }" >> "$endpoints_file"
+    
+    echo -e "${GREEN}✓ 添加 $env 環境: $endpoint_id ($region)${NC}"
     
     # 結束 JSON 文件
-    echo "" >> "$endpoints_file"
     echo "}" >> "$endpoints_file"
     
     # 驗證 JSON 格式
@@ -262,7 +235,7 @@ publish_ca_certificate() {
     
     # 上傳 CA 證書
     if aws_with_profile s3 cp "$CA_CERT" "$s3_path" \
-        --sse aws:kms \
+        --sse AES256 \
         --acl bucket-owner-full-control \
         --profile "$AWS_PROFILE"; then
         echo -e "${GREEN}✓ CA 證書已發布到 S3${NC}"
@@ -278,7 +251,7 @@ publish_ca_certificate() {
     if [ -n "$ca_hash" ]; then
         echo "$ca_hash" > "/tmp/ca.crt.sha256"
         if aws_with_profile s3 cp "/tmp/ca.crt.sha256" "s3://$BUCKET_NAME/public/ca.crt.sha256" \
-            --sse aws:kms \
+            --sse AES256 \
             --acl bucket-owner-full-control \
             --profile "$AWS_PROFILE"; then
             echo -e "${GREEN}✓ CA 證書哈希已發布${NC}"
@@ -309,7 +282,7 @@ publish_endpoints() {
     
     # 上傳端點資訊
     if aws_with_profile s3 cp "$ENDPOINTS_JSON" "$s3_path" \
-        --sse aws:kms \
+        --sse AES256 \
         --acl bucket-owner-full-control \
         --profile "$AWS_PROFILE"; then
         echo -e "${GREEN}✓ 端點資訊已發布到 S3${NC}"
@@ -364,7 +337,7 @@ show_publication_summary() {
 main() {
     # 預設值
     BUCKET_NAME="$DEFAULT_BUCKET_NAME"
-    ENVIRONMENT="all"
+    ENVIRONMENT="$CURRENT_ENVIRONMENT"  # 使用當前環境而不是 all
     # Get AWS profile from environment manager
     AWS_PROFILE="$(env_get_profile "$CURRENT_ENVIRONMENT" 2>/dev/null || echo default)"
     CA_ONLY=false
@@ -417,10 +390,27 @@ main() {
         esac
     done
     
-    # 驗證環境參數
-    if [[ ! "$ENVIRONMENT" =~ ^(all|staging|production)$ ]]; then
+    # 驗證環境參數 - 檢查對應的配置文件是否存在
+    local config_file="$PARENT_DIR/configs/$ENVIRONMENT/${ENVIRONMENT}.env"
+    if [ ! -f "$config_file" ]; then
         echo -e "${RED}無效的環境: $ENVIRONMENT${NC}"
-        echo -e "${YELLOW}有效選項: all, staging, production${NC}"
+        echo -e "${RED}找不到配置文件: $config_file${NC}"
+        echo -e "${YELLOW}請確認環境名稱正確，並且對應的配置文件存在${NC}"
+        echo -e "${BLUE}可用的環境:${NC}"
+        
+        # 列出所有可用的環境
+        local configs_dir="$PARENT_DIR/configs"
+        if [ -d "$configs_dir" ]; then
+            for env_dir in "$configs_dir"/*; do
+                if [ -d "$env_dir" ]; then
+                    local env_name=$(basename "$env_dir")
+                    local env_config="$env_dir/${env_name}.env"
+                    if [ -f "$env_config" ]; then
+                        echo -e "  ${CYAN}$env_name${NC}"
+                    fi
+                fi
+            done
+        fi
         exit 1
     fi
     
