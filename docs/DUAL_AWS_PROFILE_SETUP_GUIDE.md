@@ -445,4 +445,75 @@ LOG_LEVEL="WARN"
    - 生命週期政策可降低敏感資料長期暴露風險
 
 ---
+
+## 管理員第一次部署完整指南（Best Practices & Troubleshooting）
+
+本區針對**第一次部署本系統的管理員**，提供明確的操作步驟、建議順序、常見問題排查與安全性注意事項，協助您順利完成初始部署。
+
+### 1. 前置準備
+
+- **AWS CLI 安裝與設定**：
+  - 請先安裝 [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)。
+  - 執行 `aws configure` 設定預設憑證與區域。
+  - 確認有足夠權限（S3、IAM、EC2、STS、KMS 等）。
+- **本地環境建議**：
+  - 建議於 macOS/Linux 終端機操作。
+  - 確認 `jq`、`zip`、`unzip` 等工具已安裝。
+  - 建議使用專屬 AWS 管理員帳號進行初次部署。
+- **環境變數**：
+  - 依照 `template.env.example` 設定 `.env` 或對應環境變數。
+  - 建議先於 staging 測試，確認流程無誤再推進 production。
+
+### 2. S3 CSR 交換桶設置
+
+- 請依「S3 CSR 交換桶設置詳細說明」區段，逐步建立 S3 bucket、資料夾結構、IAM policy、lifecycle policy。
+- 執行 `admin-tools/setup_csr_s3_bucket.sh --publish-assets` 完成自動化設置與資產上傳。
+- 驗證 S3 bucket 權限與結構正確，並確認團隊成員帳號有正確的存取權限。
+
+### 3. 主要腳本執行順序
+
+1. **S3 交換桶設置**（如上）
+2. **環境參數同步**：
+   - 執行 `admin-tools/sync_env_config.sh`，確保所有環境參數已同步至 S3。
+3. **端點資產發佈**：
+   - 執行 `admin-tools/publish_endpoints.sh`，將 VPN 端點資訊發佈至 S3。
+4. **團隊成員邀請與測試**：
+   - 通知團隊成員依照文件操作，並協助測試 zero-touch 流程。
+5. **監控與驗證**：
+   - 可用 `admin-tools/vpn_subnet_manager.sh` 或 `admin-tools/aws_vpn_admin.sh` 進行狀態查詢與管理。
+
+### 4. 常見問題與排查建議
+
+- **S3 權限不足**：
+  - 檢查 IAM policy 是否正確套用於管理員與團隊成員。
+  - 檢查 bucket policy 是否允許跨帳號存取。
+- **腳本執行失敗**：
+  - 確認 shell script 有執行權限（`chmod +x`）。
+  - 檢查環境變數是否正確載入。
+  - 檢查 AWS CLI 是否正確指向目標 profile。
+- **資產未正確發佈**：
+  - 檢查 S3 bucket 結構與檔案是否齊全。
+  - 檢查 `publish_endpoints.sh` 執行紀錄與輸出。
+- **團隊成員無法存取 S3**：
+  - 檢查對方 AWS 帳號是否已被授權。
+  - 檢查 S3 bucket policy 是否允許對方帳號操作。
+
+### 5. 安全性與最佳實踐
+
+- **最小權限原則**：僅授權必要的 IAM 權限給管理員與團隊成員。
+- **敏感資訊保護**：勿將私鑰、密碼等敏感資訊存放於 S3，僅存放 CSR、公開資訊。
+- **多環境隔離**：建議 staging/production 分開設置 S3 bucket 與 IAM policy。
+- **定期審查權限**：定期檢查 IAM policy 與 S3 bucket policy，移除不必要的存取。
+
+### 6. 常見錯誤訊息對照表
+
+| 錯誤訊息關鍵字         | 可能原因與解法                         |
+|----------------------|--------------------------------------|
+| AccessDenied         | 檢查 IAM/S3 權限與 bucket policy      |
+| NoSuchBucket         | S3 bucket 名稱拼寫錯誤或未建立        |
+| ProfileNotFound      | AWS CLI profile 名稱錯誤或未設定      |
+| Command not found    | 缺少必要工具（jq/zip/unzip/awscli）    |
+| Permission denied    | 腳本未加執行權限，請執行 chmod +x      |
+
+---
 這個設定指南應該能幫助您完成雙 AWS Profile 管理系統的完整配置。如有任何問題，請參考故障排除章節或聯絡系統管理員。
