@@ -795,27 +795,36 @@ fetch_aws_values() {
     
     local bucket_found=false
     if [[ -n "$buckets" ]]; then
+        # First check for unified bucket name
         for bucket in $buckets; do
-            if [[ "$bucket" =~ $env_name.*vpn ]] || [[ "$bucket" =~ vpn.*$env_name ]]; then
-                local env_upper
-                env_upper=$(echo "$env_name" | tr '[:lower:]' '[:upper:]')
-                echo "${env_upper}_S3_BUCKET=$bucket"
-                echo "[SUCCESS] 發現S3 bucket: $bucket" >&2
+            if [[ "$bucket" == "vpn-csr-exchange" ]]; then
+                echo "# S3_BUCKET=$bucket  # Unified bucket for all environments"
+                echo "[SUCCESS] 發現統一 S3 bucket: $bucket" >&2
                 bucket_found=true
                 break
             fi
         done
+        
+        # If unified bucket not found, check for legacy environment-specific buckets
+        if [[ "$bucket_found" == "false" ]]; then
+            for bucket in $buckets; do
+                if [[ "$bucket" =~ $env_name.*vpn ]] || [[ "$bucket" =~ vpn.*$env_name ]]; then
+                    echo "# S3_BUCKET=$bucket  # Legacy environment-specific bucket (consider migrating to vpn-csr-exchange)"
+                    echo "[WARNING] 發現舊式 S3 bucket: $bucket (建議遷移至統一 bucket: vpn-csr-exchange)" >&2
+                    bucket_found=true
+                    break
+                fi
+            done
+        fi
     fi
     
     if [[ "$bucket_found" == "false" ]]; then
-        echo "[WARNING] 未找到匹配的S3 bucket (搜索關鍵字: $env_name + vpn)" >&2
+        echo "[WARNING] 未找到 S3 bucket (請使用 setup_csr_s3_bucket.sh 創建統一 bucket: vpn-csr-exchange)" >&2
     fi
     
     # 獲取賬戶ID
     if [[ -n "$account_id" ]]; then
-        local env_upper
-        env_upper=$(echo "$env_name" | tr '[:lower:]' '[:upper:]')
-        echo "${env_upper}_ACCOUNT_ID=$account_id"
+        echo "AWS_ACCOUNT_ID=$account_id"
         echo "[SUCCESS] 獲取賬戶ID: $account_id" >&2
     fi
     

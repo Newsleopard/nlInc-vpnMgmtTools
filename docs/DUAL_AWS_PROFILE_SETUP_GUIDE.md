@@ -132,7 +132,7 @@ SUGGESTED_PROFILES="staging,company-staging,dev-staging"
 
 # === 帳戶驗證 ===
 # Staging AWS 帳戶 ID (12位數字)
-STAGING_ACCOUNT_ID="123456789012"
+AWS_ACCOUNT_ID="123456789012"
 
 # === S3 配置 (零接觸工作流程) ===
 # S3 存儲桶名稱 (所有環境使用統一名稱)
@@ -157,7 +157,7 @@ SUGGESTED_PROFILES="production,company-production,prod"
 
 # === 帳戶驗證 ===  
 # Production AWS 帳戶 ID (12位數字)
-PRODUCTION_ACCOUNT_ID="987654321098"
+AWS_ACCOUNT_ID="987654321098"
 
 # === S3 配置 (零接觸工作流程) ===
 # S3 存儲桶名稱 (所有環境使用統一名稱)
@@ -293,7 +293,7 @@ ENV_AWS_PROFILE=""
 SUGGESTED_PROFILES="staging,company-staging,dev-staging"
 
 # === 帳戶驗證 ===
-STAGING_ACCOUNT_ID="123456789012"
+AWS_ACCOUNT_ID="123456789012"
 
 # === S3 配置 ===
 # 注意：所有環境統一使用 "vpn-csr-exchange" 作為 S3 存儲桶名稱
@@ -321,7 +321,7 @@ ENV_AWS_PROFILE=""
 SUGGESTED_PROFILES="production,company-production,prod"
 
 # === 帳戶驗證 ===
-PRODUCTION_ACCOUNT_ID="987654321098"
+AWS_ACCOUNT_ID="987654321098"
 
 # === S3 配置 ===
 # 注意：所有環境統一使用 "vpn-csr-exchange" 作為 S3 存儲桶名稱

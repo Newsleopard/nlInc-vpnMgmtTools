@@ -189,7 +189,7 @@ test_configuration_integration() {
                 record_test_result "$env ENV_AWS_PROFILE variable exists" "FAIL" "Variable not found in config"
             fi
             
-            if grep -q "STAGING_ACCOUNT_ID=\|PRODUCTION_ACCOUNT_ID=" "$config_file"; then
+            if grep -q "AWS_ACCOUNT_ID=" "$config_file"; then
                 record_test_result "$env account ID variable exists" "PASS"
             else
                 record_test_result "$env account ID variable exists" "FAIL" "Account ID variable not found"

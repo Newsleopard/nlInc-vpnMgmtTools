@@ -324,17 +324,10 @@ validate_profile_matches_environment() {
     
     # Load expected account ID from config if available
     local config_file="$PROJECT_ROOT/configs/$environment/$environment.env"
-    local expected_account_var=""
-    case "$environment" in
-        staging) expected_account_var="STAGING_ACCOUNT_ID" ;;
-        production) expected_account_var="PRODUCTION_ACCOUNT_ID" ;;
-        prod) expected_account_var="PROD_ACCOUNT_ID" ;;
-        *) expected_account_var="" ;;
-    esac
     local expected_account=""
     
     if [ -f "$config_file" ]; then
-        expected_account=$(grep "^${expected_account_var}=" "$config_file" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+        expected_account=$(grep "^AWS_ACCOUNT_ID=" "$config_file" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
     fi
     
     # If we have expected account ID, validate it

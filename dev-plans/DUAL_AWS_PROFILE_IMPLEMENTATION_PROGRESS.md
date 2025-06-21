@@ -38,8 +38,8 @@ Reference spec: [`DUAL_AWS_ACCOUNT_PROFILE_MANAGEMENT.md`](./DUAL_AWS_ACCOUNT_PR
 ### 1.3 Configuration Updates
 - [x] Add `AWS_PROFILE`, `ENV_AWS_PROFILE` to `configs/staging/staging.env`
 - [x] Add same keys to `configs/production/production.env`
-- [x] Add `STAGING_ACCOUNT_ID` to staging config
-- [x] Add `PRODUCTION_ACCOUNT_ID` to production config
+- [x] Add `AWS_ACCOUNT_ID` to staging config
+- [x] Add `AWS_ACCOUNT_ID` to production config
 - [x] Unified S3 bucket name `vpn-csr-exchange` for all environments
 - [x] Update template/example docs (configuration complete)
 

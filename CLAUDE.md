@@ -44,8 +44,7 @@ ENV_AWS_PROFILE=""
 SUGGESTED_PROFILES="staging,company-staging,dev-staging"
 
 # Account ID for cross-account validation (required)
-STAGING_ACCOUNT_ID="123456789012"  # Replace with actual account ID
-PRODUCTION_ACCOUNT_ID="987654321098"  # Replace with actual account ID
+AWS_ACCOUNT_ID="123456789012"  # Replace with actual account ID for this environment
 
 # S3 bucket name for zero-touch workflow (unified across all environments)
 # Note: All environments now use the same bucket name: "vpn-csr-exchange"
@@ -330,7 +329,7 @@ The zero-touch workflow eliminates manual file transfers between admins and team
 
 - **Always verify current environment and AWS profile** before operations using `./vpn_env.sh status`
 - **Profile Configuration Required**: Each environment needs proper AWS profile configuration in `configs/{env}/{env}.env`
-- **Account ID Validation**: Set correct `STAGING_ACCOUNT_ID` and `PRODUCTION_ACCOUNT_ID` in environment configs
+- **Account ID Validation**: Set correct `AWS_ACCOUNT_ID` in each environment config
 - Production operations have additional safety checks and confirmations
 - The toolkit is specifically designed for macOS environments
 - All scripts use bash and include Chinese language prompts and documentation
@@ -351,7 +350,7 @@ aws sts get-caller-identity --profile production
 
 # Update environment configs with account IDs
 # Edit configs/staging/staging.env and configs/production/production.env
-# Set STAGING_ACCOUNT_ID and PRODUCTION_ACCOUNT_ID
+# Set AWS_ACCOUNT_ID for each environment
 
 # Test environment switching with profile validation
 ./vpn_env.sh switch staging

@@ -708,7 +708,7 @@ Each environment will need AWS profile specification:
 AWS_REGION=us-east-1
 AWS_PROFILE=default  # or staging
 ENV_AWS_PROFILE=staging  # Environment-specific override
-STAGING_ACCOUNT_ID=111111111111  # For validation
+AWS_ACCOUNT_ID=111111111111  # For validation
 # S3_BUCKET=vpn-csr-exchange  # Unified bucket name for all environments
 ENDPOINT_ID=cvpn-endpoint-123...
 VPN_NAME=staging-vpn
@@ -717,7 +717,7 @@ VPN_NAME=staging-vpn
 AWS_REGION=us-east-1
 AWS_PROFILE=production  # or prod
 ENV_AWS_PROFILE=production  # Environment-specific override
-PRODUCTION_ACCOUNT_ID=222222222222  # For validation
+AWS_ACCOUNT_ID=222222222222  # For validation
 # S3_BUCKET=vpn-csr-exchange  # Unified bucket name for all environments
 ENDPOINT_ID=cvpn-endpoint-456...
 VPN_NAME=production-vpn
