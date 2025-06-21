@@ -251,30 +251,16 @@ create_folder_structure() {
     echo -e "${BLUE}創建文件夾結構...${NC}"
     
     # 創建 csr/, cert/, 和 public/ 前綴
-    aws_with_profile s3api put-object \
-        --bucket "$BUCKET_NAME" \
-        --key "csr/.keep" \
-        --body /dev/null \
-        --profile "$AWS_PROFILE"
+    # 使用臨時文件方式創建空對象
+    local temp_file=$(mktemp)
     
-    aws_with_profile s3api put-object \
-        --bucket "$BUCKET_NAME" \
-        --key "cert/.keep" \
-        --body /dev/null \
-        --profile "$AWS_PROFILE"
+    aws_with_profile s3 cp "$temp_file" "s3://$BUCKET_NAME/csr/.keep" --sse AES256 --profile "$AWS_PROFILE" 2>/dev/null || true
+    aws_with_profile s3 cp "$temp_file" "s3://$BUCKET_NAME/cert/.keep" --sse AES256 --profile "$AWS_PROFILE" 2>/dev/null || true
+    aws_with_profile s3 cp "$temp_file" "s3://$BUCKET_NAME/public/.keep" --sse AES256 --profile "$AWS_PROFILE" 2>/dev/null || true
+    aws_with_profile s3 cp "$temp_file" "s3://$BUCKET_NAME/log/.keep" --sse AES256 --profile "$AWS_PROFILE" 2>/dev/null || true
     
-    aws_with_profile s3api put-object \
-        --bucket "$BUCKET_NAME" \
-        --key "public/.keep" \
-        --body /dev/null \
-        --profile "$AWS_PROFILE"
-    
-    # 可選：創建日誌前綴
-    aws_with_profile s3api put-object \
-        --bucket "$BUCKET_NAME" \
-        --key "log/.keep" \
-        --body /dev/null \
-        --profile "$AWS_PROFILE"
+    # 清理臨時文件
+    rm -f "$temp_file"
     
     echo -e "${GREEN}✓ 文件夾結構已創建${NC}"
     echo -e "  📁 s3://$BUCKET_NAME/csr/    (CSR 上傳)"
