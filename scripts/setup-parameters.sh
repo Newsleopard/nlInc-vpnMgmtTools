@@ -46,6 +46,7 @@ show_usage() {
     echo "  --subnet-id ID       Subnet ID (required)"
     echo "  --slack-webhook URL  Slack webhook URL (required)" 
     echo "  --slack-secret SEC   Slack signing secret (required)"
+    echo "  --secure              Use secure parameters (encrypted)"
     echo ""
     echo "Example:"
     echo "  $0 staging \\"
@@ -63,6 +64,8 @@ ENDPOINT_ID=""
 SUBNET_ID=""
 SLACK_WEBHOOK=""
 SLACK_SECRET=""
+USE_SECURE_PARAMETERS=false
+USE_SECURE_PARAMETERS=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -93,6 +96,10 @@ while [[ $# -gt 0 ]]; do
         --slack-secret)
             SLACK_SECRET="$2"
             shift 2
+            ;;
+        --secure)
+            USE_SECURE_PARAMETERS=true
+            shift
             ;;
         -h|--help)
             show_usage
@@ -161,6 +168,70 @@ create_parameter() {
     else
         print_error "❌ Failed to set parameter $param_name"
         exit 1
+    fi
+}
+
+# Function to set secure parameter (Epic 5.1)
+set_secure_parameter() {
+    local param_name="$1"
+    local param_value="$2"
+    local description="$3"
+    local kms_key_alias="vpn-parameter-store-$ENVIRONMENT"
+    
+    print_status "Setting secure parameter: $param_name"
+    
+    # Check if KMS key exists
+    if ! aws kms describe-key --key-id "alias/$kms_key_alias" --profile "$AWS_PROFILE" --region "$AWS_REGION" &> /dev/null; then
+        print_error "❌ KMS key alias/$kms_key_alias not found. Please deploy with --secure-parameters first."
+        exit 1
+    fi
+    
+    aws ssm put-parameter \
+        --name "$param_name" \
+        --value "$param_value" \
+        --type "SecureString" \
+        --key-id "alias/$kms_key_alias" \
+        --description "$description" \
+        --overwrite \
+        --profile "$AWS_PROFILE" \
+        --region "$AWS_REGION" > /dev/null
+    
+    if [ $? -eq 0 ]; then
+        print_success "✅ Secure parameter $param_name set successfully (encrypted with KMS)"
+    else
+        print_error "❌ Failed to set secure parameter $param_name"
+        exit 1
+    fi
+}
+
+# Function to set parameter
+set_parameter() {
+    local param_name="$1"
+    local param_value="$2"
+    local param_type="$3"
+    local description="$4"
+    
+    if [ "$USE_SECURE_PARAMETERS" = "true" ] && [[ "$param_name" == *"slack"* ]]; then
+        # Use secure parameters for sensitive data
+        set_secure_parameter "$param_name" "$param_value" "$description"
+    else
+        print_status "Setting parameter: $param_name"
+        
+        aws ssm put-parameter \
+            --name "$param_name" \
+            --value "$param_value" \
+            --type "$param_type" \
+            --description "$description" \
+            --overwrite \
+            --profile "$AWS_PROFILE" \
+            --region "$AWS_REGION" > /dev/null
+        
+        if [ $? -eq 0 ]; then
+            print_success "✅ Parameter $param_name set successfully"
+        else
+            print_error "❌ Failed to set parameter $param_name"
+            exit 1
+        fi
     fi
 }
 

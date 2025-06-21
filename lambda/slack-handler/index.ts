@@ -1,29 +1,45 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult, Context } from 'aws-lambda';
-import { Lambda } from 'aws-sdk';
+import { Lambda, CloudWatch } from 'aws-sdk';
 import * as querystring from 'querystring';
 
 // Import shared utilities from Lambda Layer
 import { SlackCommand, VpnCommandRequest, VpnCommandResponse, CrossAccountRequest } from '/opt/types';
 import * as slack from '/opt/slack';
 import * as stateStore from '/opt/stateStore';
+import { createLogger, extractLogContext, withPerformanceLogging } from '/opt/logger';
 
 const lambda = new Lambda();
+const cloudwatch = new CloudWatch();
 const ENVIRONMENT = process.env.ENVIRONMENT || 'staging';
 
 export const handler = async (
   event: APIGatewayProxyEvent,
   context: Context
 ): Promise<APIGatewayProxyResult> => {
-  console.log('Slack Handler Lambda invoked', {
-    requestId: context.awsRequestId,
-    environment: ENVIRONMENT,
+  // Initialize structured logger with Epic 4.1 enhancements
+  const logContext = extractLogContext(event, context, 'slack-handler');
+  const logger = createLogger(logContext);
+  
+  logger.info('Slack Handler Lambda invoked', {
     httpMethod: event.httpMethod,
-    headers: event.headers
+    userAgent: event.headers['User-Agent'] || event.headers['user-agent'],
+    sourceIP: event.requestContext?.identity?.sourceIp,
+    path: event.path,
+    stage: event.requestContext?.stage
   });
 
   try {
     // Verify this is a POST request
     if (event.httpMethod !== 'POST') {
+      logger.security('Invalid HTTP method attempted', 'low', {
+        authenticationMethod: 'none',
+        riskScore: 1
+      }, {
+        method: event.httpMethod,
+        path: event.path,
+        sourceIP: event.requestContext?.identity?.sourceIp
+      });
+      
       return {
         statusCode: 405,
         headers: { 'Content-Type': 'application/json' },
@@ -40,19 +56,43 @@ export const handler = async (
     const timestamp = event.headers['X-Slack-Request-Timestamp'] || event.headers['x-slack-request-timestamp'] || '';
     
     try {
-      const signingSecret = await stateStore.readSlackSigningSecret();
+      const signingSecret = await withPerformanceLogging(
+        'readSlackSigningSecret',
+        stateStore.readSlackSigningSecret,
+        logger
+      )();
+      
       const isValidSignature = slack.verifySlackSignature(body, signature, timestamp, signingSecret);
       
       if (!isValidSignature) {
-        console.error('Invalid Slack signature');
+        logger.security('Invalid Slack signature detected', 'high', {
+          authenticationMethod: 'slack_signature',
+          riskScore: 8
+        }, {
+          sourceIP: event.requestContext?.identity?.sourceIp,
+          userAgent: event.headers['User-Agent'],
+          signaturePresent: !!signature,
+          timestampPresent: !!timestamp
+        });
+        
         return {
           statusCode: 401,
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ error: 'Unauthorized' })
         };
       }
+      
+      logger.debug('Slack signature verification successful', {
+        timestampAge: Math.abs(Date.now() / 1000 - parseInt(timestamp))
+      });
+      
     } catch (signatureError) {
-      console.error('Failed to verify Slack signature:', signatureError);
+      logger.error('Failed to verify Slack signature', signatureError, {
+        hasSignature: !!signature,
+        hasTimestamp: !!timestamp,
+        bodyLength: body.length
+      });
+      
       return {
         statusCode: 500,
         headers: { 'Content-Type': 'application/json' },
@@ -75,19 +115,46 @@ export const handler = async (
       trigger_id: slackData.trigger_id
     };
 
-    console.log('Received Slack command:', {
+    // Update logger context with user information
+    logger.updateContext({ 
+      userId: slackCommand.user_name,
+      sessionId: slackCommand.trigger_id 
+    });
+    
+    logger.info('Received Slack command', {
       command: slackCommand.command,
       text: slackCommand.text,
       user: slackCommand.user_name,
-      channel: slackCommand.channel_name
+      channel: slackCommand.channel_name,
+      teamId: slackCommand.team_id,
+      teamDomain: slackCommand.team_domain
     });
 
     // Parse VPN command from Slack text
     let vpnCommand: VpnCommandRequest;
     try {
-      vpnCommand = slack.parseSlackCommand(slackCommand);
+      vpnCommand = withPerformanceLogging(
+        'parseSlackCommand',
+        slack.parseSlackCommand,
+        logger
+      )(slackCommand);
+      
+      logger.audit('Command parsed', 'slack_command', 'success', {
+        command: vpnCommand.action,
+        environment: vpnCommand.environment,
+        user: vpnCommand.user,
+        requestId: vpnCommand.requestId,
+        originalText: slackCommand.text
+      });
+      
     } catch (parseError) {
-      console.error('Failed to parse VPN command:', parseError);
+      logger.warn('Failed to parse VPN command', {
+        error: parseError.message,
+        originalText: slackCommand.text,
+        user: slackCommand.user_name,
+        channel: slackCommand.channel_name
+      });
+      
       return {
         statusCode: 200,
         headers: { 'Content-Type': 'application/json' },
@@ -116,35 +183,81 @@ export const handler = async (
       };
     }
 
-    console.log('Parsed VPN command:', vpnCommand);
+    logger.info('Parsed VPN command', {
+      action: vpnCommand.action,
+      environment: vpnCommand.environment,
+      requestId: vpnCommand.requestId,
+      isLocalEnvironment: vpnCommand.environment === ENVIRONMENT
+    });
 
     // Route command based on environment
     let response: VpnCommandResponse;
     
     if (vpnCommand.environment === ENVIRONMENT) {
       // Local command - invoke vpn-control Lambda directly
-      console.log(`Processing local command for ${ENVIRONMENT} environment`);
-      response = await invokeLocalVpnControl(vpnCommand);
+      logger.info('Processing local command', {
+        targetEnvironment: ENVIRONMENT,
+        routingType: 'local_lambda'
+      });
+      
+      response = await withPerformanceLogging(
+        'invokeLocalVpnControl',
+        invokeLocalVpnControl,
+        logger
+      )(vpnCommand, logger);
       
     } else {
       // Cross-account command - call production API Gateway via HTTPS
-      console.log(`Processing cross-account command for ${vpnCommand.environment} environment`);
-      response = await invokeProductionViaAPIGateway(vpnCommand);
+      logger.info('Processing cross-account command', {
+        sourceEnvironment: ENVIRONMENT,
+        targetEnvironment: vpnCommand.environment,
+        routingType: 'cross_account_api'
+      });
+      
+      response = await withPerformanceLogging(
+        'invokeProductionViaAPIGateway',
+        invokeProductionViaAPIGateway,
+        logger
+      )(vpnCommand, logger);
     }
 
     // Format response for Slack
     const slackResponse = slack.formatSlackResponse(response, vpnCommand);
     
-    console.log('Sending Slack response:', slackResponse);
+    logger.audit('VPN operation completed', 'vpn_command', response.success ? 'success' : 'failure', {
+      command: vpnCommand.action,
+      environment: vpnCommand.environment,
+      user: vpnCommand.user,
+      requestId: vpnCommand.requestId,
+      success: response.success,
+      error: response.error,
+      responseData: response.data ? {
+        associated: response.data.associated,
+        activeConnections: response.data.activeConnections
+      } : undefined
+    });
+    
+    logger.info('Sending Slack response', {
+      responseType: slackResponse.response_type,
+      hasAttachments: !!slackResponse.attachments,
+      success: response.success
+    });
     
     return {
       statusCode: 200,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'X-Correlation-ID': logger.getCorrelationId()
+      },
       body: JSON.stringify(slackResponse)
     };
 
   } catch (error) {
-    console.error('Unexpected error in Slack Handler Lambda:', error);
+    logger.critical('Unexpected error in Slack Handler Lambda', error, {
+      httpMethod: event.httpMethod,
+      path: event.path,
+      userAgent: event.headers['User-Agent']
+    });
     
     // Send alert about handler failure
     await slack.sendSlackAlert(
@@ -155,7 +268,10 @@ export const handler = async (
 
     return {
       statusCode: 200,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'X-Correlation-ID': logger.getCorrelationId()
+      },
       body: JSON.stringify({
         response_type: 'ephemeral',
         text: '❌ Internal error processing VPN command',
@@ -165,6 +281,10 @@ export const handler = async (
             title: 'Error',
             value: 'An unexpected error occurred. The development team has been notified.',
             short: false
+          }, {
+            title: 'Request ID',
+            value: logger.getCorrelationId(),
+            short: true
           }]
         }]
       })
@@ -173,19 +293,40 @@ export const handler = async (
 };
 
 // Invoke local vpn-control Lambda function
-async function invokeLocalVpnControl(command: VpnCommandRequest): Promise<VpnCommandResponse> {
+async function invokeLocalVpnControl(command: VpnCommandRequest, logger: any): Promise<VpnCommandResponse> {
+  const childLogger = logger.child({ operation: 'invokeLocalVpnControl' });
+  
   try {
-    console.log('Invoking local vpn-control Lambda');
+    childLogger.info('Invoking local vpn-control Lambda', {
+      functionName: `VpnAutomationStack-${ENVIRONMENT}-VpnControl`,
+      command: command.action,
+      environment: command.environment
+    });
+    
+    const invocationStart = Date.now();
     
     const result = await lambda.invoke({
-      FunctionName: `VpnAutomationStack-${ENVIRONMENT}-VpnControl`, // Function name from CDK
+      FunctionName: `VpnAutomationStack-${ENVIRONMENT}-VpnControl`,
       InvocationType: 'RequestResponse',
       Payload: JSON.stringify({
         httpMethod: 'POST',
         body: JSON.stringify(command),
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 
+          'Content-Type': 'application/json',
+          'X-Correlation-ID': logger.getCorrelationId()
+        }
       })
     }).promise();
+
+    const invocationTime = Date.now() - invocationStart;
+    
+    childLogger.performance('Lambda invocation completed', {
+      duration: invocationTime,
+      apiCalls: 1
+    }, {
+      functionName: `VpnAutomationStack-${ENVIRONMENT}-VpnControl`,
+      payloadSize: result.Payload ? result.Payload.toString().length : 0
+    });
 
     if (!result.Payload) {
       throw new Error('No response from vpn-control Lambda');
@@ -193,15 +334,36 @@ async function invokeLocalVpnControl(command: VpnCommandRequest): Promise<VpnCom
 
     const lambdaResponse = JSON.parse(result.Payload.toString());
     
+    childLogger.debug('Lambda response received', {
+      statusCode: lambdaResponse.statusCode,
+      hasBody: !!lambdaResponse.body,
+      logResult: result.LogResult ? 'present' : 'absent'
+    });
+    
     if (lambdaResponse.statusCode !== 200) {
       const errorResponse = JSON.parse(lambdaResponse.body);
       throw new Error(errorResponse.error || 'VPN operation failed');
     }
 
-    return JSON.parse(lambdaResponse.body);
+    const response = JSON.parse(lambdaResponse.body);
+    
+    childLogger.audit('Local VPN operation', 'lambda_invocation', response.success ? 'success' : 'failure', {
+      command: command.action,
+      environment: command.environment,
+      requestId: command.requestId,
+      duration: invocationTime,
+      success: response.success
+    });
+
+    return response;
     
   } catch (error) {
-    console.error('Failed to invoke local vpn-control:', error);
+    childLogger.error('Failed to invoke local vpn-control', error, {
+      command: command.action,
+      environment: command.environment,
+      functionName: `VpnAutomationStack-${ENVIRONMENT}-VpnControl`
+    });
+    
     return {
       success: false,
       error: `Local VPN operation failed: ${error.message}`
@@ -209,10 +371,12 @@ async function invokeLocalVpnControl(command: VpnCommandRequest): Promise<VpnCom
   }
 }
 
-// Invoke production API Gateway via HTTPS for cross-account calls with retry logic
-async function invokeProductionViaAPIGateway(command: VpnCommandRequest): Promise<VpnCommandResponse> {
+// Invoke production API Gateway via HTTPS for cross-account calls with enhanced retry logic
+async function invokeProductionViaAPIGateway(command: VpnCommandRequest, logger: any): Promise<VpnCommandResponse> {
+  const childLogger = logger.child({ operation: 'invokeProductionViaAPIGateway' });
   const maxRetries = 3;
-  const retryDelay = 1000; // 1 second
+  const baseRetryDelay = 1000; // 1 second base delay
+  const maxRetryDelay = 10000; // 10 second max delay
   
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
@@ -223,17 +387,38 @@ async function invokeProductionViaAPIGateway(command: VpnCommandRequest): Promis
         throw new Error('Production API endpoint not configured');
       }
 
-      console.log(`Calling production API Gateway (attempt ${attempt}/${maxRetries}):`, productionAPIEndpoint);
+      childLogger.info(`Calling production API Gateway (attempt ${attempt}/${maxRetries})`, {
+        endpoint: productionAPIEndpoint?.substring(0, 50) + '...',
+        action: command.action,
+        environment: command.environment,
+        user: command.user,
+        attempt: attempt,
+        maxRetries: maxRetries
+      });
       
       const requestBody: CrossAccountRequest = {
         command: command,
         requestId: command.requestId,
-        sourceAccount: 'staging'
+        sourceAccount: 'staging',
+        crossAccountMetadata: {
+          requestTimestamp: new Date().toISOString(),
+          sourceEnvironment: ENVIRONMENT,
+          routingAttempt: attempt,
+          userAgent: 'VPN-Automation-Slack-Handler/1.0'
+        }
       };
+
+      childLogger.debug('Preparing cross-account request', {
+        targetEndpoint: productionAPIEndpoint,
+        requestId: command.requestId,
+        correlationId: logger.getCorrelationId(),
+        payloadSize: JSON.stringify(requestBody).length
+      });
 
       // Add timeout to fetch request
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+      const requestStart = Date.now();
       
       try {
         const response = await fetch(productionAPIEndpoint, {
@@ -241,13 +426,25 @@ async function invokeProductionViaAPIGateway(command: VpnCommandRequest): Promis
           headers: {
             'Content-Type': 'application/json',
             'X-API-Key': apiKey,
-            'User-Agent': 'VPN-Automation-Slack-Handler/1.0'
+            'User-Agent': 'VPN-Automation-Slack-Handler/1.0',
+            'X-Correlation-ID': logger.getCorrelationId()
           },
           body: JSON.stringify(requestBody),
           signal: controller.signal
         });
 
         clearTimeout(timeoutId);
+        const requestTime = Date.now() - requestStart;
+
+        childLogger.performance('Cross-account API call completed', {
+          duration: requestTime,
+          networkLatency: requestTime,
+          apiCalls: 1
+        }, {
+          statusCode: response.status,
+          attempt: attempt,
+          endpoint: productionAPIEndpoint?.substring(0, 50) + '...'
+        });
 
         if (!response.ok) {
           const errorText = await response.text();
@@ -255,33 +452,88 @@ async function invokeProductionViaAPIGateway(command: VpnCommandRequest): Promis
         }
 
         const result = await response.json();
-        console.log('Production API response:', result);
+        
+        childLogger.info('Production API response received', {
+          success: result.success,
+          hasData: !!result.data,
+          requestId: command.requestId,
+          responseTime: requestTime,
+          attempt: attempt
+        });
+        
+        // Add success metrics for cross-account calls
+        if (result.success) {
+          childLogger.audit('Cross-account operation completed successfully', 'cross_account_routing', 'success', {
+            action: command.action,
+            environment: command.environment,
+            attempt: attempt,
+            requestId: command.requestId,
+            totalAttempts: attempt,
+            sourceEnvironment: ENVIRONMENT,
+            responseTime: requestTime
+          });
+          
+          // Publish cross-account success metric
+          await publishCrossAccountMetric('CrossAccountSuccess', 1, command.environment);
+        } else {
+          childLogger.warn('Cross-account operation returned failure', {
+            action: command.action,
+            environment: command.environment,
+            error: result.error,
+            attempt: attempt
+          });
+        }
         
         return result;
         
       } catch (fetchError) {
         clearTimeout(timeoutId);
+        const requestTime = Date.now() - requestStart;
+        
         if (fetchError.name === 'AbortError') {
+          childLogger.warn('Cross-account request timeout', {
+            attempt: attempt,
+            timeout: 30000,
+            requestTime: requestTime
+          });
           throw new Error('Request timeout - production API did not respond within 30 seconds');
         }
         throw fetchError;
       }
       
     } catch (error) {
-      console.error(`Attempt ${attempt} failed:`, error);
+      childLogger.error(`Cross-account attempt ${attempt} failed`, error, {
+        attempt: attempt,
+        maxRetries: maxRetries,
+        action: command.action,
+        environment: command.environment
+      });
       
       // If this is the last attempt or a configuration error, don't retry
       if (attempt === maxRetries || error.message.includes('not configured')) {
+        // Publish failure metric
+        await publishCrossAccountMetric('CrossAccountFailure', 1, command.environment);
+        
+        // Send alert for persistent cross-account failures
+        if (attempt === maxRetries) {
+          await slack.sendSlackAlert(
+            `Cross-account routing failed after ${maxRetries} attempts: ${error.message}`,
+            ENVIRONMENT,
+            'critical'
+          );
+        }
+        
         return {
           success: false,
           error: `Cross-account VPN operation failed after ${attempt} attempts: ${error.message}`
         };
       }
       
-      // Wait before retrying
+      // Wait before retrying with exponential backoff
       if (attempt < maxRetries) {
-        console.log(`Retrying in ${retryDelay}ms...`);
-        await new Promise(resolve => setTimeout(resolve, retryDelay));
+        const delay = Math.min(baseRetryDelay * Math.pow(2, attempt - 1), maxRetryDelay);
+        console.log(`Retrying in ${delay}ms... (attempt ${attempt + 1}/${maxRetries})`);
+        await new Promise(resolve => setTimeout(resolve, delay));
       }
     }
   }
@@ -291,4 +543,38 @@ async function invokeProductionViaAPIGateway(command: VpnCommandRequest): Promis
     success: false,
     error: 'Cross-account VPN operation failed: Maximum retries exceeded'
   };
+}
+
+// Publish cross-account routing metrics
+async function publishCrossAccountMetric(
+  metricName: string, 
+  value: number, 
+  targetEnvironment: string
+): Promise<void> {
+  try {
+    await cloudwatch.putMetricData({
+      Namespace: 'VPN/CrossAccount',
+      MetricData: [{
+        MetricName: metricName,
+        Value: value,
+        Unit: 'Count',
+        Dimensions: [
+          {
+            Name: 'SourceEnvironment',
+            Value: ENVIRONMENT
+          },
+          {
+            Name: 'TargetEnvironment', 
+            Value: targetEnvironment
+          }
+        ],
+        Timestamp: new Date()
+      }]
+    }).promise();
+    
+    console.log(`Published cross-account metric ${metricName}: ${value}`);
+  } catch (error) {
+    console.error('Failed to publish cross-account metric:', error);
+    // Don't throw as metric failure shouldn't break the main operation
+  }
 }

@@ -36,10 +36,10 @@ export interface SlackCommand {
   trigger_id: string;
 }
 
-// Parsed VPN command
+// Parsed VPN command (Enhanced for Epic 3.2)
 export interface VpnCommandRequest {
-  action: 'open' | 'close' | 'check';
-  environment: 'staging' | 'production';
+  action: 'open' | 'close' | 'check' | 'admin-override' | 'admin-clear-override' | 'admin-cooldown' | 'admin-force-close' | 'cost-savings' | 'cost-analysis';
+  environment: 'staging' | 'production' | string; // Allow string for report types
   user: string;
   requestId: string;
 }
@@ -49,6 +49,12 @@ export interface CrossAccountRequest {
   command: VpnCommandRequest;
   requestId: string;
   sourceAccount: string;
+  crossAccountMetadata?: {
+    requestTimestamp: string;
+    sourceEnvironment: string;
+    routingAttempt: number;
+    userAgent?: string;
+  };
 }
 
 // Lambda response format
@@ -66,4 +72,37 @@ export interface MetricData {
   unit: string;
   environment: string;
   timestamp?: Date;
+}
+
+// Cross-account routing metrics
+export interface CrossAccountMetrics {
+  totalRequests: number;
+  successfulRequests: number;
+  failedRequests: number;
+  averageResponseTime: number;
+  lastRequestTimestamp: string;
+  routingErrors: { [errorType: string]: number };
+}
+
+// Epic 4.1: Enhanced logging and audit interfaces
+export interface LogEntry {
+  timestamp: string;
+  level: 'DEBUG' | 'INFO' | 'WARN' | 'ERROR' | 'CRITICAL';
+  message: string;
+  correlationId: string;
+  requestId: string;
+  environment: string;
+  functionName: string;
+  metadata?: any;
+}
+
+export interface AuditTrail {
+  operation: string;
+  resource: string;
+  outcome: 'success' | 'failure' | 'partial';
+  user?: string;
+  timestamp: string;
+  details: any;
+  correlationId: string;
+  environment: string;
 }

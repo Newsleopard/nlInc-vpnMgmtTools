@@ -127,12 +127,18 @@ deploy_production() {
     print_status "🚀 Deploying production environment..."
     
     local profile=${PRODUCTION_PROFILE:-"production"}
+    local use_secure_params=${USE_SECURE_PARAMETERS:-false}
+    
     validate_aws_profile "$profile" "production"
     
     cd "$CDK_DIR"
     
-    print_status "Deploying production stack..."
-    ENVIRONMENT=production AWS_PROFILE="$profile" cdk deploy --require-approval never
+    if [ "$use_secure_params" = "true" ]; then
+        deploy_with_secure_parameters "production" "$profile"
+    else
+        print_status "Deploying production stack..."
+        ENVIRONMENT=production AWS_PROFILE="$profile" cdk deploy --require-approval never
+    fi
     
     print_success "✅ Production deployment completed!"
     
@@ -144,7 +150,34 @@ deploy_production() {
         --profile "$profile" 2>/dev/null || echo "")
     
     if [ -n "$PRODUCTION_URL" ]; then
+        # Save production URL for staging deployment
         echo "export PRODUCTION_API_ENDPOINT=\"${PRODUCTION_URL}vpn\"" > "$PROJECT_ROOT/.production-url"
+        
+        # Get API key if it exists
+        API_KEY_ID=$(aws cloudformation describe-stacks \
+            --stack-name VpnAutomationStack-production \
+            --query 'Stacks[0].Outputs[?OutputKey==`ApiKeyId`].OutputValue' \
+            --output text \
+            --profile "$profile" 2>/dev/null || echo "")
+        
+        if [ -n "$API_KEY_ID" ] && [ "$API_KEY_ID" != "None" ]; then
+            API_KEY_VALUE=$(aws apigateway get-api-key \
+                --api-key "$API_KEY_ID" \
+                --include-value \
+                --query 'value' \
+                --output text \
+                --profile "$profile" 2>/dev/null || echo "")
+            
+            if [ -n "$API_KEY_VALUE" ]; then
+                echo "export PRODUCTION_API_KEY=\"$API_KEY_VALUE\"" >> "$PROJECT_ROOT/.production-url"
+                print_success "Production API configuration saved with authentication"
+            else
+                print_warning "Could not retrieve API key value. Staging may not authenticate properly."
+            fi
+        else
+            print_warning "No API key found for production. Cross-account calls will fail."
+        fi
+        
         print_success "Production API URL saved: $PRODUCTION_URL"
     fi
     
@@ -156,6 +189,8 @@ deploy_staging() {
     print_status "🚀 Deploying staging environment..."
     
     local profile=${STAGING_PROFILE:-"staging"}
+    local use_secure_params=${USE_SECURE_PARAMETERS:-false}
+    
     validate_aws_profile "$profile" "staging"
     
     print_status "📡 Getting production API Gateway URL..."
@@ -172,6 +207,12 @@ deploy_staging() {
     if [ -z "$PRODUCTION_URL" ] && [ -f "$PROJECT_ROOT/.production-url" ]; then
         source "$PROJECT_ROOT/.production-url"
         PRODUCTION_URL=$(echo "$PRODUCTION_API_ENDPOINT" | sed 's/vpn$//')
+        
+        if [ -n "$PRODUCTION_API_KEY" ]; then
+            print_status "✅ Found saved production API configuration with authentication"
+        else
+            print_warning "⚠️  Production API URL found but no API key. Cross-account authentication may fail."
+        fi
     fi
     
     if [ -z "$PRODUCTION_URL" ] || [ "$PRODUCTION_URL" = "None" ]; then
@@ -184,15 +225,37 @@ deploy_staging() {
     
     cd "$CDK_DIR"
     
-    print_status "🚀 Deploying staging environment..."
-    
-    PRODUCTION_API_ENDPOINT="${PRODUCTION_URL}vpn" \
-    ENVIRONMENT=staging \
-    AWS_PROFILE="$profile" \
-    cdk deploy --require-approval never
+    if [ "$use_secure_params" = "true" ]; then
+        print_status "🔒 Deploying staging with secure parameter management..."
+        deploy_with_secure_parameters "staging" "$profile"
+    else
+        print_status "🚀 Deploying staging environment..."
+        
+        # Set up environment variables for staging deployment
+        export PRODUCTION_API_ENDPOINT="${PRODUCTION_URL}vpn"
+        export ENVIRONMENT=staging
+        export AWS_PROFILE="$profile"
+        
+        # Include API key if available
+        if [ -n "$PRODUCTION_API_KEY" ]; then
+            export PRODUCTION_API_KEY="$PRODUCTION_API_KEY"
+            print_status "🔐 Deploying with production API authentication"
+        else
+            print_warning "⚠️  Deploying without production API key - cross-account calls will fail"
+        fi
+        
+        cdk deploy --require-approval never
+    fi
     
     print_success "✅ Staging deployment completed!"
     print_success "🔗 Staging will route production commands to: $PRODUCTION_URL"
+    
+    if [ -n "$PRODUCTION_API_KEY" ]; then
+        print_success "🔐 Cross-account authentication configured successfully"
+    else
+        print_warning "⚠️  Cross-account authentication not configured - production commands will fail"
+        print_warning "   To fix this, ensure production environment creates an API key"
+    fi
 }
 
 # Function to deploy both environments
@@ -250,21 +313,36 @@ show_usage() {
     echo "  diff-staging     Show differences for staging deployment"
     echo "  diff-production  Show differences for production deployment"
     echo "  status           Show deployment status"
+    echo "  validate-routing Validate cross-account routing configuration"
+    echo ""
+    echo "Options:"
+    echo "  --secure-parameters  Enable Epic 5.1 secure parameter management with KMS encryption"
     echo ""
     echo "Environment Variables:"
-    echo "  STAGING_PROFILE      AWS profile for staging (default: staging)"
-    echo "  PRODUCTION_PROFILE   AWS profile for production (default: production)"
+    echo "  STAGING_PROFILE         AWS profile for staging (default: staging)"
+    echo "  PRODUCTION_PROFILE      AWS profile for production (default: production)"
+    echo "  USE_SECURE_PARAMETERS   Enable secure parameter management (default: false)"
     echo ""
     echo "Examples:"
-    echo "  $0 production                    # Deploy production environment"
-    echo "  $0 staging                       # Deploy staging environment"
-    echo "  $0 both                          # Deploy both environments"
-    echo "  STAGING_PROFILE=dev $0 staging   # Use custom profile"
+    echo "  $0 production                           # Deploy production environment"
+    echo "  $0 staging                              # Deploy staging environment"
+    echo "  $0 both                                 # Deploy both environments"
+    echo "  $0 production --secure-parameters       # Deploy with Epic 5.1 secure parameters"
+    echo "  USE_SECURE_PARAMETERS=true $0 both      # Deploy both with secure parameters"
+    echo "  STAGING_PROFILE=dev $0 staging          # Use custom profile"
+    echo ""
+    echo "Epic 5.1 - Secure Parameter Management:"
+    echo "  Use --secure-parameters flag to enable:"
+    echo "  • KMS encryption for sensitive parameters"
+    echo "  • SecureString parameter types for secrets"
+    echo "  • Least-privilege IAM policies"
+    echo "  • Parameter validation and configuration management"
     echo ""
     echo "First-time setup:"
     echo "  1. Configure AWS profiles: aws configure --profile production"
-    echo "  2. Deploy production: $0 production"
-    echo "  3. Deploy staging: $0 staging"
+    echo "  2. Deploy production: $0 production --secure-parameters"
+    echo "  3. Set up parameters: scripts/setup-parameters.sh production --secure"
+    echo "  4. Deploy staging: $0 staging --secure-parameters"
 }
 
 # Function to show diff
@@ -307,6 +385,78 @@ show_diff() {
     fi
 }
 
+# Function to validate cross-account routing configuration
+validate_cross_account_routing() {
+    print_status "Validating cross-account routing configuration..."
+    
+    local staging_profile=${STAGING_PROFILE:-"staging"}
+    local production_profile=${PRODUCTION_PROFILE:-"production"}
+    
+    # Check if both environments are deployed
+    if ! aws cloudformation describe-stacks --stack-name VpnAutomationStack-production --profile "$production_profile" &> /dev/null; then
+        print_error "Production environment not deployed - cross-account routing will fail"
+        return 1
+    fi
+    
+    if ! aws cloudformation describe-stacks --stack-name VpnAutomationStack-staging --profile "$staging_profile" &> /dev/null; then
+        print_error "Staging environment not deployed - cross-account routing not applicable"
+        return 1
+    fi
+    
+    # Get production API URL
+    PRODUCTION_URL=$(aws cloudformation describe-stacks \
+        --stack-name VpnAutomationStack-production \
+        --query 'Stacks[0].Outputs[?OutputKey==`ApiGatewayUrl`].OutputValue' \
+        --output text \
+        --profile "$production_profile" 2>/dev/null)
+    
+    if [ -z "$PRODUCTION_URL" ] || [ "$PRODUCTION_URL" = "None" ]; then
+        print_error "Could not retrieve production API URL"
+        return 1
+    fi
+    
+    # Check if API key exists
+    API_KEY_ID=$(aws cloudformation describe-stacks \
+        --stack-name VpnAutomationStack-production \
+        --query 'Stacks[0].Outputs[?OutputKey==`ApiKeyId`].OutputValue' \
+        --output text \
+        --profile "$production_profile" 2>/dev/null || echo "")
+    
+    if [ -z "$API_KEY_ID" ] || [ "$API_KEY_ID" = "None" ]; then
+        print_warning "No API key found in production - authentication will fail"
+    else
+        print_success "API key found: $API_KEY_ID"
+    fi
+    
+    # Test API connectivity (if curl is available)
+    if command -v curl &> /dev/null && [ -n "$API_KEY_ID" ]; then
+        API_KEY_VALUE=$(aws apigateway get-api-key \
+            --api-key "$API_KEY_ID" \
+            --include-value \
+            --query 'value' \
+            --output text \
+            --profile "$production_profile" 2>/dev/null || echo "")
+        
+        if [ -n "$API_KEY_VALUE" ]; then
+            print_status "Testing production API connectivity..."
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+                -X POST \
+                -H "Content-Type: application/json" \
+                -H "X-API-Key: $API_KEY_VALUE" \
+                -d '{"command":{"action":"check","environment":"production","user":"test","requestId":"health-check"},"sourceAccount":"staging"}' \
+                "${PRODUCTION_URL}vpn" 2>/dev/null || echo "000")
+            
+            if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "400" ]; then
+                print_success "Production API is reachable (HTTP $HTTP_CODE)"
+            else
+                print_warning "Production API returned HTTP $HTTP_CODE - check network/permissions"
+            fi
+        fi
+    fi
+    
+    print_success "Cross-account routing validation completed"
+}
+
 # Function to show deployment status
 show_status() {
     print_status "Checking deployment status..."
@@ -345,9 +495,154 @@ show_status() {
     fi
 }
 
+# Function to deploy with secure parameter management (Epic 5.1)
+deploy_with_secure_parameters() {
+    local environment=$1
+    local profile=$2
+    
+    print_status "🔒 Epic 5.1: Deploying with secure parameter management..."
+    
+    cd "$CDK_DIR"
+    
+    # First, deploy the secure parameter management stack
+    print_status "Deploying secure parameter management stack..."
+    ENVIRONMENT="$environment" AWS_PROFILE="$profile" cdk deploy VpnSecureParameterStack-"$environment" --require-approval never
+    
+    # Then deploy the main VPN automation stack with secure parameter integration
+    print_status "Deploying VPN automation stack with secure parameter integration..."
+    if [ "$environment" = "staging" ]; then
+        # For staging, include production URL if available
+        if [ -n "$PRODUCTION_API_ENDPOINT" ]; then
+            PRODUCTION_API_ENDPOINT="$PRODUCTION_API_ENDPOINT" \
+            PRODUCTION_API_KEY="$PRODUCTION_API_KEY" \
+            ENVIRONMENT="$environment" \
+            AWS_PROFILE="$profile" \
+            cdk deploy VpnAutomationStack-"$environment" --require-approval never
+        else
+            ENVIRONMENT="$environment" AWS_PROFILE="$profile" cdk deploy VpnAutomationStack-"$environment" --require-approval never
+        fi
+    else
+        ENVIRONMENT="$environment" AWS_PROFILE="$profile" cdk deploy VpnAutomationStack-"$environment" --require-approval never
+    fi
+    
+    print_success "✅ Secure parameter management deployment completed!"
+    
+    # Validate configuration
+    print_status "🔍 Running post-deployment validation..."
+    validate_secure_parameters "$environment" "$profile"
+}
+
+# Function to validate secure parameters (Epic 5.1)
+validate_secure_parameters() {
+    local environment=$1
+    local profile=$2
+    
+    print_status "Validating secure parameter configuration..."
+    
+    # Check if KMS key exists
+    KMS_KEY_ALIAS="vpn-parameter-store-$environment"
+    if aws kms describe-key --key-id "alias/$KMS_KEY_ALIAS" --profile "$profile" &> /dev/null; then
+        print_success "✅ KMS key found: $KMS_KEY_ALIAS"
+    else
+        print_error "❌ KMS key not found: $KMS_KEY_ALIAS"
+        return 1
+    fi
+    
+    # Check required parameters
+    local required_params=(
+        "/vpn/slack/webhook"
+        "/vpn/slack/signing_secret"
+        "/vpn/config/endpoint_id/$environment"
+        "/vpn/config/subnet_id/$environment"
+    )
+    
+    local missing_params=()
+    for param in "${required_params[@]}"; do
+        if ! aws ssm get-parameter --name "$param" --profile "$profile" &> /dev/null; then
+            missing_params+=("$param")
+        fi
+    done
+    
+    if [ ${#missing_params[@]} -eq 0 ]; then
+        print_success "✅ All required parameters exist"
+    else
+        print_warning "⚠️  Missing parameters that need to be set manually:"
+        for param in "${missing_params[@]}"; do
+            echo "   - $param"
+        done
+        print_status "Use 'scripts/setup-parameters.sh $environment --secure' to configure these"
+    fi
+}
+
+# Function to show deployment status with secure parameters
+show_deployment_status() {
+    print_status "📊 VPN Cost Automation Deployment Status"
+    echo ""
+    
+    local staging_profile=${STAGING_PROFILE:-"staging"}
+    local production_profile=${PRODUCTION_PROFILE:-"production"}
+    
+    # Check production environment
+    print_status "Production Environment:"
+    if aws cloudformation describe-stacks --stack-name VpnAutomationStack-production --profile "$production_profile" &> /dev/null; then
+        print_success "  ✅ VPN Automation Stack: Deployed"
+        
+        # Check secure parameter stack
+        if aws cloudformation describe-stacks --stack-name VpnSecureParameterStack-production --profile "$production_profile" &> /dev/null; then
+            print_success "  ✅ Secure Parameter Stack: Deployed (Epic 5.1)"
+        else
+            print_warning "  ⚠️  Secure Parameter Stack: Not deployed (can be added with --secure-parameters)"
+        fi
+    else
+        print_warning "  ❌ Production not deployed"
+    fi
+    
+    echo ""
+    
+    # Check staging environment
+    print_status "Staging Environment:"
+    if aws cloudformation describe-stacks --stack-name VpnAutomationStack-staging --profile "$staging_profile" &> /dev/null; then
+        print_success "  ✅ VPN Automation Stack: Deployed"
+        
+        # Check secure parameter stack
+        if aws cloudformation describe-stacks --stack-name VpnSecureParameterStack-staging --profile "$staging_profile" &> /dev/null; then
+            print_success "  ✅ Secure Parameter Stack: Deployed (Epic 5.1)"
+        else
+            print_warning "  ⚠️  Secure Parameter Stack: Not deployed (can be added with --secure-parameters)"
+        fi
+    else
+        print_warning "  ❌ Staging not deployed"
+    fi
+}
+
+# Parse command line arguments
+parse_arguments() {
+    USE_SECURE_PARAMETERS=false
+    
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --secure-parameters)
+                USE_SECURE_PARAMETERS=true
+                export USE_SECURE_PARAMETERS=true
+                shift
+                ;;
+            *)
+                # Store non-option arguments
+                ARGS+=("$1")
+                shift
+                ;;
+        esac
+    done
+}
+
 # Main script logic
 main() {
-    case "${1:-}" in
+    # Parse all arguments first
+    ARGS=()
+    parse_arguments "$@"
+    
+    # Use the parsed command
+    case "${ARGS[0]:-}" in
         "production")
             check_prerequisites
             setup_cdk_dependencies
@@ -380,7 +675,10 @@ main() {
             show_diff "production"
             ;;
         "status")
-            show_status
+            show_deployment_status
+            ;;
+        "validate-routing")
+            validate_cross_account_routing
             ;;
         *)
             show_usage
@@ -389,4 +687,5 @@ main() {
     esac
 }
 
+# Run main function with all arguments
 main "$@"

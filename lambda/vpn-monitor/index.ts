@@ -6,6 +6,7 @@ import { VpnState } from '/opt/types';
 import * as vpnManager from '/opt/vpnManager';
 import * as stateStore from '/opt/stateStore';
 import * as slack from '/opt/slack';
+import { createLogger, withPerformanceLogging } from '/opt/logger';
 
 const cloudwatch = new CloudWatch();
 
@@ -19,18 +20,37 @@ export const handler = async (
   event: ScheduledEvent,
   context: Context
 ): Promise<void> => {
-  console.log('VPN Monitor Lambda triggered', {
+  // Initialize structured logger for Epic 4.1
+  const logger = createLogger({
     requestId: context.awsRequestId,
     environment: ENVIRONMENT,
+    functionName: 'vpn-monitor',
+    correlationId: event.id
+  });
+  
+  logger.info('VPN Monitor Lambda triggered', {
     idleThreshold: IDLE_MINUTES,
-    eventTime: event.time
+    cooldownMinutes: COOLDOWN_MINUTES,
+    businessHoursEnabled: BUSINESS_HOURS_ENABLED,
+    timezone: BUSINESS_HOURS_TIMEZONE,
+    eventTime: event.time,
+    eventSource: event.source
   });
 
   try {
     // Validate Parameter Store configuration
-    const isValid = await stateStore.validateParameterStore();
+    const isValid = await withPerformanceLogging(
+      'validateParameterStore',
+      stateStore.validateParameterStore,
+      logger
+    )();
+    
     if (!isValid) {
-      console.error('Parameter Store validation failed - some required parameters are missing');
+      logger.critical('Parameter Store validation failed - some required parameters are missing', null, {
+        environment: ENVIRONMENT,
+        validationStep: 'parameter_store'
+      });
+      
       await slack.sendSlackAlert(
         'VPN Monitor: Parameter Store validation failed. Please check configuration.',
         ENVIRONMENT,
@@ -38,11 +58,22 @@ export const handler = async (
       );
       return;
     }
+    
+    logger.debug('Parameter Store validation successful');
 
     // Validate VPN endpoint exists and is accessible
-    const endpointValid = await vpnManager.validateEndpoint();
+    const endpointValid = await withPerformanceLogging(
+      'validateEndpoint',
+      vpnManager.validateEndpoint,
+      logger
+    )();
+    
     if (!endpointValid) {
-      console.error('VPN endpoint validation failed');
+      logger.critical('VPN endpoint validation failed', null, {
+        environment: ENVIRONMENT,
+        validationStep: 'vpn_endpoint'
+      });
+      
       await slack.sendSlackAlert(
         'VPN Monitor: VPN endpoint validation failed. Please check endpoint configuration.',
         ENVIRONMENT,
@@ -50,12 +81,31 @@ export const handler = async (
       );
       return;
     }
+    
+    logger.debug('VPN endpoint validation successful');
 
     // Fetch current VPN status
-    const status = await vpnManager.fetchStatus();
-    const state = await stateStore.readState();
+    const status = await withPerformanceLogging(
+      'fetchVpnStatus',
+      vpnManager.fetchStatus,
+      logger
+    )();
     
-    console.log('Current VPN status:', {
+    const state = await withPerformanceLogging(
+      'readVpnState', 
+      stateStore.readState,
+      logger
+    )();
+    
+    logger.info('Current VPN status', {
+      associated: status.associated,
+      activeConnections: status.activeConnections,
+      lastActivity: status.lastActivity,
+      endpointId: status.endpointId,
+      subnetId: status.subnetId
+    });
+    
+    logger.audit('VPN status check', 'vpn_status', 'success', {
       associated: status.associated,
       activeConnections: status.activeConnections,
       lastActivity: status.lastActivity,
@@ -63,23 +113,37 @@ export const handler = async (
     });
 
     // Publish current status metrics
-    await publishStatusMetrics(status);
+    await withPerformanceLogging(
+      'publishStatusMetrics',
+      publishStatusMetrics,
+      logger
+    )(status);
 
     // Check if VPN is associated and potentially idle
     if (!status.associated) {
-      console.log('VPN is already disassociated, no action needed');
+      logger.info('VPN is already disassociated, no action needed', {
+        monitoringCycle: 'completed',
+        action: 'none_required'
+      });
       return;
     }
 
     // Check if there are active connections
     if (status.activeConnections > 0) {
-      console.log(`VPN has ${status.activeConnections} active connections, not idle`);
+      logger.info('VPN has active connections, not idle', {
+        activeConnections: status.activeConnections,
+        action: 'maintaining_activity'
+      });
       
       // Update last activity since there are active connections
-      await vpnManager.updateLastActivity();
+      await withPerformanceLogging(
+        'updateLastActivity',
+        vpnManager.updateLastActivity,
+        logger
+      )();
       
       // Reset cooldown if VPN is actively being used
-      await clearCooldownTimestamp();
+      await clearCooldownTimestamp(logger);
       return;
     }
 
@@ -107,24 +171,56 @@ export const handler = async (
       return;
     }
 
-    // Check business hours constraint (optional safety mechanism)
+    // Check for administrative override
+    if (await hasAdministrativeOverride()) {
+      console.log('Skipping auto-disassociation due to administrative override');
+      await slack.sendSlackNotification(
+        `🛑 VPN ${ENVIRONMENT} auto-disassociation skipped due to administrative override. Use \`/vpn admin clear-override ${ENVIRONMENT}\` to re-enable.`,
+        `#vpn-alerts`
+      );
+      await publishMetric('AdministrativeOverrideSkips', 1);
+      return;
+    }
+    
+    // Check business hours constraint (enhanced safety mechanism)
     if (BUSINESS_HOURS_ENABLED && isBusinessHours()) {
       console.log('Skipping auto-disassociation during business hours');
+      
+      // Enhanced business hours notification with cost impact
+      const costProjection = await calculateCostSavings(idleTimeMinutes);
       await slack.sendSlackNotification(
-        `⚠️ VPN ${ENVIRONMENT} has been idle for ${idleTimeMinutes} minutes but auto-close is disabled during business hours (${BUSINESS_HOURS_TIMEZONE})`,
+        `⏰ **Business Hours Protection** ${ENVIRONMENT === 'production' ? '🔴' : '🟡'}\n` +
+        `🕒 **Current Time**: ${new Date().toLocaleTimeString()} ${BUSINESS_HOURS_TIMEZONE}\n` +
+        `⏱️ **Idle Duration**: ${idleTimeMinutes} minutes (threshold: ${IDLE_MINUTES}min)\n` +
+        `💰 **Potential Savings**: $${costProjection.hourly}/hour\n` +
+        `🛡️ **Action**: Auto-close disabled during business hours\n` +
+        `📝 **Note**: VPN will auto-close at 6 PM or use \`/vpn close ${ENVIRONMENT}\` manually`,
         `#vpn-${ENVIRONMENT}`
       );
       
-      // Publish metric for business hours skips
+      // Publish metric for business hours skips with cost impact
       await publishMetric('BusinessHoursSkips', 1);
+      await publishMetric('BusinessHoursSkipCostImpact', parseFloat(costProjection.hourly));
       return;
     }
 
-    // Check cooldown period to prevent rapid cycling
+    // Check enhanced cooldown period to prevent rapid cycling
     if (await isInCooldownPeriod()) {
       const remainingCooldown = await getRemainingCooldownMinutes();
       console.log(`Skipping auto-disassociation - still in cooldown period (${remainingCooldown} minutes remaining)`);
+      
+      // Enhanced cooldown notification with context
+      await slack.sendSlackNotification(
+        `⏳ **Cooldown Protection Active** ${ENVIRONMENT === 'production' ? '🔴' : '🟡'}\n` +
+        `⏱️ **Remaining**: ${Math.ceil(remainingCooldown)} minutes\n` +
+        `🔄 **Purpose**: Prevents rapid on/off cycling\n` +
+        `📈 **Current Idle**: ${idleTimeMinutes} minutes\n` +
+        `💡 **Tip**: Use \`/vpn close ${ENVIRONMENT}\` for immediate shutdown`,
+        `#vpn-${ENVIRONMENT}`
+      );
+      
       await publishMetric('CooldownSkips', 1);
+      await publishMetric('CooldownRemainingMinutes', remainingCooldown);
       return;
     }
 
@@ -137,17 +233,29 @@ export const handler = async (
       // Record cooldown timestamp to prevent rapid cycling
       await recordCooldownTimestamp();
       
-      // Publish auto-disassociation metric with additional context
+      // Calculate detailed cost savings
+      const costSavings = await calculateCostSavings(idleTimeMinutes);
+      
+      // Publish enhanced auto-disassociation metrics
       await publishMetric('IdleSubnetDisassociations', 1);
       await publishMetric('IdleMinutesWhenDisassociated', idleTimeMinutes);
+      await publishMetric('AutoDisassociationTriggerCount', 1);
       
-      // Send Slack notification about automatic action
+      // Track cumulative savings
+      await trackCumulativeSavings(costSavings);
+      
+      // Publish cost savings metrics
+      await publishCostSavingsMetrics(costSavings, idleTimeMinutes);
+      
+      // Send enhanced Slack notification about automatic action
       const environmentEmoji = ENVIRONMENT === 'production' ? '🔴' : '🟡';
-      const costSavingsMessage = calculateHourlyCostSavings();
       await slack.sendSlackNotification(
-        `💰 VPN ${environmentEmoji} ${ENVIRONMENT} was idle for ${idleTimeMinutes} minutes. ` +
-        `Subnets automatically disassociated to save costs (~$${costSavingsMessage}/hour saved). ` +
-        `Use \`/vpn open ${ENVIRONMENT}\` to re-enable.`,
+        `💰 **Auto-Cost Optimization** ${environmentEmoji} **${ENVIRONMENT}**\n` +
+        `📊 **Idle Time**: ${idleTimeMinutes} minutes (threshold: ${IDLE_MINUTES}min)\n` +
+        `💵 **Cost Savings**: $${costSavings.hourly}/hour (~$${costSavings.total} saved for idle period)\n` +
+        `🔧 **Action**: Subnets automatically disassociated\n` +
+        `📱 **Re-enable**: Use \`/vpn open ${ENVIRONMENT}\` when needed\n` +
+        `⏰ **Cooldown**: ${COOLDOWN_MINUTES} minutes to prevent rapid cycling`,
         `#vpn-${ENVIRONMENT}`
       );
       
@@ -290,23 +398,124 @@ async function hasRecentManualActivity(): Promise<boolean> {
     
     // Consider manual activity "recent" if it happened within the last 15 minutes
     const manualActivityGracePeriod = 15;
-    return timeSinceManualActivity < manualActivityGracePeriod;
+    const isRecent = timeSinceManualActivity < manualActivityGracePeriod;
+    
+    if (isRecent) {
+      console.log(`Recent manual activity detected: ${timeSinceManualActivity.toFixed(1)} minutes ago`);
+      
+      // Enhanced manual activity notification
+      await slack.sendSlackNotification(
+        `👤 **Manual Activity Detected** ${ENVIRONMENT === 'production' ? '🔴' : '🟡'}\n` +
+        `🕰️ **Last Activity**: ${timeSinceManualActivity.toFixed(1)} minutes ago\n` +
+        `⏱️ **Grace Period**: ${manualActivityGracePeriod} minutes\n` +
+        `🔒 **Protection**: Auto-close temporarily disabled\n` +
+        `📝 **Note**: Auto-monitoring will resume after grace period`,
+        `#vpn-${ENVIRONMENT}`
+      );
+    }
+    
+    return isRecent;
   } catch (error) {
     console.log('No manual activity timestamp found');
     return false;
   }
 }
 
-// Calculate estimated hourly cost savings from disassociation
+// Check for administrative override to disable auto-disassociation
+async function hasAdministrativeOverride(): Promise<boolean> {
+  try {
+    const overrideParam = await stateStore.readParameter(`/vpn/automation/admin_override/${ENVIRONMENT}`);
+    if (!overrideParam) {
+      return false;
+    }
+    
+    // Check if override is still valid (has expiration)
+    if (overrideParam.includes('expires:')) {
+      const expiryMatch = overrideParam.match(/expires:(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})/);
+      if (expiryMatch) {
+        const expiryTime = new Date(expiryMatch[1]);
+        const now = new Date();
+        
+        if (now > expiryTime) {
+          console.log('Administrative override has expired, clearing it');
+          await stateStore.writeParameter(`/vpn/automation/admin_override/${ENVIRONMENT}`, '');
+          return false;
+        }
+      }
+    }
+    
+    return overrideParam === 'enabled' || overrideParam.startsWith('enabled:');
+  } catch (error) {
+    console.log('No administrative override found');
+    return false;
+  }
+}
+
+// Enhanced cost savings calculation with regional pricing and subnet detection
+async function calculateCostSavings(idleTimeMinutes: number): Promise<{ hourly: string; total: string; details: any }> {
+  try {
+    // AWS Client VPN pricing varies by region and includes multiple components
+    const regionalPricing: { [key: string]: { subnetAssociation: number; endpointHour: number } } = {
+      'us-east-1': { subnetAssociation: 0.10, endpointHour: 0.05 },
+      'us-west-2': { subnetAssociation: 0.10, endpointHour: 0.05 },
+      'eu-west-1': { subnetAssociation: 0.12, endpointHour: 0.06 },
+      'ap-southeast-1': { subnetAssociation: 0.15, endpointHour: 0.07 },
+      'default': { subnetAssociation: 0.10, endpointHour: 0.05 }
+    };
+    
+    const region = process.env.AWS_REGION || 'default';
+    const pricing = regionalPricing[region] || regionalPricing['default'];
+    
+    // Try to get actual subnet count from VPN configuration
+    let subnetCount = 1; // Default fallback
+    try {
+      const config = await stateStore.readConfig();
+      // If SUBNET_ID contains comma-separated values, count them
+      if (config.SUBNET_ID && config.SUBNET_ID.includes(',')) {
+        subnetCount = config.SUBNET_ID.split(',').length;
+      }
+    } catch (error) {
+      console.log('Could not determine subnet count, using default of 1');
+    }
+    
+    // Calculate different cost components
+    const hourlySubnetCost = pricing.subnetAssociation * subnetCount;
+    const hourlyEndpointCost = pricing.endpointHour; // This continues even when disassociated
+    const totalHourlySavings = hourlySubnetCost; // Only subnet association is saved
+    
+    // Calculate total savings for the idle period
+    const idleHours = idleTimeMinutes / 60;
+    const totalSavingsForPeriod = totalHourlySavings * idleHours;
+    
+    const details = {
+      region,
+      subnetCount,
+      idleHours: idleHours.toFixed(2),
+      costPerSubnetPerHour: pricing.subnetAssociation,
+      endpointHourlyChargesContinue: pricing.endpointHour,
+      actualSavingsPerHour: totalHourlySavings
+    };
+    
+    return {
+      hourly: totalHourlySavings.toFixed(2),
+      total: totalSavingsForPeriod.toFixed(2),
+      details
+    };
+  } catch (error) {
+    console.error('Error calculating cost savings:', error);
+    // Fallback to simple calculation
+    const simpleSavings = (0.10 * 1).toFixed(2);
+    return {
+      hourly: simpleSavings,
+      total: (parseFloat(simpleSavings) * (idleTimeMinutes / 60)).toFixed(2),
+      details: { error: 'Calculation failed, using fallback estimate' }
+    };
+  }
+}
+
+// Legacy function for backward compatibility
 function calculateHourlyCostSavings(): string {
-  // AWS Client VPN charges per associated subnet per hour
-  // Typical cost is around $0.10 per subnet association per hour
-  // This is a rough estimate - actual costs may vary by region
-  const costPerSubnetPerHour = 0.10;
-  const estimatedSubnets = 1; // Could be enhanced to read actual subnet count
-  
-  const savings = (costPerSubnetPerHour * estimatedSubnets).toFixed(2);
-  return savings;
+  return '0.10'; // Simple fallback
 }
 
 // Helper function to publish CloudWatch metrics
@@ -345,6 +554,16 @@ async function publishStatusMetrics(status: any): Promise<void> {
       MetricName: 'VpnActiveConnections',
       Value: status.activeConnections,
       Unit: 'Count'
+    },
+    {
+      MetricName: 'VpnUptimeMinutes',
+      Value: status.associated ? 5 : 0, // 5-minute intervals when running
+      Unit: 'Count'
+    },
+    {
+      MetricName: 'VpnDowntimeMinutes',
+      Value: !status.associated ? 5 : 0, // 5-minute intervals when stopped
+      Unit: 'Count'
     }
   ];
 
@@ -364,5 +583,145 @@ async function publishStatusMetrics(status: any): Promise<void> {
     console.log('Published status metrics:', metrics.map(m => `${m.MetricName}: ${m.Value}`));
   } catch (error) {
     console.error('Failed to publish status metrics:', error);
+  }
+}
+
+// Publish detailed cost savings metrics for analysis
+async function publishCostSavingsMetrics(costSavings: any, idleMinutes: number): Promise<void> {
+  const metrics = [
+    {
+      MetricName: 'CostSavingsPerHour',
+      Value: parseFloat(costSavings.hourly),
+      Unit: 'Count' // Represents dollars
+    },
+    {
+      MetricName: 'CostSavingsTotal',
+      Value: parseFloat(costSavings.total),
+      Unit: 'Count' // Represents dollars
+    },
+    {
+      MetricName: 'IdleTimeBeforeDisassociation',
+      Value: idleMinutes,
+      Unit: 'Count' // Minutes
+    },
+    {
+      MetricName: 'SubnetCount',
+      Value: costSavings.details.subnetCount || 1,
+      Unit: 'Count'
+    }
+  ];
+
+  try {
+    await cloudwatch.putMetricData({
+      Namespace: 'VPN/CostOptimization',
+      MetricData: metrics.map(metric => ({
+        ...metric,
+        Dimensions: [
+          {
+            Name: 'Environment',
+            Value: ENVIRONMENT
+          },
+          {
+            Name: 'Region',
+            Value: costSavings.details.region || 'unknown'
+          }
+        ],
+        Timestamp: new Date()
+      }))
+    }).promise();
+    
+    console.log('Published cost savings metrics:', metrics.map(m => `${m.MetricName}: ${m.Value}`));
+  } catch (error) {
+    console.error('Failed to publish cost savings metrics:', error);
+  }
+}
+
+// Track cumulative cost savings over time
+async function trackCumulativeSavings(costSavings: any): Promise<void> {
+  try {
+    // Read existing cumulative savings
+    const cumulativeKey = `/vpn/cost_optimization/cumulative_savings/${ENVIRONMENT}`;
+    let cumulativeSavings = 0;
+    
+    try {
+      const existing = await stateStore.readParameter(cumulativeKey);
+      cumulativeSavings = parseFloat(existing) || 0;
+    } catch (error) {
+      console.log('No existing cumulative savings found, starting fresh');
+    }
+    
+    // Add current savings
+    cumulativeSavings += parseFloat(costSavings.total);
+    
+    // Store updated cumulative savings
+    await stateStore.writeParameter(cumulativeKey, cumulativeSavings.toString());
+    
+    // Publish cumulative savings metric
+    await cloudwatch.putMetricData({
+      Namespace: 'VPN/CostOptimization',
+      MetricData: [{
+        MetricName: 'CumulativeSavings',
+        Value: cumulativeSavings,
+        Unit: 'Count',
+        Dimensions: [{
+          Name: 'Environment',
+          Value: ENVIRONMENT
+        }],
+        Timestamp: new Date()
+      }]
+    }).promise();
+    
+    console.log(`Updated cumulative savings: $${cumulativeSavings.toFixed(2)}`);
+    
+    // Track daily savings for reporting
+    await trackDailySavings(parseFloat(costSavings.total));
+    
+  } catch (error) {
+    console.error('Failed to track cumulative savings:', error);
+  }
+}
+
+// Track daily savings for reporting and trending
+async function trackDailySavings(savingsAmount: number): Promise<void> {
+  try {
+    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    const dailyKey = `/vpn/cost_optimization/daily_savings/${ENVIRONMENT}/${today}`;
+    
+    let dailySavings = 0;
+    try {
+      const existing = await stateStore.readParameter(dailyKey);
+      dailySavings = parseFloat(existing) || 0;
+    } catch (error) {
+      console.log(`No existing daily savings found for ${today}`);
+    }
+    
+    dailySavings += savingsAmount;
+    await stateStore.writeParameter(dailyKey, dailySavings.toString());
+    
+    // Publish daily savings metric
+    await cloudwatch.putMetricData({
+      Namespace: 'VPN/CostOptimization',
+      MetricData: [{
+        MetricName: 'DailySavings',
+        Value: dailySavings,
+        Unit: 'Count',
+        Dimensions: [
+          {
+            Name: 'Environment',
+            Value: ENVIRONMENT
+          },
+          {
+            Name: 'Date',
+            Value: today
+          }
+        ],
+        Timestamp: new Date()
+      }]
+    }).promise();
+    
+    console.log(`Updated daily savings for ${today}: $${dailySavings.toFixed(2)}`);
+    
+  } catch (error) {
+    console.error('Failed to track daily savings:', error);
   }
 }
