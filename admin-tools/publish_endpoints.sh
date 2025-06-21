@@ -40,19 +40,9 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
-# 預設配置 (環境感知)
+# 預設配置 (固定桶名稱)
 get_default_bucket_name() {
-    case "$CURRENT_ENVIRONMENT" in
-        staging)
-            echo "staging-vpn-csr-exchange"
-            ;;
-        production)
-            echo "production-vpn-csr-exchange"
-            ;;
-        *)
-            echo "vpn-csr-exchange"
-            ;;
-    esac
+    echo "vpn-csr-exchange"
 }
 
 DEFAULT_BUCKET_NAME="$(get_default_bucket_name)"

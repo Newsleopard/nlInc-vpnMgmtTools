@@ -135,8 +135,8 @@ SUGGESTED_PROFILES="staging,company-staging,dev-staging"
 STAGING_ACCOUNT_ID="123456789012"
 
 # === S3 配置 (零接觸工作流程) ===
-# Staging S3 存儲桶名稱
-STAGING_S3_BUCKET="staging-vpn-csr-exchange"
+# S3 存儲桶名稱 (所有環境使用統一名稱)
+# 注意：現已統一使用 "vpn-csr-exchange" 作為所有環境的 S3 存儲桶名稱
 
 # === VPN 設定 ===
 ENDPOINT_ID="cvpn-endpoint-staging123"
@@ -160,8 +160,8 @@ SUGGESTED_PROFILES="production,company-production,prod"
 PRODUCTION_ACCOUNT_ID="987654321098"
 
 # === S3 配置 (零接觸工作流程) ===
-# Production S3 存儲桶名稱
-PRODUCTION_S3_BUCKET="production-vpn-csr-exchange"
+# S3 存儲桶名稱 (所有環境使用統一名稱)
+# 注意：現已統一使用 "vpn-csr-exchange" 作為所有環境的 S3 存儲桶名稱
 
 # === VPN 設定 ===
 ENDPOINT_ID="cvpn-endpoint-prod456"
@@ -296,7 +296,7 @@ SUGGESTED_PROFILES="staging,company-staging,dev-staging"
 STAGING_ACCOUNT_ID="123456789012"
 
 # === S3 配置 ===
-STAGING_S3_BUCKET="staging-vpn-csr-exchange"
+# 注意：所有環境統一使用 "vpn-csr-exchange" 作為 S3 存儲桶名稱
 
 # === VPN 設定 ===
 ENDPOINT_ID="cvpn-endpoint-staging123"
@@ -324,7 +324,7 @@ SUGGESTED_PROFILES="production,company-production,prod"
 PRODUCTION_ACCOUNT_ID="987654321098"
 
 # === S3 配置 ===
-PRODUCTION_S3_BUCKET="production-vpn-csr-exchange"
+# 注意：所有環境統一使用 "vpn-csr-exchange" 作為 S3 存儲桶名稱
 
 # === VPN 設定 ===
 ENDPOINT_ID="cvpn-endpoint-prod456"

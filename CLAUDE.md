@@ -47,9 +47,8 @@ SUGGESTED_PROFILES="staging,company-staging,dev-staging"
 STAGING_ACCOUNT_ID="123456789012"  # Replace with actual account ID
 PRODUCTION_ACCOUNT_ID="987654321098"  # Replace with actual account ID
 
-# S3 bucket names for zero-touch workflow
-STAGING_S3_BUCKET="staging-vpn-csr-exchange"
-PRODUCTION_S3_BUCKET="production-vpn-csr-exchange"
+# S3 bucket name for zero-touch workflow (unified across all environments)
+# Note: All environments now use the same bucket name: "vpn-csr-exchange"
 ```
 
 ### Profile Operations

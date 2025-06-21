@@ -339,12 +339,12 @@ validate_profile_permissions() {
         staging)
             # Validate staging-specific permissions
             aws ec2 describe-client-vpn-endpoints --profile "$profile" --region "$AWS_REGION" >/dev/null
-            aws s3 ls "s3://$STAGING_S3_BUCKET" --profile "$profile" >/dev/null
+            aws s3 ls "s3://vpn-csr-exchange" --profile "$profile" >/dev/null
             ;;
         production)
             # Validate production-specific permissions
             aws ec2 describe-client-vpn-endpoints --profile "$profile" --region "$AWS_REGION" >/dev/null
-            aws s3 ls "s3://$PRODUCTION_S3_BUCKET" --profile "$profile" >/dev/null
+            aws s3 ls "s3://vpn-csr-exchange" --profile "$profile" >/dev/null
             ;;
     esac
 }
@@ -709,7 +709,7 @@ AWS_REGION=us-east-1
 AWS_PROFILE=default  # or staging
 ENV_AWS_PROFILE=staging  # Environment-specific override
 STAGING_ACCOUNT_ID=111111111111  # For validation
-STAGING_S3_BUCKET=staging-vpn-csr-exchange
+# S3_BUCKET=vpn-csr-exchange  # Unified bucket name for all environments
 ENDPOINT_ID=cvpn-endpoint-123...
 VPN_NAME=staging-vpn
 
@@ -718,7 +718,7 @@ AWS_REGION=us-east-1
 AWS_PROFILE=production  # or prod
 ENV_AWS_PROFILE=production  # Environment-specific override
 PRODUCTION_ACCOUNT_ID=222222222222  # For validation
-PRODUCTION_S3_BUCKET=production-vpn-csr-exchange
+# S3_BUCKET=vpn-csr-exchange  # Unified bucket name for all environments
 ENDPOINT_ID=cvpn-endpoint-456...
 VPN_NAME=production-vpn
 ```

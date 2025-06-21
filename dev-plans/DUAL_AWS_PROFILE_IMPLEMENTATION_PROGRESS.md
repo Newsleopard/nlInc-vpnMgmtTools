@@ -38,8 +38,9 @@ Reference spec: [`DUAL_AWS_ACCOUNT_PROFILE_MANAGEMENT.md`](./DUAL_AWS_ACCOUNT_PR
 ### 1.3 Configuration Updates
 - [x] Add `AWS_PROFILE`, `ENV_AWS_PROFILE` to `configs/staging/staging.env`
 - [x] Add same keys to `configs/production/production.env`
-- [x] Add `STAGING_ACCOUNT_ID`, `STAGING_S3_BUCKET` to staging config
-- [x] Add `PRODUCTION_ACCOUNT_ID`, `PRODUCTION_S3_BUCKET` to production config
+- [x] Add `STAGING_ACCOUNT_ID` to staging config
+- [x] Add `PRODUCTION_ACCOUNT_ID` to production config
+- [x] Unified S3 bucket name `vpn-csr-exchange` for all environments
 - [x] Update template/example docs (configuration complete)
 
 ---
@@ -234,7 +235,7 @@ All phases (1-4) are now complete with comprehensive dual AWS profile management
 
 - `ENV_AWS_PROFILE` - Environment-specific profile override
 - `STAGING_ACCOUNT_ID` / `PRODUCTION_ACCOUNT_ID` - Account validation
-- `STAGING_S3_BUCKET` / `PRODUCTION_S3_BUCKET` - Zero-touch workflow support
+- Unified S3 bucket name `vpn-csr-exchange` - Zero-touch workflow support across all environments
 
 **Phase 3 - Admin Tools Updates:**
 - **Profile-Aware Admin Tools**: All 6 admin tools updated with comprehensive profile awareness
