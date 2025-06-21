@@ -358,4 +358,47 @@ LOG_LEVEL="WARN"
 ./admin-tools/process_csr_batch.sh monitor            # 批次監控
 ```
 
+---
+
+### 團隊成員操作詳細步驟
+
+1. **初始化與產生 CSR**
+   - 執行 `./team_member_setup.sh --init`。
+   - 腳本會自動偵測環境、產生私鑰與 CSR（證書簽署請求）。
+   - CSR 會自動上傳到 S3（如啟用零接觸模式），或提示手動提供給管理員。
+   - 畫面會顯示「請通知管理員」與等待簽署的指示。
+
+2. **等待管理員簽署**
+   - 此時流程暫停，需等待管理員完成簽署。
+   - 可與管理員溝通，確認 CSR 已上傳。
+
+3. **下載簽署後的證書並完成設定**
+   - 當管理員簽署完成並上傳證書後，執行 `./team_member_setup.sh --resume`。
+   - 腳本會自動下載簽署後的證書，並驗證與本地私鑰匹配。
+   - 完成 VPN 設定與憑證導入。
+
+4. **（選用）傳統模式**
+   - 若無法使用 S3，則手動將 CSR 提供給管理員，並手動取得簽署證書後執行 `--resume-cert`。
+
+---
+
+### 管理員操作詳細步驟
+
+1. **監控或下載新 CSR**
+   - 可定期執行 `./admin-tools/process_csr_batch.sh download -e <env>` 下載 S3 上的新 CSR。
+   - 或執行 `./admin-tools/process_csr_batch.sh monitor -e <env>` 進行自動監控，發現新 CSR 會即時顯示。
+
+2. **簽署 CSR**
+   - 使用 `./admin-tools/sign_csr.sh --upload-s3 -e <env> <csr-file>` 單筆簽署並自動上傳。
+   - 或用 `./admin-tools/process_csr_batch.sh process -e <env>` 批次簽署所有待處理 CSR。
+   - 簽署後的證書會自動上傳回 S3，供團隊成員下載。
+
+3. **通知團隊成員**
+   - 目前系統僅於終端顯示「證書已簽署」與 S3 路徑，需人工通知團隊成員可執行 `--resume` 下載證書。
+   - 可考慮整合 Slack/email 通知（需另行開發）。
+
+4. **日誌與審計**
+   - 所有簽署、上傳、下載操作皆會記錄於 logs 目錄，方便日後稽核。
+
+---
 這個設定指南應該能幫助您完成雙 AWS Profile 管理系統的完整配置。如有任何問題，請參考故障排除章節或聯絡系統管理員。
