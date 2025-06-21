@@ -13,19 +13,47 @@ NC='\033[0m' # No Color
 
 # 環境映射函數（相容舊版 bash）
 get_env_display_name() {
-    case "$1" in
-        "staging") echo "Staging Environment 🟡" ;;
-        "production") echo "Production Environment 🔴" ;;
-        *) echo "Unknown Environment" ;;
-    esac
+    local environment="$1"
+    local config_file="$PROJECT_ROOT/configs/$environment/$environment.env"
+    
+    # Try to read from config file first
+    if [ -f "$config_file" ]; then
+        local display_name
+        display_name=$(grep "^ENV_DISPLAY_NAME=" "$config_file" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+        if [ -n "$display_name" ]; then
+            echo "$display_name"
+            return 0
+        fi
+    fi
+    
+    # Fallback to generic name if config not found
+    echo "Environment: $environment"
 }
 
 get_env_aws_profile() {
-    case "$1" in
-        "staging") echo "default" ;;
-        "production") echo "prod" ;;
-        *) echo "" ;;
-    esac
+    local environment="$1"
+    local config_file="$PROJECT_ROOT/configs/$environment/$environment.env"
+    
+    # Try to read from config file first
+    if [ -f "$config_file" ]; then
+        local aws_profile
+        # Check ENV_AWS_PROFILE first (preferred)
+        aws_profile=$(grep "^ENV_AWS_PROFILE=" "$config_file" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+        if [ -n "$aws_profile" ]; then
+            echo "$aws_profile"
+            return 0
+        fi
+        
+        # Fallback to AWS_PROFILE
+        aws_profile=$(grep "^AWS_PROFILE=" "$config_file" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+        if [ -n "$aws_profile" ]; then
+            echo "$aws_profile"
+            return 0
+        fi
+    fi
+    
+    # Fallback to 'default' if nothing found
+    echo "default"
 }
 
 # AWS Profile 檢測功能
@@ -201,17 +229,35 @@ show_team_env_header() {
 # Map environment to suggested profile names
 map_environment_to_profiles() {
     local environment="$1"
+    local config_file="$PROJECT_ROOT/configs/$environment/$environment.env"
     
+    # Try to read from config file first
+    if [ -f "$config_file" ]; then
+        local suggested_profiles
+        suggested_profiles=$(grep "^SUGGESTED_AWS_PROFILES=" "$config_file" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+        if [ -n "$suggested_profiles" ]; then
+            echo "$suggested_profiles"
+            return 0
+        fi
+    fi
+    
+    # Fallback to intelligent defaults based on environment name
     case "$environment" in
-        staging)
+        staging|stg)
             echo "default staging stage"
             ;;
-        production)
+        production|prod|prd)
             echo "production prod prd"
             ;;
+        dev|development)
+            echo "dev development default"
+            ;;
+        test|testing)
+            echo "test testing default"
+            ;;
         *)
-            echo ""
-            return 1
+            # Generic fallback - suggest environment name and common variants
+            echo "$environment default"
             ;;
     esac
 }
@@ -245,6 +291,9 @@ get_env_profile() {
         production)
             echo "production"
             ;;
+        prod)
+            echo "prod"
+            ;;
         *)
             echo "default"
             ;;
@@ -255,17 +304,8 @@ get_env_profile() {
 get_env_default_profile() {
     local environment="$1"
     
-    case "$environment" in
-        staging)
-            echo "default"
-            ;;
-        production)
-            echo "production"
-            ;;
-        *)
-            echo "default"
-            ;;
-    esac
+    # Use the same logic as get_env_aws_profile since they serve the same purpose
+    get_env_aws_profile "$environment"
 }
 
 # Validate profile matches environment account
