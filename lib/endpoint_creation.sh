@@ -439,6 +439,17 @@ _create_aws_client_vpn_endpoint_ec() {
         echo -e "${YELLOW}日誌群組不存在，正在創建...${NC}" >&2
         if aws logs create-log-group --log-group-name "$log_group_name" --region "$aws_region" 2>/dev/null; then
             echo -e "${GREEN}✓ 日誌群組創建成功${NC}" >&2
+            
+            # 設定 30 天保留期間
+            echo -e "${BLUE}設定日誌保留期間為 30 天...${NC}" >&2
+            if aws logs put-retention-policy \
+                --log-group-name "$log_group_name" \
+                --retention-in-days 30 \
+                --region "$aws_region" 2>/dev/null; then
+                echo -e "${GREEN}✓ 日誌保留期間設定完成 (30 天)${NC}" >&2
+            else
+                echo -e "${YELLOW}⚠ 無法設定日誌保留期間，但不影響 VPN 端點創建${NC}" >&2
+            fi
         else
             echo -e "${YELLOW}日誌群組創建失敗，但這不會影響 VPN 端點創建${NC}" >&2
             echo -e "${YELLOW}嘗試不使用日誌群組創建 VPN 端點...${NC}" >&2
@@ -446,6 +457,31 @@ _create_aws_client_vpn_endpoint_ec() {
         fi
     else
         echo -e "${GREEN}✓ 日誌群組已存在${NC}" >&2
+        
+        # 檢查並設定現有日誌群組的保留期間
+        echo -e "${BLUE}檢查現有日誌群組的保留期間...${NC}" >&2
+        local current_retention
+        current_retention=$(aws logs describe-log-groups \
+            --log-group-name-prefix "$log_group_name" \
+            --region "$aws_region" \
+            --query "logGroups[?logGroupName=='$log_group_name'].retentionInDays" \
+            --output text 2>/dev/null)
+        
+        if [ -z "$current_retention" ] || [ "$current_retention" = "None" ] || [ "$current_retention" = "null" ]; then
+            echo -e "${YELLOW}現有日誌群組無保留期間設定，正在設定為 30 天...${NC}" >&2
+            if aws logs put-retention-policy \
+                --log-group-name "$log_group_name" \
+                --retention-in-days 30 \
+                --region "$aws_region" 2>/dev/null; then
+                echo -e "${GREEN}✓ 日誌保留期間設定完成 (30 天)${NC}" >&2
+            else
+                echo -e "${YELLOW}⚠ 無法設定日誌保留期間${NC}" >&2
+            fi
+        elif [ "$current_retention" != "30" ]; then
+            echo -e "${YELLOW}現有保留期間: $current_retention 天，建議設定為 30 天${NC}" >&2
+        else
+            echo -e "${GREEN}✓ 日誌保留期間已設定為 30 天${NC}" >&2
+        fi
     fi
     
     echo -e "${BLUE}創建 Client VPN 端點...${NC}" >&2
