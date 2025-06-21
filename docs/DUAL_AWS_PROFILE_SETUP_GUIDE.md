@@ -401,4 +401,48 @@ LOG_LEVEL="WARN"
    - 所有簽署、上傳、下載操作皆會記錄於 logs 目錄，方便日後稽核。
 
 ---
+
+### S3 CSR 交換桶設置詳細說明（管理員）
+
+1. **建立 S3 存儲桶**
+   - 執行：
+     ```bash
+     ./admin-tools/setup_csr_s3_bucket.sh --publish-assets --create-users
+     ```
+   - 預設會建立 `vpn-csr-exchange` 存儲桶（可用 `-b` 指定名稱），並自動啟用版本控制與 AES256 加密。
+
+2. **設置存儲桶政策**
+   - 自動設置嚴格的 S3 Bucket Policy：
+     - 只允許授權 IAM 用戶上傳 CSR (`csr/`)、下載證書 (`cert/`)
+     - 強制所有上傳必須加密（AES256）
+     - 管理員擁有完整存取權限
+
+3. **建立目錄結構**
+   - 自動建立：
+     - `csr/`：團隊成員上傳 CSR
+     - `cert/`：管理員上傳簽署證書，成員下載
+     - `public/`：CA 證書、端點資訊等公用資產
+     - `log/`：日誌（可選）
+
+4. **設置生命週期政策**
+   - 自動設置 S3 Lifecycle Policy：
+     - `csr/` 內檔案 30 天自動刪除
+     - `cert/` 內檔案 7 天自動刪除
+     - 舊版本自動清理，降低資安風險
+
+5. **產生 IAM 政策範例與自動建立政策**
+   - 自動產生並可選擇建立：
+     - `VPN-CSR-TeamMember-Policy`：允許團隊成員上傳自己的 CSR、下載自己的證書
+     - `VPN-CSR-Admin-Policy`：管理員擁有存儲桶完全存取權
+   - 可用 `--create-users` 自動建立 IAM Policy
+
+6. **發布公用資產**
+   - 可用 `--publish-assets` 或手動執行 `publish_endpoints.sh`，將 CA 證書、VPN 端點資訊上傳到 `public/` 目錄，供團隊成員自動下載。
+
+7. **安全建議**
+   - 僅授權用戶應綁定上述 IAM Policy
+   - 定期檢查 S3 存儲桶內容與日誌
+   - 生命週期政策可降低敏感資料長期暴露風險
+
+---
 這個設定指南應該能幫助您完成雙 AWS Profile 管理系統的完整配置。如有任何問題，請參考故障排除章節或聯絡系統管理員。
