@@ -1,34 +1,52 @@
-# 雙 AWS Profile 設定指南
+# 雙 AWS Profile 設定圖文指南
 
-本指南將引導您完成雙 AWS 帳戶 Profile 管理系統的設定，讓您能夠安全地在 Staging 和 Production 環境之間進行操作。
+> 本指南將以圖文並茂的方式，帶您快速理解與完成雙 AWS 帳戶 Profile 管理系統的設定，讓您安全、直覺地在 Staging 與 Production 環境間切換與操作。
+
+---
 
 ## 目錄
-
-1. [概述](#概述)
+1. [架構總覽（圖解）](#架構總覽圖解)
 2. [前置要求](#前置要求)
-3. [AWS Profile 設定](#aws-profile-設定)
-4. [環境配置](#環境配置)
-5. [管理員設定](#管理員設定)
-6. [團隊成員設定](#團隊成員設定)
-7. [日常操作](#日常操作)
-8. [故障排除](#故障排除)
+3. [Profile 設定與驗證](#profile-設定與驗證)
+4. [環境配置與偏好](#環境配置與偏好)
+5. [管理員與團隊成員操作流程（圖解）](#管理員與團隊成員操作流程圖解)
+6. [日常操作與故障排除](#日常操作與故障排除)
+7. [附錄：範例設定與常用指令](#附錄範例設定與常用指令)
 
-## 概述
+---
 
-雙 AWS Profile 管理系統提供以下功能：
+## 架構總覽（圖解）
 
-### 🎯 核心功能
-- **環境隔離**: 完全分離 Staging 和 Production 環境
-- **自動 Profile 選擇**: 根據環境智能推薦和選擇 AWS Profile
-- **跨帳戶驗證**: 防止在錯誤帳戶中執行操作
-- **零接觸工作流程**: 自動化證書交換和配置下載
-- **安全控制**: Production 環境需要額外確認
+下圖說明雙 AWS Profile 管理的核心架構與資料流：
 
-### 🏗️ 架構優勢
-- **一致性**: 所有工具使用統一的 profile 管理
-- **可追蹤性**: 完整的操作日誌和審計追蹤
-- **靈活性**: 支援自定義 profile 命名約定
-- **安全性**: 多層安全檢查和確認機制
+```mermaid
+architecture-beta
+    group staging(cloud)[Staging AWS 帳戶]
+    group production(cloud)[Production AWS 帳戶]
+    group user(server)[本地開發者/管理員]
+
+    service s3s3(database)[Staging S3] in staging
+    service s3p(database)[Production S3] in production
+    service vpn1(server)[Staging VPN] in staging
+    service vpn2(server)[Production VPN] in production
+    service admin(server)[管理員] in user
+    service member(server)[團隊成員] in user
+
+    admin:R -- L:s3s3
+    admin:R -- L:s3p
+    admin:R -- L:vpn1
+    admin:R -- L:vpn2
+    member:R -- L:s3s3
+    member:R -- L:s3p
+    member:R -- L:vpn1
+    member:R -- L:vpn2
+```
+
+- **Staging/Production AWS 帳戶**：各自擁有獨立的 S3、VPN 端點與 Profile。
+- **管理員/團隊成員**：透過本地工具，根據環境自動選擇正確的 AWS Profile，並與對應資源互動。
+- **Profile 隔離**：每個環境的操作都會自動驗證與隔離，避免誤用。
+
+---
 
 ## 前置要求
 
@@ -48,7 +66,7 @@
   - ACM 證書
   - IAM 用戶和政策
 
-## AWS Profile 設定
+## Profile 設定與驗證
 
 ### 1. 設定 AWS Profiles
 
@@ -97,7 +115,7 @@ aws configure set output json --profile staging
 aws configure set output json --profile production
 ```
 
-## 環境配置
+## 環境配置與偏好
 
 ### 1. 更新環境配置檔案
 
@@ -165,131 +183,54 @@ AWS_REGION="us-east-1"
 ./admin-tools/aws_vpn_admin.sh --set-profile company-production
 ```
 
-## 管理員設定
+## 管理員與團隊成員操作流程（圖解）
 
-### 1. 初始化零接觸工作流程
+下圖說明零接觸工作流程的主要步驟與互動：
 
-#### 建立 S3 存儲桶和 IAM 政策
-
-```bash
-# 切換到 staging 環境
-./vpn_env.sh switch staging
-
-# 建立 staging S3 存儲桶和 IAM 設定
-./admin-tools/setup_csr_s3_bucket.sh --publish-assets --create-users
-
-# 切換到 production 環境  
-./vpn_env.sh switch production
-
-# 建立 production S3 存儲桶和 IAM 設定
-./admin-tools/setup_csr_s3_bucket.sh --publish-assets --create-users
+```mermaid
+flowchart TD
+    A[團隊成員初始化<br>team_member_setup.sh --init] --> B[產生 CSR 並上傳 S3]
+    B --> C[管理員收到通知]
+    C --> D[管理員簽署 CSR<br>sign_csr.sh --upload-s3]
+    D --> E[簽署後的證書上傳 S3]
+    E --> F[團隊成員 resume<br>team_member_setup.sh --resume]
+    F --> G[完成 VPN 設定]
+    style A fill:#e0f7fa
+    style C fill:#ffe082
+    style D fill:#ffe082
+    style G fill:#c8e6c9
 ```
 
-#### 發布公共資產
+- **自動化流程**：團隊成員與管理員皆可透過腳本自動完成大部分操作，減少人為錯誤。
+- **S3 作為交換平台**：CSR 與簽署後證書皆透過 S3 交換，確保安全與可追蹤性。
 
-```bash
-# 發布所有環境的 CA 證書和端點資訊
-./admin-tools/publish_endpoints.sh
+---
 
-# 或分別發布
-./admin-tools/publish_endpoints.sh -e staging
-./admin-tools/publish_endpoints.sh -e production
+以下說明管理員與團隊成員在雙 AWS Profile 管理系統中的操作流程：
+
+```mermaid
+flowchart TD
+    A[開始] --> B{環境類型}
+    B -- Staging --> C[切換到 Staging 環境]
+    B -- Production --> D[切換到 Production 環境]
+    C --> E[設定或確認 AWS Profile]
+    D --> E
+    E --> F{角色}
+    F -- 管理員 --> G[執行管理員任務]
+    F -- 團隊成員 --> H[執行團隊成員任務]
+    G --> I[結束]
+    H --> I
 ```
 
-### 2. 管理工具使用
+- **開始**：所有操作從這裡開始。
+- **環境類型**：根據要操作的環境類型（Staging 或 Production）進行切換。
+- **設定或確認 AWS Profile**：確保使用正確的 AWS Profile 以避免誤操作。
+- **角色**：根據身份角色（管理員或團隊成員）執行相應的任務。
+- **結束**：所有操作結束。
 
-所有管理工具現在都支援環境感知操作：
+---
 
-```bash
-# 環境狀態檢查
-./vpn_env.sh status
-
-# 簽署 CSR (自動使用當前環境的 profile)
-./admin-tools/sign_csr.sh --upload-s3 user.csr
-
-# 批次處理 CSR
-./admin-tools/process_csr_batch.sh download -e staging
-./admin-tools/process_csr_batch.sh process -e staging  
-./admin-tools/process_csr_batch.sh upload --auto-upload
-
-# 撤銷用戶訪問
-./admin-tools/revoke_member_access.sh
-
-# 人員離職處理
-./admin-tools/employee_offboarding.sh
-```
-
-### 3. 環境切換和 Profile 驗證
-
-```bash
-# 檢查當前環境和 profile 狀態
-./vpn_env.sh status
-
-# 安全切換環境 (會自動驗證 profile)
-./vpn_env.sh switch staging   # 提示選擇或確認 staging profile
-./vpn_env.sh switch production # 需要額外確認，提示選擇 production profile
-
-# 手動設定 profile (進階用戶)
-./admin-tools/aws_vpn_admin.sh --set-profile my-custom-profile
-```
-
-## 團隊成員設定
-
-### 1. 零接觸工作流程 (建議)
-
-#### 第一步：初始化設定
-```bash
-# 自動下載 CA 證書和端點配置，生成並上傳 CSR
-./team_member_setup.sh --init
-
-# 可選：指定特定環境
-./team_member_setup.sh --init -e staging
-./team_member_setup.sh --init -e production
-```
-
-#### 第二步：等待管理員簽署
-
-管理員會收到通知並簽署您的 CSR：
-```bash
-# 管理員執行 (自動上傳到 S3)
-./admin-tools/sign_csr.sh --upload-s3 username.csr
-```
-
-#### 第三步：完成設定
-```bash
-# 自動下載簽署的證書並完成 VPN 設定
-./team_member_setup.sh --resume
-```
-
-### 2. 傳統工作流程 (備用)
-
-如果零接觸工作流程不可用：
-
-```bash
-# 生成 CSR 
-./team_member_setup.sh
-
-# 等待管理員提供簽署的證書
-
-# 使用簽署的證書完成設定
-./team_member_setup.sh --resume-cert
-```
-
-### 3. 環境特定設定
-
-```bash
-# 為特定環境設定 VPN
-./team_member_setup.sh --init -e staging
-./team_member_setup.sh --init -e production
-
-# 使用自定義 S3 存儲桶
-./team_member_setup.sh --init --bucket my-custom-bucket
-
-# 停用 S3 功能 (使用傳統方式)
-./team_member_setup.sh --no-s3
-```
-
-## 日常操作
+## 日常操作與故障排除
 
 ### 1. 環境檢查和狀態
 
@@ -334,138 +275,7 @@ AWS_REGION="us-east-1"
 ./admin-tools/process_csr_batch.sh monitor  # 監控模式
 ```
 
-## 故障排除
-
-### 常見問題
-
-#### 1. Profile 未自動檢測
-
-**症狀**: 系統無法自動選擇正確的 AWS profile
-
-**解決方案**:
-```bash
-# 檢查可用的 profiles
-aws configure list-profiles
-
-# 手動設定 profile
-./admin-tools/aws_vpn_admin.sh --set-profile correct-profile-name
-
-# 驗證 profile 是否正確
-aws sts get-caller-identity --profile correct-profile-name
-```
-
-#### 2. 跨帳戶操作錯誤
-
-**症狀**: 警告訊息顯示 profile 不匹配環境
-
-**解決方案**:
-```bash
-# 檢查帳戶 ID 配置
-grep ACCOUNT_ID configs/*/staging.env configs/*/production.env
-
-# 確認當前 AWS 帳戶
-aws sts get-caller-identity --profile your-profile
-
-# 更新配置檔案中的 ACCOUNT_ID
-```
-
-#### 3. S3 存儲桶訪問問題
-
-**症狀**: 無法訪問 S3 存儲桶進行零接觸操作
-
-**解決方案**:
-```bash
-# 檢查 S3 存儲桶權限
-aws s3 ls s3://your-bucket-name --profile your-profile
-
-# 重新建立 S3 存儲桶設定
-./admin-tools/setup_csr_s3_bucket.sh --create-users
-
-# 檢查 IAM 政策
-./admin-tools/setup_csr_s3_bucket.sh --list-users
-```
-
-#### 4. 環境切換失敗
-
-**症狀**: 無法切換到目標環境
-
-**解決方案**:
-```bash
-# 檢查環境配置檔案
-ls -la configs/staging/ configs/production/
-
-# 驗證配置檔案格式
-source configs/staging/staging.env && echo "Staging config OK"
-source configs/production/production.env && echo "Production config OK"
-
-# 重新初始化環境
-./vpn_env.sh switch staging --force-init
-```
-
-### 進階診斷
-
-#### 啟用詳細日誌
-
-```bash
-# 設定詳細模式
-export VERBOSE_MODE=true
-
-# 檢查日誌檔案
-tail -f logs/staging/*.log
-tail -f logs/production/*.log
-```
-
-#### Profile 驗證測試
-
-```bash
-# 執行 profile 管理測試
-./tests/test_profile_management.sh
-
-# 執行 admin tools 整合測試  
-./tests/test_admin_tools.sh
-
-# 執行 team member setup 測試
-./tests/test_team_member_setup.sh
-```
-
-#### 手動 Profile 配置
-
-如果自動檢測持續失敗：
-
-```bash
-# 編輯環境配置，直接指定 profile
-# configs/staging/staging.env
-ENV_AWS_PROFILE="your-staging-profile"
-
-# configs/production/production.env  
-ENV_AWS_PROFILE="your-production-profile"
-```
-
-### 獲取支援
-
-如果問題持續存在：
-
-1. **收集診斷資訊**:
-   ```bash
-   ./vpn_env.sh status > debug_info.txt
-   aws configure list-profiles >> debug_info.txt
-   ```
-
-2. **檢查日誌**:
-   ```bash
-   find logs/ -name "*.log" -mtime -1 -exec tail -20 {} \;
-   ```
-
-3. **執行測試套件**:
-   ```bash
-   ./tests/test_profile_management.sh
-   ```
-
-4. **聯絡管理員** 提供上述資訊
-
----
-
-## 附錄
+## 附錄：範例設定與常用指令
 
 ### A. 環境配置範本
 
