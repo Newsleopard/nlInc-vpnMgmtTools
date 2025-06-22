@@ -1218,6 +1218,15 @@ zero_touch_resume_mode() {
         return 1
     fi
     
+    # 載入 VPN 端點配置（如果存在）
+    local endpoint_config="$TEAM_SCRIPT_DIR/configs/$TARGET_ENVIRONMENT/vpn_endpoint.conf"
+    if [ -f "$endpoint_config" ]; then
+        source "$endpoint_config"
+        echo -e "${GREEN}✓ 已載入 VPN 端點配置${NC}"
+    else
+        echo -e "${YELLOW}警告: 找不到 VPN 端點配置文件: $endpoint_config${NC}"
+    fi
+    
     # 檢查 S3 訪問（如果啟用）
     if [ "$DISABLE_S3" = false ]; then
         if ! check_s3_access; then
