@@ -6,6 +6,7 @@
 
 # 全域變數
 TEAM_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$TEAM_SCRIPT_DIR"  # 為 env_core.sh 提供 PROJECT_ROOT 變數
 
 # 載入輕量級環境核心庫 (團隊成員專用)
 source "$TEAM_SCRIPT_DIR/lib/env_core.sh"
@@ -425,19 +426,27 @@ init_environment_and_aws() {
 setup_ca_cert_and_environment() {
     echo -e "\\n${YELLOW}[2/6] 設定 CA 證書和環境確認...${NC}"
     
-    # 要求用戶提供 CA 證書
+    # 檢查是否有從 S3 下載的臨時 CA 證書
     local ca_cert_path
-    if ! read_secure_input "請輸入 CA 證書檔案的完整路徑: " ca_cert_path "validate_file_path"; then
-        echo -e "${RED}必須提供有效的 CA 證書檔案路徑${NC}"
-        return 1
-    fi
+    local temp_ca_path="$TEAM_SCRIPT_DIR/temp_certs/ca.crt"
     
-    if [ ! -f "$ca_cert_path" ]; then
-        echo -e "${RED}CA 證書檔案不存在: $ca_cert_path${NC}"
-        return 1
+    if [ -f "$temp_ca_path" ]; then
+        echo -e "${GREEN}✓ 使用已下載的 CA 證書: $temp_ca_path${NC}"
+        ca_cert_path="$temp_ca_path"
+    else
+        # 要求用戶提供 CA 證書
+        if ! read_secure_input "請輸入 CA 證書檔案的完整路徑: " ca_cert_path "validate_file_path"; then
+            echo -e "${RED}必須提供有效的 CA 證書檔案路徑${NC}"
+            return 1
+        fi
+        
+        if [ ! -f "$ca_cert_path" ]; then
+            echo -e "${RED}CA 證書檔案不存在: $ca_cert_path${NC}"
+            return 1
+        fi
+        
+        echo -e "${GREEN}✓ 找到 CA 證書檔案: $ca_cert_path${NC}"
     fi
-    
-    echo -e "${GREEN}✓ 找到 CA 證書檔案: $ca_cert_path${NC}"
     
     # 從 CA 證書偵測環境
     local detected_env
@@ -477,6 +486,12 @@ setup_ca_cert_and_environment() {
     
     chmod 600 "$env_ca_cert"
     echo -e "${GREEN}✓ CA 證書已複製到: $env_ca_cert${NC}"
+    
+    # 清理臨時目錄（如果是從 S3 下載的）
+    if [ "$ca_cert_path" = "$TEAM_SCRIPT_DIR/temp_certs/ca.crt" ]; then
+        rm -rf "$TEAM_SCRIPT_DIR/temp_certs"
+        echo -e "${GREEN}✓ 已清理臨時文件${NC}"
+    fi
     
     log_team_setup_message "環境設定完成: $TARGET_ENVIRONMENT, CA證書: $ca_cert_path"
 }
@@ -767,7 +782,18 @@ check_s3_access() {
 download_ca_from_s3() {
     echo -e "${BLUE}從 S3 下載 CA 證書...${NC}"
     
-    local ca_cert_path="$USER_CERT_DIR/ca.crt"
+    # 確保有證書目錄，如果 USER_CERT_DIR 未設定則使用臨時目錄
+    local cert_dir
+    if [ -n "$USER_CERT_DIR" ]; then
+        cert_dir="$USER_CERT_DIR"
+    else
+        # 使用臨時目錄，稍後會在 setup_ca_cert_and_environment 中移動到正確位置
+        cert_dir="$TEAM_SCRIPT_DIR/temp_certs"
+        mkdir -p "$cert_dir"
+        chmod 700 "$cert_dir"
+    fi
+    
+    local ca_cert_path="$cert_dir/ca.crt"
     local s3_ca_path="s3://$S3_BUCKET/public/ca.crt"
     
     if ! aws s3 cp "$s3_ca_path" "$ca_cert_path" --profile "$SELECTED_AWS_PROFILE"; then
@@ -899,6 +925,31 @@ select_environment_from_config() {
     fi
     
     echo -e "${GREEN}✓ 環境配置: 端點 $ENDPOINT_ID, 區域 $AWS_REGION${NC}"
+    
+    # 設定環境特定路徑
+    setup_team_member_paths "$TARGET_ENVIRONMENT" "$TEAM_SCRIPT_DIR"
+    
+    # 設定配置檔案路徑
+    USER_CONFIG_FILE="$USER_VPN_CONFIG_FILE"
+    LOG_FILE="$TEAM_SETUP_LOG_FILE"
+    
+    # 如果有臨時下載的 CA 證書，移動到正確位置
+    local temp_ca_path="$TEAM_SCRIPT_DIR/temp_certs/ca.crt"
+    if [ -f "$temp_ca_path" ]; then
+        local env_ca_cert="$USER_CERT_DIR/ca.crt"
+        if cp "$temp_ca_path" "$env_ca_cert"; then
+            chmod 600 "$env_ca_cert"
+            echo -e "${GREEN}✓ CA 證書已移動到: $env_ca_cert${NC}"
+            # 清理臨時目錄
+            rm -rf "$TEAM_SCRIPT_DIR/temp_certs"
+            echo -e "${GREEN}✓ 已清理臨時文件${NC}"
+        else
+            echo -e "${YELLOW}⚠ CA 證書移動失敗，但繼續執行${NC}"
+        fi
+    fi
+    
+    log_team_setup_message "環境設定完成: $TARGET_ENVIRONMENT, 端點: $ENDPOINT_ID"
+    
     return 0
 }
 
@@ -912,7 +963,7 @@ upload_csr_to_s3() {
     local s3_csr_path="s3://$S3_BUCKET/csr/${username}.csr"
     
     if aws s3 cp "$csr_file" "$s3_csr_path" \
-        --sse aws:kms \
+        --sse AES256 \
         --profile "$SELECTED_AWS_PROFILE"; then
         echo -e "${GREEN}✓ CSR 已上傳到 S3${NC}"
         log_team_setup_message "CSR 已上傳到 S3: $s3_csr_path"

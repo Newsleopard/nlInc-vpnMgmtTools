@@ -188,7 +188,7 @@ confirm_environment_selection() {
     done
 }
 
-# 設定環境特定路徑（簡化版）
+# 設定環境特定路徑（從配置文件讀取）
 setup_team_member_paths() {
     local environment="$1"
     local script_dir="$2"
@@ -197,11 +197,54 @@ setup_team_member_paths() {
     export CURRENT_ENVIRONMENT="$environment"
     export ENV_DISPLAY_NAME="$(get_env_display_name "$environment")"
     
-    # 設定團隊成員專用路徑
-    export USER_CERT_DIR="$script_dir/certs/$environment/users"
-    export USER_VPN_CONFIG_DIR="$script_dir/configs/$environment/users"
-    export USER_VPN_CONFIG_FILE="$script_dir/configs/$environment/user_vpn_config.env"
-    export TEAM_SETUP_LOG_FILE="$script_dir/logs/$environment/team_setup.log"
+    # 載入環境配置文件以獲取目錄設定
+    local config_file="$script_dir/configs/$environment/$environment.env"
+    local cert_dir="$script_dir/certs/$environment"  # 預設值
+    local config_dir="$script_dir/configs/$environment"  # 預設值
+    local log_dir="$script_dir/logs/$environment"  # 預設值
+    
+    # 如果配置文件存在，讀取自定義目錄設定
+    if [ -f "$config_file" ]; then
+        # 從配置文件讀取目錄設定
+        local env_cert_dir
+        local env_config_dir
+        local env_log_dir
+        
+        env_cert_dir=$(grep "^CERT_DIR=" "$config_file" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+        env_config_dir=$(grep "^CONFIG_DIR=" "$config_file" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+        env_log_dir=$(grep "^LOG_DIR=" "$config_file" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+        
+        # 處理相對路徑（如果以 ./ 開頭，轉換為絕對路徑）
+        if [ -n "$env_cert_dir" ]; then
+            if [[ "$env_cert_dir" =~ ^\.\/ ]]; then
+                cert_dir="$script_dir/${env_cert_dir#./}"
+            else
+                cert_dir="$env_cert_dir"
+            fi
+        fi
+        
+        if [ -n "$env_config_dir" ]; then
+            if [[ "$env_config_dir" =~ ^\.\/ ]]; then
+                config_dir="$script_dir/${env_config_dir#./}"
+            else
+                config_dir="$env_config_dir"
+            fi
+        fi
+        
+        if [ -n "$env_log_dir" ]; then
+            if [[ "$env_log_dir" =~ ^\.\/ ]]; then
+                log_dir="$script_dir/${env_log_dir#./}"
+            else
+                log_dir="$env_log_dir"
+            fi
+        fi
+    fi
+    
+    # 設定團隊成員專用路徑（在配置的目錄下創建 users 子目錄）
+    export USER_CERT_DIR="$cert_dir/users"
+    export USER_VPN_CONFIG_DIR="$config_dir/users"
+    export USER_VPN_CONFIG_FILE="$config_dir/user_vpn_config.env"
+    export TEAM_SETUP_LOG_FILE="$log_dir/team_setup.log"
     
     # 創建必要目錄
     mkdir -p "$USER_CERT_DIR" "$USER_VPN_CONFIG_DIR" "$(dirname "$USER_VPN_CONFIG_FILE")" "$(dirname "$TEAM_SETUP_LOG_FILE")"
