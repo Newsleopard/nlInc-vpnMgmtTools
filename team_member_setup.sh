@@ -1097,6 +1097,21 @@ zero_touch_init_mode() {
         if ! download_ca_from_s3; then
             echo -e "${YELLOW}CA 證書下載失敗，請手動提供${NC}"
             setup_ca_cert_and_environment
+        else
+            # CA 下載成功，但需要確保環境路徑已設置
+            # 先嘗試從 CA 證書偵測環境
+            local ca_cert_path="$TEAM_SCRIPT_DIR/temp_certs/ca.crt"
+            if [ -f "$ca_cert_path" ]; then
+                local detected_env
+                detected_env=$(detect_environment_from_ca_cert "$ca_cert_path")
+                if [ -n "$detected_env" ]; then
+                    TARGET_ENVIRONMENT="$detected_env"
+                    setup_team_member_paths "$TARGET_ENVIRONMENT" "$TEAM_SCRIPT_DIR"
+                    USER_CONFIG_FILE="$USER_VPN_CONFIG_FILE"
+                    LOG_FILE="$TEAM_SETUP_LOG_FILE"
+                    echo -e "${GREEN}✓ 從 CA 證書偵測到環境: $(get_env_display_name "$TARGET_ENVIRONMENT")${NC}"
+                fi
+            fi
         fi
     else
         setup_ca_cert_and_environment
@@ -1113,9 +1128,27 @@ zero_touch_init_mode() {
             fi
         else
             echo -e "${YELLOW}端點配置下載失敗，手動設置${NC}"
+            # 確保環境路徑已設置（如果之前未設置）
+            if [ -z "$USER_CONFIG_FILE" ]; then
+                # 使用預設環境進行設置
+                TARGET_ENVIRONMENT="staging"
+                setup_team_member_paths "$TARGET_ENVIRONMENT" "$TEAM_SCRIPT_DIR"
+                USER_CONFIG_FILE="$USER_VPN_CONFIG_FILE"
+                LOG_FILE="$TEAM_SETUP_LOG_FILE"
+                echo -e "${BLUE}使用預設環境: $(get_env_display_name "$TARGET_ENVIRONMENT")${NC}"
+            fi
             setup_vpn_endpoint_info
         fi
     else
+        # 確保環境路徑已設置（如果之前未設置）
+        if [ -z "$USER_CONFIG_FILE" ]; then
+            # 使用預設環境進行設置
+            TARGET_ENVIRONMENT="staging"
+            setup_team_member_paths "$TARGET_ENVIRONMENT" "$TEAM_SCRIPT_DIR"
+            USER_CONFIG_FILE="$USER_VPN_CONFIG_FILE"
+            LOG_FILE="$TEAM_SETUP_LOG_FILE"
+            echo -e "${BLUE}使用預設環境: $(get_env_display_name "$TARGET_ENVIRONMENT")${NC}"
+        fi
         setup_vpn_endpoint_info
     fi
     
@@ -1137,6 +1170,40 @@ zero_touch_init_mode() {
 # 零接觸恢復模式
 zero_touch_resume_mode() {
     echo -e "\n${YELLOW}[零接觸模式] 恢復 VPN 設定...${NC}"
+    
+    # 如果 USER_CONFIG_FILE 未初始化，嘗試自動發現配置文件
+    if [ -z "$USER_CONFIG_FILE" ]; then
+        echo -e "${BLUE}自動搜尋現有配置文件...${NC}"
+        
+        # 搜尋可能的配置文件位置
+        local found_config=""
+        local config_env=""
+        
+        for env in staging production; do
+            local potential_config="$TEAM_SCRIPT_DIR/configs/$env/user_vpn_config.env"
+            if [ -f "$potential_config" ]; then
+                found_config="$potential_config"
+                config_env="$env"
+                break
+            fi
+        done
+        
+        if [ -n "$found_config" ]; then
+            echo -e "${GREEN}✓ 找到配置文件: $found_config${NC}"
+            
+            # 設置環境路徑
+            TARGET_ENVIRONMENT="$config_env"
+            setup_team_member_paths "$TARGET_ENVIRONMENT" "$TEAM_SCRIPT_DIR"
+            USER_CONFIG_FILE="$USER_VPN_CONFIG_FILE"
+            LOG_FILE="$TEAM_SETUP_LOG_FILE"
+            
+            echo -e "${GREEN}✓ 環境設定完成: $(get_env_display_name "$TARGET_ENVIRONMENT")${NC}"
+        else
+            echo -e "${RED}找不到配置文件，請先執行初始化模式${NC}"
+            echo -e "${YELLOW}執行: $0 --init${NC}"
+            return 1
+        fi
+    fi
     
     # 檢查是否有現有配置
     if [ ! -f "$USER_CONFIG_FILE" ]; then
