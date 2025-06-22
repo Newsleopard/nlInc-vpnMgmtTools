@@ -45,6 +45,13 @@ get_default_bucket_name() {
     echo "vpn-csr-exchange"
 }
 
+# VPN 管理員用戶列表 (可根據需要修改)
+VPN_ADMIN_USERS=(
+    "ct"
+    # 添加新管理員時，請在此處添加用戶名
+    # "new-admin-username"
+)
+
 DEFAULT_BUCKET_NAME="$(get_default_bucket_name)"
 DEFAULT_REGION="$AWS_REGION"
 
@@ -211,7 +218,7 @@ setup_bucket_policy() {
             "Effect": "Allow",
             "Principal": {
                 "AWS": [
-                    "$USER_ARN"
+                    "$USER_ARN"$(for admin in "${VPN_ADMIN_USERS[@]}"; do echo ","; echo "                    \"arn:aws:iam::$ACCOUNT_ID:user/$admin\""; done)
                 ]
             },
             "Action": "s3:*",

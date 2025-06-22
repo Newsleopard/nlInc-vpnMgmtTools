@@ -550,4 +550,73 @@ LOG_LEVEL="WARN"
 | Permission denied    | 腳本未加執行權限，請執行 chmod +x      |
 
 ---
+
+## 新增管理員指南
+
+當有新管理員加入團隊時，需要按照以下步驟授予完整的 VPN 管理權限：
+
+### 1. 更新管理員配置
+
+編輯 `admin-tools/setup_csr_s3_bucket.sh` 文件，在 VPN_ADMIN_USERS 陣列中添加新管理員的用戶名：
+
+```bash
+# VPN 管理員用戶列表 (可根據需要修改)
+VPN_ADMIN_USERS=(
+    "ct"
+    "new-admin-username"  # 在此處添加新管理員
+)
+```
+
+### 2. 更新 S3 存儲桶政策
+
+```bash
+# 重新執行設置以更新 S3 存儲桶政策
+./admin-tools/setup_csr_s3_bucket.sh
+```
+
+### 3. 新管理員 AWS Profile 設置
+
+新管理員應配置其 AWS profiles：
+
+```bash
+# 使用管理員憑證配置 AWS CLI
+aws configure --profile staging
+aws configure --profile production
+
+# 測試 profiles 是否正常工作
+aws sts get-caller-identity --profile staging
+aws sts get-caller-identity --profile production
+```
+
+### 4. 驗證管理員權限
+
+```bash
+# 測試管理員可以簽署 CSR 並上傳到 S3
+./admin-tools/sign_csr.sh --upload-s3 test.csr
+
+# 測試管理員可以管理用戶
+./admin-tools/manage_vpn_users.sh list
+
+# 驗證環境切換功能
+./vpn_env.sh status
+```
+
+### 5. 新管理員可執行的操作
+
+完成設置後，新管理員擁有完整權限：
+
+- **證書管理**: 簽署和上傳證書到 S3
+- **用戶管理**: 添加/移除 VPN 用戶權限
+- **環境管理**: 在 staging/production 環境間切換
+- **基礎設施管理**: 管理 S3 存儲桶和 IAM 政策
+- **監控功能**: 批次處理和監控 CSR 請求
+
+### 6. 安全注意事項
+
+- **權限最小化**: 只授予必要的管理員權限
+- **定期審查**: 定期檢查管理員列表，移除離職人員
+- **帳戶分離**: 確保每個管理員使用獨立的 AWS 用戶帳戶
+- **記錄審計**: 所有管理員操作都會記錄到日誌文件中
+
+---
 這個設定指南應該能幫助您完成雙 AWS Profile 管理系統的完整配置。如有任何問題，請參考故障排除章節或聯絡系統管理員。

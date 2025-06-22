@@ -45,7 +45,8 @@ show_usage() {
     echo "用法: $0 [選項] <csr-file> [days-valid] [output-dir]"
     echo ""
     echo "參數:"
-    echo "  csr-file      要簽署的 CSR 文件路徑"
+    echo "  csr-file      要簽署的 CSR 文件路徑或檔名"
+    echo "                (使用 --upload-s3 時，可自動從 S3 下載 CSR)"
     echo "  days-valid    證書有效天數 (預設: 365)"
     echo "  output-dir    輸出目錄 (預設: CSR 文件所在目錄)"
     echo ""
@@ -73,6 +74,7 @@ show_usage() {
     echo "• 此工具需要 CA 私鑰存在於環境配置目錄中"
     echo "• 簽署的證書將放置在指定的輸出目錄"
     echo "• 使用 --upload-s3 可實現零接觸證書交付"
+    echo "• 使用 --upload-s3 時，如本地無 CSR 文件會自動從 S3 下載"
     echo "• 所有操作都會記錄到日誌文件中"
 }
 
@@ -114,7 +116,7 @@ upload_certificate_to_s3() {
     local s3_cert_path="s3://$S3_BUCKET/cert/${username}.crt"
     
     if aws_with_profile s3 cp "$cert_file" "$s3_cert_path" \
-        --sse aws:kms \
+        --sse AES256 \
         --acl bucket-owner-full-control \
         --profile "$AWS_PROFILE"; then
         echo -e "${GREEN}✓ 證書已上傳到 S3${NC}"
@@ -429,7 +431,8 @@ main() {
     CA_CERT=""
     CA_KEY=""
     S3_BUCKET="vpn-csr-exchange"
-    AWS_PROFILE="$(aws configure list-profiles 2>/dev/null | head -1 || echo default)"
+    # Get AWS profile from environment manager
+    AWS_PROFILE="$(env_get_profile "$CURRENT_ENVIRONMENT" 2>/dev/null || echo default)"
     UPLOAD_S3=false
     DISABLE_S3=false
     
@@ -494,20 +497,17 @@ main() {
         output_dir="$(dirname "$csr_file")"
     fi
     
-    # 自動偵測環境
+    # 使用當前環境或指定的環境
     if [ -z "$environment" ]; then
-        if [[ "$csr_file" == *"production"* ]] || [[ "$output_dir" == *"production"* ]]; then
-            environment="production"
-        elif [[ "$csr_file" == *"staging"* ]] || [[ "$output_dir" == *"staging"* ]]; then
-            environment="staging"
-        else
-            echo -e "${YELLOW}無法自動偵測環境，請使用 -e 參數指定${NC}"
-            read -p "請選擇環境 (staging/production): " environment
-            if [[ ! "$environment" =~ ^(staging|production)$ ]]; then
-                echo -e "${RED}無效的環境選擇${NC}"
-                exit 1
-            fi
-        fi
+        environment="$CURRENT_ENVIRONMENT"
+        echo -e "${BLUE}使用當前環境: $environment${NC}"
+    fi
+    
+    # 驗證環境有效性
+    if [[ ! "$environment" =~ ^(staging|production)$ ]]; then
+        echo -e "${RED}無效的環境: $environment${NC}"
+        echo -e "${YELLOW}有效環境: staging, production${NC}"
+        exit 1
     fi
     
     # 設置日誌文件
@@ -562,6 +562,36 @@ main() {
         fi
     fi
     
+    # 檢查 CSR 文件是否存在，如需要則從 S3 下載
+    if [ ! -f "$csr_file" ] && [ "$UPLOAD_S3" = true ]; then
+        echo -e "${BLUE}本地 CSR 文件不存在，嘗試從 S3 下載...${NC}"
+        
+        # 提取用戶名（假設 CSR 文件名格式為 username.csr）
+        local temp_username
+        temp_username=$(basename "$csr_file" .csr)
+        
+        # 創建臨時目錄下載 CSR
+        local temp_csr_dir="/tmp/vpn_csr_download"
+        mkdir -p "$temp_csr_dir"
+        local temp_csr_file="$temp_csr_dir/${temp_username}.csr"
+        
+        if download_csr_from_s3 "$temp_username" "$temp_csr_file"; then
+            echo -e "${GREEN}✓ CSR 已從 S3 下載到臨時位置${NC}"
+            csr_file="$temp_csr_file"
+            # 同時更新輸出目錄到原始位置（而非臨時目錄）
+            if [ "$output_dir" = "$(dirname "$1")" ]; then
+                output_dir="$(dirname "$1")"  # 保持原始輸出目錄
+            fi
+        else
+            echo -e "${RED}無法從 S3 下載 CSR: ${temp_username}.csr${NC}"
+            echo -e "${YELLOW}請檢查：${NC}"
+            echo -e "  • CSR 是否已上傳到 S3: s3://$S3_BUCKET/csr/${temp_username}.csr"
+            echo -e "  • S3 存取權限是否正確"
+            echo -e "  • AWS profile 設定是否有效"
+            exit 1
+        fi
+    fi
+    
     # 執行簽署流程
     if ! validate_csr "$csr_file"; then
         exit 1
@@ -586,6 +616,12 @@ main() {
     fi
     
     show_completion_instructions "$output_dir/${CSR_USERNAME}.crt" "$environment" "$UPLOAD_S3"
+    
+    # 清理臨時 CSR 文件 (如果從 S3 下載)
+    if [[ "$csr_file" == "/tmp/vpn_csr_download/"* ]]; then
+        rm -f "$csr_file"
+        echo -e "${BLUE}✓ 臨時 CSR 文件已清理${NC}"
+    fi
     
     echo -e "${GREEN}CSR 簽署完成！${NC}"
 }

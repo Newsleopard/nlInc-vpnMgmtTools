@@ -487,3 +487,50 @@ aws sts get-caller-identity --profile production
 # View current status (shows environment + profile info)
 ./vpn_env.sh status
 ```
+
+## Adding New Administrators
+
+When a new admin joins the team, follow these steps to grant them full VPN management access:
+
+### 1. Add Admin to Configuration
+Edit `admin-tools/setup_csr_s3_bucket.sh` and add the new admin username to the VPN_ADMIN_USERS array:
+
+```bash
+# VPN 管理員用戶列表 (可根據需要修改)
+VPN_ADMIN_USERS=(
+    "ct"
+    "new-admin-username"  # Add new admin here
+)
+```
+
+### 2. Update S3 Bucket Policy
+```bash
+# Re-run setup to update S3 bucket policy with new admin
+./admin-tools/setup_csr_s3_bucket.sh
+```
+
+### 3. New Admin AWS Profile Setup
+The new admin should configure their AWS profiles:
+```bash
+# Configure AWS CLI with admin credentials
+aws configure --profile staging
+aws configure --profile production
+
+# Test the profiles work
+aws sts get-caller-identity --profile staging
+aws sts get-caller-identity --profile production
+```
+
+### 4. Verify Admin Access
+```bash
+# Test admin can sign CSRs and upload to S3
+./admin-tools/sign_csr.sh --upload-s3 test.csr
+
+# Test admin can manage users
+./admin-tools/manage_vpn_users.sh list
+```
+
+The new admin now has full access to:
+- Sign and upload certificates via S3
+- Manage VPN user permissions
+- All environment switching and management operations
