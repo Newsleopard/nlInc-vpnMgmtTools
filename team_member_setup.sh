@@ -953,10 +953,84 @@ select_environment_from_config() {
     return 0
 }
 
+# 檢查 S3 CSR 上傳權限
+check_s3_csr_permissions() {
+    local username="$1"
+    
+    echo -e "${BLUE}檢查 S3 CSR 上傳權限...${NC}"
+    
+    # 創建測試文件
+    local test_file=$(mktemp)
+    echo "test-csr-permissions" > "$test_file"
+    local test_key="csr/test-${username}-$(date +%s).csr"
+    
+    # 測試上傳權限
+    if aws s3 cp "$test_file" "s3://$S3_BUCKET/$test_key" \
+        --sse AES256 \
+        --profile "$SELECTED_AWS_PROFILE" &>/dev/null; then
+        
+        # 清理測試文件
+        aws s3 rm "s3://$S3_BUCKET/$test_key" --profile "$SELECTED_AWS_PROFILE" &>/dev/null || true
+        rm -f "$test_file"
+        
+        echo -e "${GREEN}✓ S3 權限檢查通過${NC}"
+        return 0
+    else
+        rm -f "$test_file"
+        echo -e "${RED}✗ S3 權限檢查失敗${NC}"
+        return 1
+    fi
+}
+
+# 顯示權限問題解決指引
+show_permission_help() {
+    local username="$1"
+    
+    echo -e "\n${YELLOW}========================================${NC}"
+    echo -e "${YELLOW}     S3 權限配置需求     ${NC}"
+    echo -e "${YELLOW}========================================${NC}"
+    echo -e ""
+    echo -e "${RED}❌ 檢測到 S3 權限不足${NC}"
+    echo -e ""
+    echo -e "${CYAN}問題原因：${NC}"
+    echo -e "您的 AWS 用戶缺少上傳 CSR 到 S3 的權限"
+    echo -e ""
+    echo -e "${CYAN}解決方案：${NC}"
+    echo -e ""
+    echo -e "${BLUE}方案 1：聯繫管理員配置權限 (推薦)${NC}"
+    echo -e "告知管理員您需要 VPN CSR 上傳權限："
+    echo -e "  • 用戶名: ${YELLOW}$username${NC}"
+    echo -e "  • AWS 用戶: ${YELLOW}$(aws sts get-caller-identity --query 'Arn' --output text --profile "$SELECTED_AWS_PROFILE" 2>/dev/null || echo "未知")${NC}"
+    echo -e "  • 需要權限: ${YELLOW}s3:PutObject on arn:aws:s3:::$S3_BUCKET/csr/*${NC}"
+    echo -e ""
+    echo -e "${BLUE}方案 2：管理員可執行以下命令：${NC}"
+    echo -e "  ${CYAN}# 為現有用戶添加權限${NC}"
+    echo -e "  ${CYAN}./admin-tools/setup_csr_s3_bucket.sh --attach-policy $(aws sts get-caller-identity --query 'UserName' --output text --profile "$SELECTED_AWS_PROFILE" 2>/dev/null || echo "USERNAME")${NC}"
+    echo -e ""
+    echo -e "  ${CYAN}# 或使用專用用戶管理工具${NC}"
+    echo -e "  ${CYAN}./admin-tools/manage_vpn_users.sh add $(aws sts get-caller-identity --query 'UserName' --output text --profile "$SELECTED_AWS_PROFILE" 2>/dev/null || echo "USERNAME")${NC}"
+    echo -e ""
+    echo -e "${BLUE}方案 3：使用傳統模式 (臨時解決)${NC}"
+    echo -e "  重新執行腳本並添加 ${YELLOW}--no-s3${NC} 參數："
+    echo -e "  ${CYAN}$0 --no-s3${NC}"
+    echo -e ""
+    echo -e "${YELLOW}建議：${NC}推薦使用方案 1，可確保未來順暢使用零接觸工作流程"
+    echo -e ""
+}
+
 # 上傳 CSR 到 S3
 upload_csr_to_s3() {
     local csr_file="$1"
     local username="$2"
+    
+    echo -e "${BLUE}準備上傳 CSR 到 S3...${NC}"
+    
+    # 檢查權限
+    if ! check_s3_csr_permissions "$username"; then
+        show_permission_help "$username"
+        echo -e "${YELLOW}建議：聯繫管理員配置權限後重新嘗試${NC}"
+        return 1
+    fi
     
     echo -e "${BLUE}上傳 CSR 到 S3...${NC}"
     
@@ -970,6 +1044,7 @@ upload_csr_to_s3() {
         return 0
     else
         echo -e "${RED}CSR 上傳失敗${NC}"
+        show_permission_help "$username"
         return 1
     fi
 }
@@ -1748,6 +1823,9 @@ main() {
         setup_vpn_client
         show_connection_instructions
         test_connection
+    elif [ "$CHECK_PERMISSIONS_MODE" = true ]; then
+        # 權限檢查模式
+        check_permissions_mode
     else
         # 傳統完整模式（向後相容）
         show_welcome
@@ -1768,11 +1846,95 @@ main() {
     fi
 }
 
+# 權限檢查模式
+check_permissions_mode() {
+    show_team_env_header "VPN S3 權限檢查工具"
+    echo -e ""
+    echo -e "${BLUE}此工具將檢查您的 AWS 用戶是否具有 VPN CSR 上傳權限${NC}"
+    echo -e ""
+    
+    # 檢查必要工具
+    check_team_prerequisites
+    
+    # 初始化 AWS 配置
+    init_environment_and_aws
+    
+    # 設置用戶信息
+    setup_user_information
+    
+    echo -e "\n${CYAN}========================================${NC}"
+    echo -e "${CYAN}     權限檢查結果     ${NC}"
+    echo -e "${CYAN}========================================${NC}"
+    echo -e ""
+    
+    # 顯示當前 AWS 用戶信息
+    echo -e "${BLUE}當前 AWS 用戶信息：${NC}"
+    local user_arn
+    user_arn=$(aws sts get-caller-identity --query 'Arn' --output text --profile "$SELECTED_AWS_PROFILE" 2>/dev/null || echo "未知")
+    local account_id
+    account_id=$(aws sts get-caller-identity --query 'Account' --output text --profile "$SELECTED_AWS_PROFILE" 2>/dev/null || echo "未知")
+    local user_name
+    user_name=$(aws sts get-caller-identity --query 'UserName' --output text --profile "$SELECTED_AWS_PROFILE" 2>/dev/null || echo "未知")
+    
+    echo -e "  用戶 ARN: ${YELLOW}$user_arn${NC}"
+    echo -e "  帳戶 ID: ${YELLOW}$account_id${NC}"
+    echo -e "  用戶名: ${YELLOW}$user_name${NC}"
+    echo -e "  S3 存儲桶: ${YELLOW}$S3_BUCKET${NC}"
+    echo -e ""
+    
+    # 檢查 S3 存儲桶訪問
+    echo -e "${BLUE}檢查 S3 存儲桶訪問權限...${NC}"
+    if aws s3 ls "s3://$S3_BUCKET" --profile "$SELECTED_AWS_PROFILE" &>/dev/null; then
+        echo -e "${GREEN}✓ 可以訪問 S3 存儲桶${NC}"
+    else
+        echo -e "${RED}✗ 無法訪問 S3 存儲桶${NC}"
+        echo -e "${YELLOW}這可能表示存儲桶不存在或您沒有訪問權限${NC}"
+    fi
+    
+    # 檢查 CSR 上傳權限
+    echo -e "${BLUE}檢查 CSR 上傳權限...${NC}"
+    if check_s3_csr_permissions "$USERNAME"; then
+        echo -e "${GREEN}✓ CSR 上傳權限正常${NC}"
+        echo -e "${GREEN}您可以使用零接觸工作流程${NC}"
+    else
+        echo -e "${RED}✗ CSR 上傳權限不足${NC}"
+        show_permission_help "$USERNAME"
+        return 1
+    fi
+    
+    # 檢查證書下載權限
+    echo -e "${BLUE}檢查證書下載權限...${NC}"
+    local test_cert_key="cert/${USERNAME}.crt"
+    if aws s3api head-object --bucket "$S3_BUCKET" --key "$test_cert_key" --profile "$SELECTED_AWS_PROFILE" &>/dev/null; then
+        echo -e "${GREEN}✓ 證書下載權限正常 (文件已存在)${NC}"
+    else
+        echo -e "${YELLOW}? 證書下載權限測試 (證書文件不存在，這是正常的)${NC}"
+        echo -e "${CYAN}當管理員簽署您的證書後，您將能夠下載它${NC}"
+    fi
+    
+    echo -e "\n${GREEN}========================================${NC}"
+    echo -e "${GREEN}     權限檢查完成     ${NC}"
+    echo -e "${GREEN}========================================${NC}"
+    echo -e ""
+    echo -e "${CYAN}下一步操作建議：${NC}"
+    echo -e ""
+    echo -e "${BLUE}如果權限檢查通過：${NC}"
+    echo -e "  執行 ${CYAN}$0 --init${NC} 開始 VPN 設置"
+    echo -e ""
+    echo -e "${BLUE}如果權限檢查失敗：${NC}"
+    echo -e "  1. 聯繫管理員配置權限"
+    echo -e "  2. 或使用 ${CYAN}$0 --no-s3${NC} 使用傳統模式"
+    echo -e ""
+    
+    return 0
+}
+
 # 解析命令行參數
 parse_arguments() {
     RESUME_CERT_MODE=false
     INIT_MODE=false
     RESUME_MODE=false
+    CHECK_PERMISSIONS_MODE=false
     S3_BUCKET="vpn-csr-exchange"
     DISABLE_S3=false
     CA_PATH=""
@@ -1790,6 +1952,10 @@ parse_arguments() {
                 ;;
             --resume-cert)
                 RESUME_CERT_MODE=true
+                shift
+                ;;
+            --check-permissions)
+                CHECK_PERMISSIONS_MODE=true
                 shift
                 ;;
             --bucket)
@@ -1825,6 +1991,7 @@ parse_arguments() {
     [ "$INIT_MODE" = true ] && ((mode_count++))
     [ "$RESUME_MODE" = true ] && ((mode_count++))
     [ "$RESUME_CERT_MODE" = true ] && ((mode_count++))
+    [ "$CHECK_PERMISSIONS_MODE" = true ] && ((mode_count++))
     
     if [ $mode_count -gt 1 ]; then
         echo -e "${RED}錯誤: 不能同時使用多個模式${NC}"
@@ -1846,6 +2013,7 @@ show_usage() {
     echo "  --init           初始化模式：從 S3 下載配置，生成 CSR 並上傳 (預設)"
     echo "  --resume         恢復模式：從 S3 下載簽署證書並完成 VPN 設定"
     echo "  --resume-cert    舊版恢復模式：使用本地證書繼續設定 (向後相容)"
+    echo "  --check-permissions  檢查當前用戶的 S3 權限狀態"
     echo ""
     echo "S3 配置選項:"
     echo "  --bucket NAME    使用指定的 S3 存儲桶 (預設: vpn-csr-exchange)"
@@ -1862,6 +2030,7 @@ show_usage() {
     echo "  $0               # 零接觸初始化 (從 S3 獲取配置)"
     echo "  $0 --init        # 明確指定初始化模式"
     echo "  $0 --resume      # 恢復模式 (管理員簽署證書後)"
+    echo "  $0 --check-permissions  # 檢查 S3 權限配置"
     echo "  $0 --no-s3       # 停用 S3，使用傳統本地檔案模式"
     echo "  $0 --bucket my-bucket --init  # 使用自定義 S3 存儲桶"
     echo ""

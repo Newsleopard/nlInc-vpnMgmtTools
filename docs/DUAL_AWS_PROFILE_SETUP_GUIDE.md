@@ -270,9 +270,17 @@ flowchart TD
 ### 4. 管理操作
 
 ```bash
-# 所有管理工具現在都支援自動 profile 檢測
-./admin-tools/aws_vpn_admin.sh       # 主要管理控制台
-./admin-tools/sign_csr.sh user.csr   # 使用當前環境的 profile
+# 基礎設施管理（S3 bucket 和 IAM 政策）
+./admin-tools/setup_csr_s3_bucket.sh         # 完整基礎設施設置
+./admin-tools/setup_csr_s3_bucket.sh --list-policies  # 檢查政策狀態
+
+# 用戶管理（專用工具）
+./admin-tools/manage_vpn_users.sh list       # 列出所有有權限的用戶
+./admin-tools/manage_vpn_users.sh add user   # 為用戶分配權限
+
+# 其他管理工具
+./admin-tools/aws_vpn_admin.sh              # 主要管理控制台
+./admin-tools/sign_csr.sh user.csr          # 使用當前環境的 profile
 ./admin-tools/process_csr_batch.sh monitor  # 監控模式
 ```
 
@@ -350,11 +358,20 @@ LOG_LEVEL="WARN"
 # 零接觸工作流程
 ./team_member_setup.sh --init         # 初始化
 ./team_member_setup.sh --resume       # 完成設定
+./team_member_setup.sh --check-permissions  # 檢查權限
 ./admin-tools/sign_csr.sh --upload-s3 # 簽署並上傳
 
-# 管理操作
-./admin-tools/setup_csr_s3_bucket.sh --publish-assets  # 建立 S3
+# 基礎設施管理
+./admin-tools/setup_csr_s3_bucket.sh --publish-assets  # 建立 S3 和政策
+./admin-tools/setup_csr_s3_bucket.sh --list-policies   # 檢查政策狀態
 ./admin-tools/publish_endpoints.sh                     # 發布端點資訊
+
+# 用戶管理
+./admin-tools/manage_vpn_users.sh list                 # 列出有權限用戶
+./admin-tools/manage_vpn_users.sh add username         # 添加用戶權限
+./admin-tools/manage_vpn_users.sh status username      # 檢查用戶狀態
+
+# 其他管理操作
 ./admin-tools/process_csr_batch.sh monitor            # 批次監控
 ```
 
@@ -404,12 +421,17 @@ LOG_LEVEL="WARN"
 
 ### S3 CSR 交換桶設置詳細說明（管理員）
 
-1. **建立 S3 存儲桶**
+**重要：工具職責分離**
+- `setup_csr_s3_bucket.sh` - 負責基礎設施（S3 bucket 和 IAM 政策）
+- `manage_vpn_users.sh` - 負責用戶權限管理
+
+1. **建立 S3 存儲桶和基礎設施**
    - 執行：
      ```bash
-     ./admin-tools/setup_csr_s3_bucket.sh --publish-assets --create-users
+     ./admin-tools/setup_csr_s3_bucket.sh --publish-assets
      ```
    - 預設會建立 `vpn-csr-exchange` 存儲桶（可用 `-b` 指定名稱），並自動啟用版本控制與 AES256 加密。
+   - 自動創建必要的 IAM 政策
 
 2. **設置存儲桶政策**
    - 自動設置嚴格的 S3 Bucket Policy：
@@ -430,11 +452,23 @@ LOG_LEVEL="WARN"
      - `cert/` 內檔案 7 天自動刪除
      - 舊版本自動清理，降低資安風險
 
-5. **產生 IAM 政策範例與自動建立政策**
-   - 自動產生並可選擇建立：
+5. **IAM 政策管理**
+   - 自動產生並創建：
      - `VPN-CSR-TeamMember-Policy`：允許團隊成員上傳自己的 CSR、下載自己的證書
      - `VPN-CSR-Admin-Policy`：管理員擁有存儲桶完全存取權
-   - 可用 `--create-users` 自動建立 IAM Policy
+   - 使用 `--list-policies` 檢查政策狀態
+   
+6. **用戶權限分配（使用專用工具）**
+   - 為用戶分配權限：
+     ```bash
+     ./admin-tools/manage_vpn_users.sh add username
+     ./admin-tools/manage_vpn_users.sh add username --create-user  # 如用戶不存在則創建
+     ```
+   - 檢查用戶狀態：
+     ```bash
+     ./admin-tools/manage_vpn_users.sh list
+     ./admin-tools/manage_vpn_users.sh status username
+     ```
 
 6. **發布公用資產**
    - 可用 `--publish-assets` 或手動執行 `publish_endpoints.sh`，將 CA 證書、VPN 端點資訊上傳到 `public/` 目錄，供團隊成員自動下載。

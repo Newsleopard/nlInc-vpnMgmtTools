@@ -111,17 +111,44 @@ AWS_ACCOUNT_ID="123456789012"  # Replace with actual account ID for this environ
 ./admin-tools/employee_offboarding.sh
 ```
 
-### Secure CSR Management (Zero-Touch Workflow)
+### Infrastructure Setup (S3 Bucket and IAM Policies)
 
 ```bash
-# Setup S3 bucket for zero-touch CSR exchange
-./admin-tools/setup_csr_s3_bucket.sh --publish-assets    # Create bucket and publish initial assets
-./admin-tools/setup_csr_s3_bucket.sh --create-users     # Also create IAM policies
+# Initial infrastructure setup - create S3 bucket and IAM policies
+./admin-tools/setup_csr_s3_bucket.sh                   # Complete setup with default options
+./admin-tools/setup_csr_s3_bucket.sh --publish-assets  # Setup and publish CA cert/endpoint configs
+
+# Infrastructure management
+./admin-tools/setup_csr_s3_bucket.sh --create-policies # Create/update IAM policies only
+./admin-tools/setup_csr_s3_bucket.sh --list-policies   # Check IAM policy status
+./admin-tools/setup_csr_s3_bucket.sh --cleanup         # Remove bucket and policies
 
 # Publish/update public assets (CA cert and endpoint configs)
-./admin-tools/publish_endpoints.sh                      # Publish all environments
-./admin-tools/publish_endpoints.sh -e production        # Publish specific environment
+./admin-tools/publish_endpoints.sh                     # Publish all environments
+./admin-tools/publish_endpoints.sh -e production       # Publish specific environment
+```
 
+### VPN User Management (Separate Tool)
+
+```bash
+# User Management Operations (Primary tool for user management)
+./admin-tools/manage_vpn_users.sh list                 # List all users with VPN permissions
+./admin-tools/manage_vpn_users.sh add username         # Add new user and assign VPN permissions
+./admin-tools/manage_vpn_users.sh add username --create-user  # Create user if not exists
+./admin-tools/manage_vpn_users.sh remove username      # Remove user's VPN permissions
+./admin-tools/manage_vpn_users.sh status username      # Check user's permission status
+
+# Permission Diagnostics
+./team_member_setup.sh --check-permissions             # Check current user's S3 permissions
+./admin-tools/manage_vpn_users.sh check-permissions username  # Check specific user permissions
+
+# Batch User Management
+./admin-tools/manage_vpn_users.sh batch-add users.txt  # Add multiple users from file
+```
+
+### CSR Processing (Zero-Touch Workflow)
+
+```bash
 # Sign individual CSR with zero-touch delivery
 ./admin-tools/sign_csr.sh --upload-s3 user.csr         # Sign and auto-upload to S3
 ./admin-tools/sign_csr.sh -e production user.csr       # Traditional local signing
@@ -131,10 +158,6 @@ AWS_ACCOUNT_ID="123456789012"  # Replace with actual account ID for this environ
 ./admin-tools/process_csr_batch.sh process -e production     # Sign all CSRs
 ./admin-tools/process_csr_batch.sh upload --auto-upload      # Upload certificates to S3
 ./admin-tools/process_csr_batch.sh monitor -e staging        # Auto-monitor and process
-
-# S3 bucket management
-./admin-tools/setup_csr_s3_bucket.sh --list-users      # List IAM users with CSR policies
-./admin-tools/setup_csr_s3_bucket.sh --cleanup         # Remove bucket and policies
 ```
 
 ### Diagnostic and Repair Tools
@@ -325,11 +348,116 @@ The zero-touch workflow eliminates manual file transfers between admins and team
 - `cert/username.crt` - Admin-signed certificates (GET-only for users)
 - `log/` - Optional audit copies of processed CSRs/certificates
 
+## VPN User Management and Permissions
+
+### Overview
+The toolkit provides comprehensive user management capabilities for VPN access, including automated IAM policy management, permission diagnostics, and scalable user onboarding/offboarding workflows.
+
+### User Permission Architecture
+- **IAM Policy-Based**: Uses `VPN-CSR-TeamMember-Policy` for team members and `VPN-CSR-Admin-Policy` for administrators
+- **S3 Resource-Based**: Controls access to specific S3 paths (`csr/`, `cert/`, `public/`)
+- **Environment-Aware**: Automatically applies correct permissions based on current environment
+- **Cross-Account Validation**: Prevents accidental operations in wrong AWS accounts
+
+### New User Onboarding Workflow
+
+#### For Administrators:
+1. **Initial Infrastructure Setup** (one-time):
+   ```bash
+   ./admin-tools/setup_csr_s3_bucket.sh --publish-assets
+   ```
+
+2. **Add New User** (using dedicated user management tool):
+   ```bash
+   # Option 1: Add existing AWS user
+   ./admin-tools/manage_vpn_users.sh add username
+   
+   # Option 2: Create new user and assign permissions
+   ./admin-tools/manage_vpn_users.sh add username --create-user
+   ```
+
+3. **Verify User Setup**:
+   ```bash
+   ./admin-tools/manage_vpn_users.sh status username
+   ./admin-tools/manage_vpn_users.sh list
+   ```
+
+#### For Team Members:
+1. **Permission Check** (recommended first step):
+   ```bash
+   ./team_member_setup.sh --check-permissions
+   ```
+
+2. **VPN Setup**:
+   ```bash
+   # If permissions check passes
+   ./team_member_setup.sh --init
+   
+   # Wait for admin to sign certificate, then
+   ./team_member_setup.sh --resume
+   ```
+
+### Permission Troubleshooting
+
+#### Common Issues and Solutions:
+
+**Issue**: `AccessDenied` when uploading CSR to S3
+**Solutions**:
+1. **Admin fixes**: `./admin-tools/manage_vpn_users.sh add USERNAME`
+2. **User workaround**: `./team_member_setup.sh --no-s3` (traditional mode)
+
+**Issue**: User not found in AWS
+**Solution**: `./admin-tools/manage_vpn_users.sh add USERNAME --create-user`
+
+**Issue**: Permissions appear correct but still failing
+**Solutions**:
+1. Check policy status: `./admin-tools/setup_csr_s3_bucket.sh --list-policies`
+2. Check user status: `./admin-tools/manage_vpn_users.sh status USERNAME`
+3. Test permissions: `./admin-tools/manage_vpn_users.sh check-permissions USERNAME`
+
+### Batch User Management
+
+For large teams, use batch operations:
+
+1. **Create user list file** (`users.txt`):
+   ```
+   john.smith
+   jane.doe
+   team.lead
+   # Comments are supported
+   contractor.name
+   ```
+
+2. **Batch add users**:
+   ```bash
+   ./admin-tools/manage_vpn_users.sh batch-add users.txt
+   ```
+
+### User Offboarding
+
+```bash
+# Remove VPN permissions (recommended)
+./admin-tools/manage_vpn_users.sh remove username
+
+# Complete user removal (use with caution)
+./admin-tools/employee_offboarding.sh username
+```
+
+### Security Best Practices
+
+1. **Regular Audits**: Use `./admin-tools/manage_vpn_users.sh list` to review active users
+2. **Permission Validation**: Run `./team_member_setup.sh --check-permissions` before VPN setup
+3. **Environment Isolation**: Verify environment with `./vpn_env.sh status` before user operations
+4. **Policy Updates**: Regularly review and update IAM policies in `iam-policies/` directory
+5. **Access Logging**: Monitor S3 bucket access logs for suspicious activity
+
 ## Important Notes
 
 - **Always verify current environment and AWS profile** before operations using `./vpn_env.sh status`
 - **Profile Configuration Required**: Each environment needs proper AWS profile configuration in `configs/{env}/{env}.env`
 - **Account ID Validation**: Set correct `AWS_ACCOUNT_ID` in each environment config
+- **Tool Separation**: Use `setup_csr_s3_bucket.sh` for infrastructure, `manage_vpn_users.sh` for user management
+- **Permission Diagnostics**: Use `--check-permissions` options to troubleshoot access issues
 - Production operations have additional safety checks and confirmations
 - The toolkit is specifically designed for macOS environments
 - All scripts use bash and include Chinese language prompts and documentation

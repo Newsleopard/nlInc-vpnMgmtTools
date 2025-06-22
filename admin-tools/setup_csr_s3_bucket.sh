@@ -57,8 +57,8 @@ show_usage() {
     echo "  -r, --region REGION        AWS 區域 (預設: $DEFAULT_REGION)"
     echo "  -p, --profile PROFILE      AWS CLI profile (預設: 目前活躍的 profile)"
     echo "  -e, --environment ENV      目標環境 (staging/production)"
-    echo "  --create-users            創建 IAM 用戶和政策"
-    echo "  --list-users              列出相關的 IAM 用戶"
+    echo "  --create-policies         創建 IAM 政策（不包含用戶管理）"
+    echo "  --list-policies           列出創建的 IAM 政策狀態"
     echo "  --publish-assets          自動發布初始公用資產 (CA 證書和端點配置)"
     echo "  --cleanup                 清理存儲桶和相關資源"
     echo "  -v, --verbose             顯示詳細輸出"
@@ -69,14 +69,19 @@ show_usage() {
     echo "  • 設置適當的存儲桶政策和權限"
     echo "  • 創建用於 CSR 上傳和證書下載的前綴結構"
     echo "  • 配置生命週期政策自動清理舊文件"
-    echo "  • 生成團隊成員所需的 IAM 政策範例"
+    echo "  • 創建必要的 IAM 政策（用戶分配請使用 manage_vpn_users.sh）"
     echo ""
     echo "範例:"
-    echo "  $0                                     # 使用預設設置創建存儲桶"
+    echo "  $0                                     # 使用預設設置創建存儲桶和政策"
     echo "  $0 -b my-vpn-csr-bucket               # 使用自定義存儲桶名稱"
     echo "  $0 -e production -p prod               # 為 production 環境設置"
-    echo "  $0 --create-users                     # 創建 IAM 用戶和政策"
+    echo "  $0 --create-policies                  # 只創建 IAM 政策"
+    echo "  $0 --publish-assets                   # 發布 CA 證書和端點配置"
+    echo "  $0 --list-policies                    # 檢查政策狀態"
     echo "  $0 --cleanup                          # 清理資源"
+    echo ""
+    echo "用戶管理請使用:"
+    echo "  ./admin-tools/manage_vpn_users.sh     # 專用的用戶管理工具"
 }
 
 # 記錄函數
@@ -439,21 +444,60 @@ create_iam_resources() {
     return 0
 }
 
-# 列出相關 IAM 用戶
-list_iam_users() {
-    echo -e "${BLUE}列出相關 IAM 用戶...${NC}"
+# 列出 IAM 政策狀態
+list_iam_policies() {
+    echo -e "${BLUE}檢查 IAM 政策狀態...${NC}"
     
-    # 列出擁有 CSR 政策的用戶
-    local policy_arn="arn:aws:iam::$ACCOUNT_ID:policy/VPN-CSR-TeamMember-Policy"
+    local team_policy_name="VPN-CSR-TeamMember-Policy"
+    local admin_policy_name="VPN-CSR-Admin-Policy"
+    local team_policy_arn="arn:aws:iam::$ACCOUNT_ID:policy/$team_policy_name"
+    local admin_policy_arn="arn:aws:iam::$ACCOUNT_ID:policy/$admin_policy_name"
     
-    echo -e "${CYAN}擁有 CSR 政策的用戶：${NC}"
-    aws_with_profile iam list-entities-for-policy \
-        --policy-arn "$policy_arn" \
-        --query 'PolicyUsers[].UserName' \
-        --output table \
-        --profile "$AWS_PROFILE" 2>/dev/null || echo "  無用戶或政策不存在"
+    echo -e "${CYAN}政策狀態檢查：${NC}"
+    
+    # 檢查團隊成員政策
+    if check_policy_exists "$team_policy_name"; then
+        echo -e "${GREEN}✓ $team_policy_name 已存在${NC}"
+        local attachment_count
+        attachment_count=$(aws_with_profile iam get-policy --policy-arn "$team_policy_arn" --profile "$AWS_PROFILE" --query 'Policy.AttachmentCount' --output text 2>/dev/null)
+        echo -e "  附加到 $attachment_count 個實體"
+    else
+        echo -e "${RED}✗ $team_policy_name 不存在${NC}"
+    fi
+    
+    # 檢查管理員政策
+    if check_policy_exists "$admin_policy_name"; then
+        echo -e "${GREEN}✓ $admin_policy_name 已存在${NC}"
+        local attachment_count
+        attachment_count=$(aws_with_profile iam get-policy --policy-arn "$admin_policy_arn" --profile "$AWS_PROFILE" --query 'Policy.AttachmentCount' --output text 2>/dev/null)
+        echo -e "  附加到 $attachment_count 個實體"
+    else
+        echo -e "${RED}✗ $admin_policy_name 不存在${NC}"
+    fi
+    
+    echo -e ""
+    echo -e "${CYAN}政策文件位置：${NC}"
+    echo -e "  📄 $PARENT_DIR/iam-policies/team-member-csr-policy.json"
+    echo -e "  📄 $PARENT_DIR/iam-policies/admin-csr-policy.json"
+    
+    echo -e ""
+    echo -e "${YELLOW}💡 用戶管理操作請使用：${NC}"
+    echo -e "  ${CYAN}./admin-tools/manage_vpn_users.sh list${NC}      # 列出有權限的用戶"
+    echo -e "  ${CYAN}./admin-tools/manage_vpn_users.sh add USER${NC}  # 為用戶分配權限"
     
     return 0
+}
+
+# 檢查政策是否存在
+check_policy_exists() {
+    local policy_name="$1"
+    local policy_arn="arn:aws:iam::$ACCOUNT_ID:policy/$policy_name"
+    
+    if aws_with_profile iam get-policy --policy-arn "$policy_arn" --profile "$AWS_PROFILE" &>/dev/null; then
+        return 0
+    else
+        return 1
+    fi
 }
 
 # 清理資源
@@ -534,8 +578,9 @@ show_completion_info() {
     echo -e ""
     echo -e "${CYAN}📋 後續操作：${NC}"
     echo -e ""
-    echo -e "${BLUE}1. 為團隊成員分配 IAM 政策：${NC}"
-    echo -e "   ${YELLOW}VPN-CSR-TeamMember-Policy${NC}"
+    echo -e "${BLUE}1. 用戶管理（使用專用工具）：${NC}"
+    echo -e "   ${CYAN}./admin-tools/manage_vpn_users.sh list${NC}        # 列出有 VPN 權限的用戶"
+    echo -e "   ${CYAN}./admin-tools/manage_vpn_users.sh add USERNAME${NC}  # 為用戶分配 VPN 權限"
     echo -e ""
     
     if [ "$PUBLISH_ASSETS" = true ]; then
@@ -577,8 +622,8 @@ main() {
     # Get AWS profile from environment manager
     AWS_PROFILE="$(env_get_profile "$CURRENT_ENVIRONMENT" 2>/dev/null || echo default)"
     ENVIRONMENT=""
-    CREATE_USERS=false
-    LIST_USERS=false
+    CREATE_POLICIES=false
+    LIST_POLICIES=false
     CLEANUP=false
     PUBLISH_ASSETS=false
     VERBOSE=false
@@ -602,12 +647,12 @@ main() {
                 ENVIRONMENT="$2"
                 shift 2
                 ;;
-            --create-users)
-                CREATE_USERS=true
+            --create-policies)
+                CREATE_POLICIES=true
                 shift
                 ;;
-            --list-users)
-                LIST_USERS=true
+            --list-policies)
+                LIST_POLICIES=true
                 shift
                 ;;
             --publish-assets)
@@ -678,8 +723,8 @@ main() {
     fi
     
     # 處理特殊操作
-    if [ "$LIST_USERS" = true ]; then
-        list_iam_users
+    if [ "$LIST_POLICIES" = true ]; then
+        list_iam_policies
         exit 0
     fi
     
@@ -709,10 +754,9 @@ main() {
         exit 1
     fi
     
-    if [ "$CREATE_USERS" = true ]; then
-        if ! create_iam_resources; then
-            exit 1
-        fi
+    # 總是創建 IAM 政策（基礎設施的一部分）
+    if ! create_iam_resources; then
+        exit 1
     fi
     
     if [ "$PUBLISH_ASSETS" = true ]; then
