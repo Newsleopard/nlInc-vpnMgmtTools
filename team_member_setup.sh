@@ -1099,18 +1099,25 @@ zero_touch_init_mode() {
             setup_ca_cert_and_environment
         else
             # CA 下載成功，但需要確保環境路徑已設置
+            echo -e "${BLUE}DEBUG: CA 證書下載成功，處理環境偵測${NC}"
+            log_team_setup_message "DEBUG: CA 證書下載成功，處理環境偵測"
             # 先嘗試從 CA 證書偵測環境
             local ca_cert_path="$TEAM_SCRIPT_DIR/temp_certs/ca.crt"
             if [ -f "$ca_cert_path" ]; then
+                echo -e "${BLUE}DEBUG: 找到 CA 證書文件，嘗試偵測環境${NC}"
                 local detected_env
-                detected_env=$(detect_environment_from_ca_cert "$ca_cert_path")
+                detected_env=$(detect_environment_from_ca_cert "$ca_cert_path") || true
+                echo -e "${BLUE}DEBUG: 偵測到環境: $detected_env${NC}"
                 if [ -n "$detected_env" ]; then
                     TARGET_ENVIRONMENT="$detected_env"
                     setup_team_member_paths "$TARGET_ENVIRONMENT" "$TEAM_SCRIPT_DIR"
                     USER_CONFIG_FILE="$USER_VPN_CONFIG_FILE"
                     LOG_FILE="$TEAM_SETUP_LOG_FILE"
                     echo -e "${GREEN}✓ 從 CA 證書偵測到環境: $(get_env_display_name "$TARGET_ENVIRONMENT")${NC}"
+                    echo -e "${BLUE}DEBUG: 環境設定完成，USER_CONFIG_FILE=$USER_CONFIG_FILE${NC}"
                 fi
+            else
+                echo -e "${BLUE}DEBUG: CA 證書文件不存在: $ca_cert_path${NC}"
             fi
         fi
     else
@@ -1153,10 +1160,15 @@ zero_touch_init_mode() {
     fi
     
     # 設定用戶資訊
+    echo -e "${BLUE}DEBUG: 準備調用 setup_user_info${NC}"
+    log_team_setup_message "DEBUG: 準備調用 setup_user_info"
     if ! setup_user_info; then
         echo -e "${RED}用戶資訊設定失敗${NC}"
+        log_team_setup_message "ERROR: setup_user_info 失敗"
         return 1
     fi
+    echo -e "${BLUE}DEBUG: setup_user_info 成功完成${NC}"
+    log_team_setup_message "DEBUG: setup_user_info 成功完成"
     
     # 載入配置以獲取用戶名
     if [ ! -f "$USER_CONFIG_FILE" ]; then
@@ -1171,7 +1183,11 @@ zero_touch_init_mode() {
     fi
     
     # 生成 CSR 並上傳
+    echo -e "${BLUE}DEBUG: 準備調用 generate_csr_for_zero_touch${NC}"
+    log_team_setup_message "DEBUG: 準備調用 generate_csr_for_zero_touch"
     generate_csr_for_zero_touch
+    echo -e "${BLUE}DEBUG: generate_csr_for_zero_touch 已完成${NC}"
+    log_team_setup_message "DEBUG: generate_csr_for_zero_touch 已完成"
     
     return 0
 }
@@ -1889,7 +1905,11 @@ main() {
         # 零接觸初始化模式
         show_welcome
         check_team_prerequisites
+        echo -e "${BLUE}DEBUG: 準備調用 zero_touch_init_mode${NC}"
+        log_team_setup_message "DEBUG: 準備調用 zero_touch_init_mode"
         zero_touch_init_mode
+        echo -e "${BLUE}DEBUG: zero_touch_init_mode 已完成${NC}"
+        log_team_setup_message "DEBUG: zero_touch_init_mode 已完成"
     elif [ "$RESUME_MODE" = true ]; then
         # 零接觸恢復模式
         show_welcome
