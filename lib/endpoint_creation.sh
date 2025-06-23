@@ -558,111 +558,150 @@ create_dedicated_client_vpn_security_group() {
 }
 
 # 輔助函式：提示用戶更新現有安全群組以允許 Client VPN 訪問
-# 參數: $1 = Client VPN Security Group ID, $2 = AWS REGION
+# 參數: $1 = Client VPN Security Group ID, $2 = AWS REGION, $3 = Environment (optional)
 prompt_update_existing_security_groups() {
     local client_vpn_sg_id="$1"
     local aws_region="$2"
+    local env_name="$3"
     
     if [ -z "$client_vpn_sg_id" ] || [ -z "$aws_region" ]; then
         echo -e "${RED}錯誤: prompt_update_existing_security_groups 缺少必要參數${NC}" >&2
+        log_message_core "錯誤: prompt_update_existing_security_groups 缺少必要參數 - client_vpn_sg_id='$client_vpn_sg_id', aws_region='$aws_region'"
         return 1
     fi
     
     echo -e "\\n${CYAN}=== Client VPN 安全群組設定完成 ===${NC}" >&2
     echo -e "${GREEN}✓ 已創建專用的 Client VPN 安全群組: $client_vpn_sg_id${NC}" >&2
     echo -e "${BLUE}該安全群組已配置為允許所有出站流量，提供基本的網路連接能力。${NC}" >&2
+    log_message_core "Client VPN 安全群組創建完成: $client_vpn_sg_id"
     
-    echo -e "\\n${YELLOW}=== 下一步：更新現有安全群組以允許 VPN 用戶訪問 ===${NC}" >&2
-    echo -e "${BLUE}為了讓 VPN 用戶能夠訪問您的服務，您需要更新以下安全群組：${NC}" >&2
-    echo -e "${CYAN}1. 創建一個新的 Client VPN 專用安全群組 (已完成) ✓${NC}" >&2
-    echo -e "${CYAN}2. 更新兩個現有的安全群組以允許 VPN 訪問：${NC}" >&2
-    echo -e "${YELLOW}   • sg-503f5e1b (用於 RDS、HBase、Redis 訪問)${NC}" >&2
-    echo -e "${YELLOW}   • sg-0d59c6a9f577eb225 (用於 EKS API 訪問)${NC}" >&2
+    echo -e "\\n${YELLOW}=== 下一步：自動配置 VPN 服務訪問權限 ===${NC}" >&2
+    echo -e "${BLUE}正在使用 manage_vpn_service_access.sh 自動發現並配置服務訪問...${NC}" >&2
+    log_message_core "開始自動配置 VPN 服務訪問權限: client_vpn_sg_id=$client_vpn_sg_id, region=$aws_region"
     
-    echo -e "\\n${CYAN}=== 安全群組更新指令 ===${NC}" >&2
-    echo -e "${BLUE}請執行以下 AWS CLI 指令來配置服務訪問權限：${NC}" >&2
+    # 獲取專案根目錄和 VPN 服務訪問腳本路徑
+    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local project_root="$(dirname "$script_dir")"
+    local vpn_service_script="$project_root/admin-tools/manage_vpn_service_access.sh"
     
-    echo -e "\\n${GREEN}# MySQL/RDS 訪問${NC}" >&2
-    echo "aws ec2 authorize-security-group-ingress \\" >&2
-    echo "    --group-id sg-503f5e1b \\" >&2
-    echo "    --protocol tcp \\" >&2
-    echo "    --port 3306 \\" >&2
-    echo "    --source-group $client_vpn_sg_id \\" >&2
-    echo "    --region $aws_region" >&2
+    # 檢查 VPN 服務訪問管理腳本是否存在
+    if [ ! -f "$vpn_service_script" ]; then
+        log_message_core "警告: manage_vpn_service_access.sh 不存在，回退到手動配置"
+        echo -e "${YELLOW}⚠️  VPN 服務訪問管理腳本不存在，請手動配置安全群組規則${NC}" >&2
+        echo -e "${BLUE}預期路徑: $vpn_service_script${NC}" >&2
+        echo -e "${YELLOW}請稍後手動運行: ./admin-tools/manage_vpn_service_access.sh create $client_vpn_sg_id --region $aws_region${NC}" >&2
+        return 1
+    fi
     
-    echo -e "\\n${GREEN}# HBase Master Web UI${NC}" >&2
-    echo "aws ec2 authorize-security-group-ingress \\" >&2
-    echo "    --group-id sg-503f5e1b \\" >&2
-    echo "    --protocol tcp \\" >&2
-    echo "    --port 16010 \\" >&2
-    echo "    --source-group $client_vpn_sg_id \\" >&2
-    echo "    --region $aws_region" >&2
+    echo -e "\\n${CYAN}=== 自動 VPN 服務訪問配置 ===${NC}" >&2
     
-    echo -e "\\n${GREEN}# HBase RegionServer${NC}" >&2
-    echo "aws ec2 authorize-security-group-ingress \\" >&2
-    echo "    --group-id sg-503f5e1b \\" >&2
-    echo "    --protocol tcp \\" >&2
-    echo "    --port 16020 \\" >&2
-    echo "    --source-group $client_vpn_sg_id \\" >&2
-    echo "    --region $aws_region" >&2
+    # 步驟 1: 服務發現和預覽
+    echo -e "\\n${YELLOW}🔍 步驟 1: 發現當前環境中的服務...${NC}" >&2
+    log_message_core "執行服務發現: $vpn_service_script discover --region $aws_region"
     
-    echo -e "\\n${GREEN}# Custom HBase port (8765)${NC}" >&2
-    echo "aws ec2 authorize-security-group-ingress \\" >&2
-    echo "    --group-id sg-503f5e1b \\" >&2
-    echo "    --protocol tcp \\" >&2
-    echo "    --port 8765 \\" >&2
-    echo "    --source-group $client_vpn_sg_id \\" >&2
-    echo "    --region $aws_region" >&2
+    if ! "$vpn_service_script" discover --region "$aws_region"; then
+        log_message_core "警告: VPN 服務發現失敗，回退到手動配置"
+        echo -e "${YELLOW}⚠️  服務發現失敗，建議稍後手動運行：${NC}" >&2
+        echo -e "${BLUE}$vpn_service_script discover --region $aws_region${NC}" >&2
+        return 1
+    fi
     
-    echo -e "\\n${GREEN}# Redis 訪問${NC}" >&2
-    echo "aws ec2 authorize-security-group-ingress \\" >&2
-    echo "    --group-id sg-503f5e1b \\" >&2
-    echo "    --protocol tcp \\" >&2
-    echo "    --port 6379 \\" >&2
-    echo "    --source-group $client_vpn_sg_id \\" >&2
-    echo "    --region $aws_region" >&2
+    # 步驟 2: 預覽即將創建的規則
+    echo -e "\\n${YELLOW}🔍 步驟 2: 預覽即將創建的 VPN 服務訪問規則...${NC}" >&2
+    log_message_core "執行規則預覽: $vpn_service_script create $client_vpn_sg_id --region $aws_region --dry-run"
     
-    echo -e "\\n${GREEN}# EKS API server 訪問${NC}" >&2
-    echo "aws ec2 authorize-security-group-ingress \\" >&2
-    echo "    --group-id sg-0d59c6a9f577eb225 \\" >&2
-    echo "    --protocol tcp \\" >&2
-    echo "    --port 443 \\" >&2
-    echo "    --source-group $client_vpn_sg_id \\" >&2
-    echo "    --region $aws_region" >&2
+    if ! "$vpn_service_script" create "$client_vpn_sg_id" --region "$aws_region" --dry-run; then
+        log_message_core "警告: VPN 服務訪問規則預覽失敗，繼續手動配置"
+        echo -e "${YELLOW}⚠️  規則預覽失敗，建議稍後手動運行：${NC}" >&2
+        echo -e "${BLUE}$vpn_service_script create $client_vpn_sg_id --region $aws_region${NC}" >&2
+        return 1
+    fi
     
-    echo -e "\\n${GREEN}# Phoenix Query Server (預設端口)${NC}" >&2
-    echo "aws ec2 authorize-security-group-ingress \\" >&2
-    echo "    --group-id sg-503f5e1b \\" >&2
-    echo "    --protocol tcp \\" >&2
-    echo "    --port 8765 \\" >&2
-    echo "    --source-group $client_vpn_sg_id \\" >&2
-    echo "    --region $aws_region" >&2
+    # 步驟 3: 詢問用戶是否執行自動配置
+    echo -e "\\n${CYAN}🚀 步驟 3: 是否自動執行上述 VPN 服務訪問規則配置？${NC}" >&2
+    echo -e "${YELLOW}[y] 是，自動配置所有服務訪問規則${NC}" >&2
+    echo -e "${YELLOW}[n] 否，稍後手動配置${NC}" >&2
+    echo -e "${YELLOW}[s] 跳過，我會自己處理${NC}" >&2
     
-    echo -e "\\n${GREEN}# Phoenix Query Server (替代端口)${NC}" >&2
-    echo "aws ec2 authorize-security-group-ingress \\" >&2
-    echo "    --group-id sg-503f5e1b \\" >&2
-    echo "    --protocol tcp \\" >&2
-    echo "    --port 8000 \\" >&2
-    echo "    --source-group $client_vpn_sg_id \\" >&2
-    echo "    --region $aws_region" >&2
+    local choice
+    local max_attempts=3
+    local attempts=0
     
-    echo -e "\\n${GREEN}# Phoenix Web UI${NC}" >&2
-    echo "aws ec2 authorize-security-group-ingress \\" >&2
-    echo "    --group-id sg-503f5e1b \\" >&2
-    echo "    --protocol tcp \\" >&2
-    echo "    --port 8080 \\" >&2
-    echo "    --source-group $client_vpn_sg_id \\" >&2
-    echo "    --region $aws_region" >&2
+    while [ $attempts -lt $max_attempts ]; do
+        echo -n "請選擇 [y/n/s]: " >&2
+        read choice
+        case "$choice" in
+            [Yy]* )
+                echo -e "\\n${GREEN}✅ 開始自動配置 VPN 服務訪問規則...${NC}" >&2
+                log_message_core "用戶選擇自動配置，開始執行: $vpn_service_script create $client_vpn_sg_id --region $aws_region"
+                
+                if "$vpn_service_script" create "$client_vpn_sg_id" --region "$aws_region"; then
+                    echo -e "\\n${GREEN}🎉 VPN 服務訪問規則配置完成！${NC}" >&2
+                    log_message_core "VPN 服務訪問規則自動配置成功"
+                    
+                    echo -e "\\n${CYAN}=== 配置摘要 ===${NC}" >&2
+                    echo -e "${GREEN}• 已自動發現並配置所有服務安全群組${NC}" >&2
+                    echo -e "${GREEN}• VPN 用戶現在可以訪問 MySQL/RDS、Redis、HBase、EKS 等服務${NC}" >&2
+                    echo -e "${GREEN}• 遵循最小權限原則，安全且高效${NC}" >&2
+                    
+                    # 顯示如何撤銷規則的資訊
+                    echo -e "\\n${BLUE}💡 如需撤銷 VPN 訪問規則，請運行：${NC}" >&2
+                    echo -e "${DIM}$vpn_service_script remove $client_vpn_sg_id --region $aws_region${NC}" >&2
+                    
+                    log_message_core "VPN 服務訪問配置完成，提供撤銷指令: remove $client_vpn_sg_id --region $aws_region"
+                    return 0
+                else
+                    echo -e "\\n${RED}❌ VPN 服務訪問規則配置失敗${NC}" >&2
+                    log_message_core "VPN 服務訪問規則自動配置失敗"
+                    echo -e "${YELLOW}請稍後手動運行以下命令：${NC}" >&2
+                    echo -e "${BLUE}$vpn_service_script create $client_vpn_sg_id --region $aws_region${NC}" >&2
+                    return 1
+                fi
+                ;;
+            [Nn]* )
+                echo -e "\\n${YELLOW}⏭️  跳過自動配置，稍後請手動運行：${NC}" >&2
+                echo -e "${BLUE}$vpn_service_script create $client_vpn_sg_id --region $aws_region${NC}" >&2
+                log_message_core "用戶選擇跳過自動配置，提供手動配置指令"
+                return 0
+                ;;
+            [Ss]* )
+                echo -e "\\n${BLUE}✅ 用戶選擇自行處理 VPN 服務訪問配置${NC}" >&2
+                log_message_core "用戶選擇自行處理 VPN 服務訪問配置"
+                return 0
+                ;;
+            * )
+                echo -e "${RED}請輸入 y、n 或 s${NC}" >&2
+                attempts=$((attempts + 1))
+                if [ $attempts -eq $max_attempts ]; then
+                    echo -e "${YELLOW}輸入次數過多，默認跳過自動配置${NC}" >&2
+                    log_message_core "用戶輸入次數過多，默認跳過自動配置"
+                    return 0
+                fi
+                ;;
+        esac
+    done
     
-    echo -e "\\n${CYAN}=== 安全優勢 ===${NC}" >&2
-    echo -e "${BLUE}這種方法更清潔且更安全，因為：${NC}" >&2
+    # 顯示增強的安全優勢說明
+    echo -e "\\n${CYAN}=== 自動化 VPN 服務訪問的安全優勢 ===${NC}" >&2
+    echo -e "${BLUE}這種自動化方法更清潔且更安全，因為：${NC}" >&2
     echo -e "${GREEN}• Client VPN 用戶被隔離在專用安全群組中${NC}" >&2
-    echo -e "${GREEN}• 您可以通過修改一個安全群組輕鬆管理 Client VPN 訪問${NC}" >&2
+    echo -e "${GREEN}• 自動發現服務，無需維護硬編碼安全群組 ID${NC}" >&2
+    echo -e "${GREEN}• 支援 dry-run 預覽，避免意外配置${NC}" >&2
     echo -e "${GREEN}• 遵循最小權限原則，具有更好的安全姿態${NC}" >&2
     echo -e "${GREEN}• 更容易審計和故障排除${NC}" >&2
+    echo -e "${GREEN}• 支援跨環境使用（staging/production）${NC}" >&2
+    echo -e "${GREEN}• 可輕鬆撤銷所有 VPN 訪問規則${NC}" >&2
     
-    echo -e "\\n${YELLOW}請將上述指令複製並執行，以完成 VPN 用戶的服務訪問配置。${NC}" >&2
+    # 提供額外的管理指令
+    echo -e "\\n${BLUE}💡 常用 VPN 服務訪問管理指令：${NC}" >&2
+    echo -e "${DIM}# 發現服務${NC}" >&2
+    echo -e "${DIM}$vpn_service_script discover --region $aws_region${NC}" >&2
+    echo -e "${DIM}# 創建 VPN 訪問規則${NC}" >&2  
+    echo -e "${DIM}$vpn_service_script create $client_vpn_sg_id --region $aws_region${NC}" >&2
+    echo -e "${DIM}# 撤銷 VPN 訪問規則${NC}" >&2
+    echo -e "${DIM}$vpn_service_script remove $client_vpn_sg_id --region $aws_region${NC}" >&2
     
+    log_message_core "VPN 服務訪問權限配置步驟完成"
     return 0
 }
 
@@ -1221,6 +1260,8 @@ _setup_authorization_and_routes_ec() {
     if [ $route_exit_code -eq 0 ]; then
         echo -e "${GREEN}✓ 路由創建成功${NC}"
         log_message_core "路由創建成功: $route_output"
+   
+
     else
         echo -e "${RED}✗ 路由創建失敗${NC}"
         echo -e "${RED}錯誤輸出: $route_output${NC}"
@@ -1245,6 +1286,147 @@ _setup_authorization_and_routes_ec() {
     fi
     
     return 0
+}
+
+# 輔助函式：生成安全群組配置指令文件
+# 參數: $1 = Client VPN Security Group ID, $2 = AWS REGION, $3 = Environment
+generate_security_group_commands_file() {
+    local client_vpn_sg_id="$1"
+    local aws_region="$2"
+    local environment="$3"
+    
+    if [ -z "$client_vpn_sg_id" ] || [ -z "$aws_region" ] || [ -z "$environment" ]; then
+        echo -e "${RED}錯誤: generate_security_group_commands_file 缺少必要參數${NC}" >&2
+        return 1
+    fi
+    
+    # 生成文件名（包含環境和時間戳）
+    local timestamp=$(date +%Y%m%d_%H%M%S)
+    local filename="vpn_security_group_setup_${environment}_${timestamp}.sh"
+    local output_file="${TOOL_ROOT:-$(pwd)}/${filename}"
+    
+    echo -e "${BLUE}正在生成安全群組配置指令文件: $filename${NC}" >&2
+    
+    # 創建腳本文件頭部
+    cat > "$output_file" << 'HEADER_EOF'
+#!/bin/bash
+# VPN 安全群組配置指令
+# 此腳本包含創建 VPN 端點後需要執行的安全群組更新指令
+# 即使控制台日誌消失，您也可以使用此腳本來配置服務訪問權限
+HEADER_EOF
+
+    # 添加動態內容
+    cat >> "$output_file" << EOF
+# 生成時間: $(date)
+# 環境: $environment
+# Client VPN 安全群組 ID: $client_vpn_sg_id
+# AWS 區域: $aws_region
+
+set -e
+
+echo "=== 安全群組更新指令 ==="
+echo "請執行以下 AWS CLI 指令來配置服務訪問權限："
+echo ""
+
+# MySQL/RDS 訪問
+aws ec2 authorize-security-group-ingress \\
+    --group-id sg-503f5e1b \\
+    --protocol tcp \\
+    --port 3306 \\
+    --source-group $client_vpn_sg_id \\
+    --region $aws_region
+
+# HBase Master Web UI
+aws ec2 authorize-security-group-ingress \\
+    --group-id sg-503f5e1b \\
+    --protocol tcp \\
+    --port 16010 \\
+    --source-group $client_vpn_sg_id \\
+    --region $aws_region
+
+# HBase RegionServer
+aws ec2 authorize-security-group-ingress \\
+    --group-id sg-503f5e1b \\
+    --protocol tcp \\
+    --port 16020 \\
+    --source-group $client_vpn_sg_id \\
+    --region $aws_region
+
+# Custom HBase port (8765)
+aws ec2 authorize-security-group-ingress \\
+    --group-id sg-503f5e1b \\
+    --protocol tcp \\
+    --port 8765 \\
+    --source-group $client_vpn_sg_id \\
+    --region $aws_region
+
+# Redis 訪問
+aws ec2 authorize-security-group-ingress \\
+    --group-id sg-503f5e1b \\
+    --protocol tcp \\
+    --port 6379 \\
+    --source-group $client_vpn_sg_id \\
+    --region $aws_region
+
+# EKS API server 訪問
+aws ec2 authorize-security-group-ingress \\
+    --group-id sg-0d59c6a9f577eb225 \\
+    --protocol tcp \\
+    --port 443 \\
+    --source-group $client_vpn_sg_id \\
+    --region $aws_region
+
+# Phoenix Query Server (預設端口)
+aws ec2 authorize-security-group-ingress \\
+    --group-id sg-503f5e1b \\
+    --protocol tcp \\
+    --port 8765 \\
+    --source-group $client_vpn_sg_id \\
+    --region $aws_region
+
+# Phoenix Query Server (替代端口)
+aws ec2 authorize-security-group-ingress \\
+    --group-id sg-503f5e1b \\
+    --protocol tcp \\
+    --port 8000 \\
+    --source-group $client_vpn_sg_id \\
+    --region $aws_region
+
+# Phoenix Web UI
+aws ec2 authorize-security-group-ingress \\
+    --group-id sg-503f5e1b \\
+    --protocol tcp \\
+    --port 8080 \\
+    --source-group $client_vpn_sg_id \\
+    --region $aws_region
+
+echo ""
+echo "=== 安全優勢 ==="
+echo "這種方法更清潔且更安全，因為："
+echo "• Client VPN 用戶被隔離在專用安全群組中"
+echo "• 您可以通過修改一個安全群組輕鬆管理 Client VPN 訪問"
+echo "• 遵循最小權限原則，具有更好的安全姿態"
+echo "• 更容易審計和故障排除"
+echo ""
+echo "請將上述指令複製並執行，以完成 VPN 用戶的服務訪問配置。"
+EOF
+
+    # 設置文件為可執行
+    chmod +x "$output_file"
+    
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}✓ 安全群組配置指令文件已生成: $filename${NC}" >&2
+        echo -e "${YELLOW}📁 文件位置: $output_file${NC}" >&2
+        echo -e "${BLUE}💡 您可以稍後執行此腳本來配置安全群組規則：${NC}" >&2
+        echo -e "${CYAN}   ./$filename${NC}" >&2
+        
+        # 返回文件路徑供其他函數使用
+        echo "$output_file"
+        return 0
+    else
+        echo -e "${RED}錯誤: 生成安全群組配置指令文件失敗${NC}" >&2
+        return 1
+    fi
 }
 
 # 等待 VPN 端點變為可用狀態的輔助函數
@@ -1541,7 +1723,7 @@ _associate_one_vpc_to_endpoint_lib() {
             echo -e "${GREEN}✓ 子網路 ID 驗證成功${NC}"
             break
         else
-            echo -e "${RED}子網路 ID '$subnet_to_associate_id' 無效、不存在於 VPC '$vpc_to_add_id' 或區域 '$arg_aws_region'。${NC}"
+            echo -e "${RED}子網路 ID '$subnet_to_associate_id' 無效、不存在於 VPC '$vpc_to_add_id' 或區域 '$arg_aws_region'。${NC}" # subnet_id, vpc_id, aws_region are variables
             attempts=$((attempts + 1))
             if [ $attempts -lt $max_attempts ]; then
                 echo -e "${YELLOW}請重試 ($attempts/$max_attempts) 或輸入 'skip' 跳過。${NC}"
@@ -1899,117 +2081,187 @@ terminate_vpn_endpoint_lib() {
     delete_exit_code=$?
     
     if [ $delete_exit_code -eq 0 ]; then
-        echo -e "${GREEN}✓ VPN 端點刪除命令已成功執行${NC}"
-        log_message_core "VPN 端點刪除命令成功: $endpoint_id"
-        
-        # 等待端點刪除完成
-        echo -e "${BLUE}等待端點刪除完成...${NC}"
-        local delete_wait_attempts=0
-        local max_delete_attempts=20
-        
-        while [ $delete_wait_attempts -lt $max_delete_attempts ]; do
-            local endpoint_status
-            endpoint_status=$(aws ec2 describe-client-vpn-endpoints \
-                --client-vpn-endpoint-ids "$endpoint_id" \
-                --region "$aws_region" \
-                --query 'ClientVpnEndpoints[0].Status.Code' \
-                --output text 2>/dev/null)
-            
-            if [ $? -ne 0 ] || [ "$endpoint_status" = "None" ] || [ -z "$endpoint_status" ]; then
-                echo -e "${GREEN}✓ VPN 端點已成功刪除${NC}"
-                break
-            fi
-            
-            if [ "$endpoint_status" = "deleted" ]; then
-                echo -e "${GREEN}✓ VPN 端點狀態確認為已刪除${NC}"
-                break
-            fi
-            
-            echo -e "${YELLOW}端點狀態: $endpoint_status，等待中... ($((delete_wait_attempts + 1))/$max_delete_attempts)${NC}"
-            sleep 15
-            ((delete_wait_attempts++))
-        done
+        echo -e "${GREEN}✓ VPN 端點刪除成功${NC}"
+        log_message_core "VPN 端點刪除成功: $endpoint_id"
     else
         echo -e "${RED}✗ VPN 端點刪除失敗${NC}"
-        echo -e "${RED}錯誤信息: $delete_output${NC}"
-        log_message_core "錯誤: VPN 端點刪除失敗: $delete_output"
+        echo -e "${RED}錯誤輸出: $delete_output${NC}"
+        log_message_core "錯誤: VPN 端點刪除失敗 (exit code: $delete_exit_code) - $delete_output"
+        
+        # 保存詳細診斷信息
+        {
+            echo "=== VPN 端點刪除失敗診斷報告 ==="
+            echo "時間: $(date)"
+            echo "Exit Code: $delete_exit_code"
+            echo "端點 ID: $endpoint_id"
+            echo "AWS 區域: $aws_region"
+            echo "錯誤輸出: $delete_output"
+            echo "AWS CLI 版本: $(aws --version 2>&1)"
+            echo "當前身份: $(aws sts get-caller-identity --query 'Arn' --output text 2>/dev/null || echo '無法獲取')"
+            echo "========================="
+        } >> "${LOG_FILE:-vpn_error_diagnostic.log}"
+        
         return 1
     fi
-
-    # 步驟 4: 刪除 CloudWatch 日誌組（如果提供了 VPN 名稱）
-    if [ -n "$vpn_name" ] && [ "$vpn_name" != "null" ]; then
-        echo -e "\\n${YELLOW}步驟 4: 刪除 CloudWatch 日誌組...${NC}"
-        log_message_core "開始刪除 CloudWatch 日誌組: /aws/clientvpn/$vpn_name"
+    
+    # 步驟 3.5: 清理 VPN 服務訪問權限
+    echo -e "\\n${YELLOW}步驟 3.5: 清理 VPN 服務訪問權限...${NC}"
+    log_message_core "開始清理 VPN 服務訪問權限: $endpoint_id"
+    
+    # 嘗試從配置文件獲取 CLIENT_VPN_SECURITY_GROUP_ID
+    local client_vpn_sg_id=""
+    
+    # 檢查多個可能的配置文件位置
+    local config_files=(
+        "${config_file_path}"
+        "${config_file_path%/*}/vpn_endpoint.conf"
+        "${config_file_path%/*}/${CURRENT_ENVIRONMENT:-staging}.env"
+    )
+    
+    # 如果 config_file_path 為空，嘗試從當前目錄推斷
+    if [ -z "$config_file_path" ]; then
+        local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        local project_root="$(dirname "$script_dir")"
         
-        local log_group_name="/aws/clientvpn/$vpn_name"
+        # 嘗試從環境管理器獲取當前環境
+        if [ -f "$script_dir/env_manager.sh" ]; then
+            source "$script_dir/env_manager.sh"
+            load_current_env 2>/dev/null || true
+        fi
         
-        # 檢查日誌組是否存在
-        local log_group_exists
-        log_group_exists=$(aws logs describe-log-groups \
-            --log-group-name-prefix "$log_group_name" \
-            --query "logGroups[?logGroupName=='$log_group_name'] | length(@)" \
-            --output text 2>/dev/null)
+        local current_env="${CURRENT_ENVIRONMENT:-staging}"
+        config_files+=(
+            "$project_root/configs/$current_env/vpn_endpoint.conf"
+            "$project_root/configs/$current_env/${current_env}.env"
+        )
+    fi
+    
+    echo -e "${BLUE}正在搜索 CLIENT_VPN_SECURITY_GROUP_ID...${NC}"
+    for config_file in "${config_files[@]}"; do
+        if [[ -f "$config_file" ]] && grep -q "CLIENT_VPN_SECURITY_GROUP_ID=" "$config_file" 2>/dev/null; then
+            client_vpn_sg_id=$(grep "CLIENT_VPN_SECURITY_GROUP_ID=" "$config_file" | head -1 | cut -d'=' -f2 | tr -d '"' | tr -d "'" | xargs)
+            if [[ -n "$client_vpn_sg_id" && "$client_vpn_sg_id" != "null" && "$client_vpn_sg_id" != '""' ]]; then
+                echo -e "${BLUE}✓ 找到 CLIENT_VPN_SECURITY_GROUP_ID: $client_vpn_sg_id${NC}"
+                echo -e "${DIM}  來源: $(basename "$config_file")${NC}"
+                log_message_core "找到 CLIENT_VPN_SECURITY_GROUP_ID: $client_vpn_sg_id (來源: $config_file)"
+                break
+            fi
+        fi
+    done
+    
+    if [[ -n "$client_vpn_sg_id" && "$client_vpn_sg_id" != "null" && "$client_vpn_sg_id" != '""' ]]; then
+        # 調用 manage_vpn_service_access.sh 來移除 VPN 訪問規則
+        local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        local project_root="$(dirname "$script_dir")"
+        local access_script="$project_root/admin-tools/manage_vpn_service_access.sh"
         
-        if [ "$log_group_exists" = "1" ]; then
-            echo -e "${BLUE}正在刪除日誌組: $log_group_name${NC}"
+        if [[ -f "$access_script" && -x "$access_script" ]]; then
+            echo -e "${BLUE}正在使用 manage_vpn_service_access.sh 清理服務訪問權限...${NC}"
+            log_message_core "執行 VPN 服務訪問清理: $access_script remove $client_vpn_sg_id --region $aws_region"
             
-            local log_delete_output log_delete_exit_code
-            log_delete_output=$(aws logs delete-log-group \
-                --log-group-name "$log_group_name" 2>&1)
-            log_delete_exit_code=$?
-            
-            if [ $log_delete_exit_code -eq 0 ]; then
-                echo -e "${GREEN}✓ CloudWatch 日誌組已成功刪除${NC}"
-                log_message_core "CloudWatch 日誌組刪除成功: $log_group_name"
+            # 首先預覽要移除的規則
+            echo -e "${DIM}預覽要移除的規則...${NC}"
+            if "$access_script" remove "$client_vpn_sg_id" --region "$aws_region" --dry-run 2>/dev/null; then
+                echo -e "${YELLOW}執行實際的規則移除...${NC}"
+                if "$access_script" remove "$client_vpn_sg_id" --region "$aws_region"; then
+                    echo -e "${GREEN}✓ VPN 服務訪問權限清理成功${NC}"
+                    log_message_core "VPN 服務訪問權限清理成功: $client_vpn_sg_id"
+                else
+                    echo -e "${YELLOW}⚠️ VPN 服務訪問權限清理失敗或無需清理${NC}"
+                    log_message_core "警告: VPN 服務訪問權限清理失敗: $client_vpn_sg_id"
+                fi
             else
-                echo -e "${YELLOW}警告: 無法刪除 CloudWatch 日誌組: $log_delete_output${NC}"
-                log_message_core "警告: CloudWatch 日誌組刪除失敗: $log_delete_output"
+                echo -e "${YELLOW}⚠️ 無法預覽要移除的規則，跳過服務訪問清理${NC}"
+                log_message_core "警告: 無法預覽 VPN 服務訪問規則，跳過清理"
             fi
         else
-            echo -e "${GREEN}沒有找到對應的 CloudWatch 日誌組${NC}"
+            echo -e "${YELLOW}⚠️ 找不到 manage_vpn_service_access.sh 工具，跳過服務訪問權限清理${NC}"
+            echo -e "${DIM}預期位置: $access_script${NC}"
+            log_message_core "警告: manage_vpn_service_access.sh 工具不存在，跳過服務訪問清理"
+            
+            # 提供手動清理指令
+            echo -e "${BLUE}💡 如需手動清理，請稍後運行：${NC}"
+            echo -e "${DIM}./admin-tools/manage_vpn_service_access.sh remove $client_vpn_sg_id --region $aws_region${NC}"
         fi
     else
-        echo -e "\\n${YELLOW}步驟 4: 跳過日誌組刪除（未提供 VPN 名稱）${NC}"
+        echo -e "${YELLOW}⚠️ 未找到有效的 CLIENT_VPN_SECURITY_GROUP_ID，跳過服務訪問權限清理${NC}"
+        log_message_core "警告: 無法獲取有效的 CLIENT_VPN_SECURITY_GROUP_ID，跳過服務訪問權限清理"
+        
+        # 提供查找和手動清理的建議
+        echo -e "${BLUE}💡 如果存在 VPN 服務訪問規則，您可以：${NC}"
+        echo -e "${DIM}1. 檢查配置文件是否包含 CLIENT_VPN_SECURITY_GROUP_ID${NC}"
+        echo -e "${DIM}2. 手動運行: ./admin-tools/manage_vpn_service_access.sh discover --region $aws_region${NC}"
+        echo -e "${DIM}3. 使用發現的安全群組 ID 手動清理規則${NC}"
     fi
-
-    # 步驟 5: 清理配置文件
-    if [ -n "$config_file_path" ] && [ -f "$config_file_path" ]; then
-        echo -e "\\n${YELLOW}步驟 5: 清理配置文件...${NC}"
-        log_message_core "開始清理配置文件: $config_file_path"
-        
-        # 備份當前配置
-        local config_backup="${config_file_path}.backup_$(date +%Y%m%d_%H%M%S)"
-        cp "$config_file_path" "$config_backup"
-        echo -e "${BLUE}配置文件已備份到: $config_backup${NC}"
-        
-        # 創建清理後的配置文件
-        local temp_config
-        temp_config=$(mktemp)
-        
-        # 保留基本配置，清除端點相關信息
-        while IFS= read -r line; do
-            if [[ "$line" =~ ^VPN_ENDPOINT_ID= ]]; then
-                echo "VPN_ENDPOINT_ID="
-            elif [[ "$line" =~ ^MULTI_VPC_COUNT= ]]; then
-                echo "MULTI_VPC_COUNT=0"
-            elif [[ "$line" =~ ^MULTI_VPC_[0-9]+= ]]; then
-                # 跳過多 VPC 條目
-                continue
-            else
-                echo "$line"
-            fi
-        done < "$config_file_path" > "$temp_config"
-        
-        mv "$temp_config" "$config_file_path"
-        echo -e "${GREEN}✓ 配置文件已清理${NC}"
-        log_message_core "配置文件清理完成: $config_file_path"
-    else
-        echo -e "\\n${YELLOW}步驟 5: 跳過配置文件清理（文件不存在或未提供路徑）${NC}"
-    fi
-
-    echo -e "\\n${GREEN}=== VPN 端點刪除完成 ===${NC}"
-    echo -e "${GREEN}所有相關資源已成功清理${NC}"
-    log_message_core "VPN 端點完整刪除操作完成: $endpoint_id"
     
+    # 步驟 4: 刪除日誌群組 (如果存在)
+    if [ -n "$log_group_name" ]; then
+        echo -e "\\n${YELLOW}步驟 4: 刪除日誌群組...${NC}"
+        log_message_core "開始刪除 CloudWatch 日誌群組: $log_group_name"
+        
+        aws logs delete-log-group \
+            --log-group-name "$log_group_name" \
+            --region "$aws_region" >/dev/null 2>&1
+        
+        if [ $? -eq 0 ]; then
+            echo -e "${GREEN}✓ 日誌群組刪除成功${NC}"
+            log_message_core "日誌群組刪除成功: $log_group_name"
+        else
+            echo -e "${RED}✗ 日誌群組刪除失敗${NC}"
+            log_message_core "錯誤: 日誌群組刪除失敗: $log_group_name"
+        fi
+    fi
+
+    # 步驟 5: 更新配置文件
+    if [ -f "$config_file_path" ]; then
+        echo -e "\\n${YELLOW}步驟 5: 更新配置文件...${NC}"
+        log_message_core "開始更新配置文件: $config_file_path"
+        
+        # 創建臨時文件來安全地更新配置
+        local temp_config=$(mktemp)
+        local config_updated=false
+        
+        while IFS= read -r line; do
+            # 保留空行和註釋
+            if [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]]; then
+                echo "$line" >> "$temp_config"
+                continue
+            fi
+            
+            # 解析配置行
+            if [[ "$line" =~ ^([^=]+)=(.*)$ ]]; then
+                local key="${BASH_REMATCH[1]}"
+                local value="${BASH_REMATCH[2]}"
+            else
+                # 非標準格式的行，直接保留
+                echo "$line" >> "$temp_config"
+                continue
+            fi
+            
+            # 更新需要修改的配置項
+            case "$key" in
+                "ENDPOINT_ID") echo "ENDPOINT_ID=" >> "$temp_config" ;; # 清空端點 ID
+                "AWS_REGION") echo "AWS_REGION=$aws_region" >> "$temp_config" ;;
+                "VPN_CIDR") echo "VPN_CIDR=$vpn_cidr" >> "$temp_config" ;;
+                "VPN_NAME") echo "VPN_NAME=$vpn_name" >> "$temp_config" ;;
+                "SERVER_CERT_ARN") echo "SERVER_CERT_ARN=$arg_server_cert_arn" >> "$temp_config" ;;
+                "CLIENT_CERT_ARN") echo "CLIENT_CERT_ARN=$arg_client_cert_arn" >> "$temp_config" ;;
+                "VPC_ID") echo "VPC_ID=$vpc_id" >> "$temp_config" ;;
+                "VPC_CIDR") echo "VPC_CIDR=$vpc_cidr" >> "$temp_config" ;;
+                "SUBNET_ID") echo "SUBNET_ID=$subnet_id" >> "$temp_config" ;;
+                "MULTI_VPC_COUNT") echo "MULTI_VPC_COUNT=0" >> "$temp_config" ;;
+                *) echo "$key=$value" >> "$temp_config" ;;
+            esac
+        done < "$config_file_path"
+        
+        # 原子性地替換配置文件
+        mv "$temp_config" "$config_file_path"
+        echo -e "${GREEN}✓ 配置已安全更新，現有設置得到保留${NC}"
+        log_message_core "配置文件更新成功: $config_file_path"
+    else
+        echo -e "${YELLOW}警告: 配置文件 $config_file_path 不存在，無法更新${NC}"
+    fi
+
+    echo -e "${GREEN}VPN 端點及相關資源刪除完成！${NC}"
     return 0
 }

@@ -397,7 +397,7 @@ create_vpn_endpoint() {
     
     # 提示用戶更新現有安全群組以允許 VPN 訪問
     if [ -n "$client_vpn_sg_id" ] && [ -n "$AWS_REGION" ]; then
-        prompt_update_existing_security_groups "$client_vpn_sg_id" "$AWS_REGION"
+        prompt_update_existing_security_groups "$client_vpn_sg_id" "$AWS_REGION" "$CURRENT_ENVIRONMENT"
     else
         echo -e "\\n${YELLOW}注意: 無法提供安全群組更新指令 (client_vpn_sg_id 或 AWS_REGION 未設定)${NC}"
         echo -e "${BLUE}請手動檢查並更新現有安全群組以允許 Client VPN 訪問。${NC}"
