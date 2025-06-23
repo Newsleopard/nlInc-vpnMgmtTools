@@ -216,56 +216,85 @@ create_rules() {
     log_info "Created $success/$total rules"
 }
 
-# Remove VPN access rules
+# FIXED: Comprehensive VPN access rules removal
 remove_rules() {
     local vpn_sg="$1"
     
-    if [[ ! -s /tmp/discovered_services.txt ]]; then
-        log_error "No services discovered. Run 'discover' first."
-        exit 1
+    log_info "🔍 COMPREHENSIVE SEARCH: Finding ALL rules that reference VPN security group $vpn_sg..."
+    echo
+    
+    # Find ALL security group rules that reference our VPN security group
+    local all_vpn_rules
+    all_vpn_rules=$(aws_with_profile ec2 describe-security-group-rules \
+        --region "$AWS_REGION" \
+        --query "SecurityGroupRules[?ReferencedGroupInfo.GroupId=='$vpn_sg' && !IsEgress].[GroupId,SecurityGroupRuleId,IpProtocol,FromPort,ToPort,ReferencedGroupInfo.GroupId]" \
+        --output json 2>/dev/null || echo "[]")
+    
+    local rule_count
+    rule_count=$(echo "$all_vpn_rules" | jq '. | length')
+    
+    if [[ $rule_count -eq 0 ]]; then
+        log_info "No VPN access rules found that reference security group $vpn_sg"
+        return 0
     fi
     
-    log_info "Removing VPN access rules for $vpn_sg..."
+    log_info "Found $rule_count VPN access rules to remove:"
+    echo
+    
+    # Display all rules that will be removed
+    echo "$all_vpn_rules" | jq -r '.[] | "  • Rule \(.[1]) in SG \(.[0]) - \(.[2]):\(.[3]) (references \(.[5]))"'
+    echo
+    
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log_info "[DRY-RUN] Would remove all $rule_count rules above"
+        return 0
+    fi
+    
+    log_info "Removing VPN access rules..."
     echo
     
     local success=0
     local total=0
     
-    while IFS=':' read -r service port target_sg; do
-        # Find existing rules
-        local rule_ids
-        rule_ids=$(aws_with_profile ec2 describe-security-group-rules \
-            --region "$AWS_REGION" \
-            --filters "Name=group-id,Values=$target_sg" \
-            --query "SecurityGroupRules[?ReferencedGroupInfo.GroupId=='$vpn_sg' && !IsEgress && FromPort<=\`$port\` && ToPort>=\`$port\`].SecurityGroupRuleId" \
-            --output text 2>/dev/null || echo "")
+    # Process each rule
+    while IFS= read -r rule; do
+        local target_sg rule_id protocol port
+        target_sg=$(echo "$rule" | jq -r '.[0]')
+        rule_id=$(echo "$rule" | jq -r '.[1]')
+        protocol=$(echo "$rule" | jq -r '.[2]')
+        port=$(echo "$rule" | jq -r '.[3]')
         
-        for rule_id in $rule_ids; do
-            if [[ -n "$rule_id" && "$rule_id" != "None" ]]; then
-                ((total++))
-                
-                if [[ "$DRY_RUN" == "true" ]]; then
-                    log_info "[DRY-RUN] Would remove: $service (port $port) rule $rule_id"
-                    continue
-                fi
-                
-                log_info "Removing: $service (port $port) rule $rule_id"
-                
-                if aws_with_profile ec2 revoke-security-group-ingress \
-                    --group-id "$target_sg" \
-                    --security-group-rule-ids "$rule_id" \
-                    --region "$AWS_REGION" 2>/dev/null; then
-                    echo "  ✅ Success"
-                    ((success++))
-                else
-                    echo "  ❌ Failed"
-                fi
-            fi
-        done
-    done < /tmp/discovered_services.txt
+        ((total++))
+        
+        # Get security group name for better logging
+        local sg_name
+        sg_name=$(aws_with_profile ec2 describe-security-groups \
+            --group-ids "$target_sg" \
+            --region "$AWS_REGION" \
+            --query 'SecurityGroups[0].GroupName' \
+            --output text 2>/dev/null || echo "Unknown")
+        
+        log_info "Removing: Rule $rule_id from $sg_name ($target_sg) - $protocol:$port"
+        
+        if aws_with_profile ec2 revoke-security-group-ingress \
+            --group-id "$target_sg" \
+            --security-group-rule-ids "$rule_id" \
+            --region "$AWS_REGION" 2>/dev/null; then
+            echo "  ✅ Success"
+            ((success++))
+        else
+            echo "  ❌ Failed"
+        fi
+    done < <(echo "$all_vpn_rules" | jq -c '.[]')
     
     echo
     log_info "Removed $success/$total rules"
+    
+    if [[ $success -eq $total ]]; then
+        log_info "🎉 All VPN access rules successfully removed!"
+    else
+        log_warning "⚠️  Some rules could not be removed. Check the errors above."
+    fi
 }
 
 # Main execution
