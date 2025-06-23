@@ -138,6 +138,20 @@ discover_services() {
     log_info "Discovering security groups for services in $AWS_REGION..."
     echo
     
+    # Get VPN security group VPC if VPN_SG is provided
+    local target_vpc=""
+    if [[ -n "$VPN_SG" ]]; then
+        target_vpc=$(aws_with_profile ec2 describe-security-groups \
+            --group-ids "$VPN_SG" \
+            --region "$AWS_REGION" \
+            --query 'SecurityGroups[0].VpcId' \
+            --output text 2>/dev/null)
+        if [[ -n "$target_vpc" && "$target_vpc" != "None" ]]; then
+            log_info "🎯 Filtering services to VPC: $target_vpc (same as VPN security group)"
+            echo
+        fi
+    fi
+    
     > /tmp/discovered_services.txt
     
     for service_def in $SERVICES; do
@@ -146,17 +160,59 @@ discover_services() {
         echo "🔍 $service_name (port $port):"
         
         # Find security groups with this port
+        local query="SecurityGroups[?IpPermissions[?FromPort<=\`$port\` && ToPort>=\`$port\`]]"
+        if [[ -n "$target_vpc" ]]; then
+            query="SecurityGroups[?IpPermissions[?FromPort<=\`$port\` && ToPort>=\`$port\`] && VpcId==\`$target_vpc\`]"
+        fi
+        
         aws_with_profile ec2 describe-security-groups \
             --region "$AWS_REGION" \
-            --query "SecurityGroups[?IpPermissions[?FromPort<=\`$port\` && ToPort>=\`$port\`]].{GroupId:GroupId,GroupName:GroupName,VpcId:VpcId}" \
+            --query "$query.{GroupId:GroupId,GroupName:GroupName,VpcId:VpcId}" \
             --output json | \
         jq -r '.[] | "  • \(.GroupId) (\(.GroupName // "No Name")) in VPC \(.VpcId)"'
         
-        # Save first match for each service
-        first_sg=$(aws_with_profile ec2 describe-security-groups \
-            --region "$AWS_REGION" \
-            --query "SecurityGroups[?IpPermissions[?FromPort<=\`$port\` && ToPort>=\`$port\`]].GroupId" \
-            --output text | awk '{print $1}')
+        # Save best match for each service (filtered by VPC if specified)
+        local first_sg
+        if [[ -n "$target_vpc" ]]; then
+            # Get all matching security groups for this service
+            local all_sgs
+            all_sgs=$(aws_with_profile ec2 describe-security-groups \
+                --region "$AWS_REGION" \
+                --query "SecurityGroups[?IpPermissions[?FromPort<=\`$port\` && ToPort>=\`$port\`] && VpcId==\`$target_vpc\`].{GroupId:GroupId,GroupName:GroupName}" \
+                --output json)
+            
+            # Smart selection based on service type and security group name
+            case "$service_name" in
+                "MySQL_RDS")
+                    first_sg=$(echo "$all_sgs" | jq -r '.[] | select(.GroupName | test("rds|RDS|mysql|MySQL")) | .GroupId' | head -1)
+                    ;;
+                "Redis")
+                    first_sg=$(echo "$all_sgs" | jq -r '.[] | select(.GroupName | test("redis|Redis|cache|Cache")) | .GroupId' | head -1)
+                    ;;
+                "HBase_Master"|"HBase_RegionServer"|"HBase_Custom")
+                    first_sg=$(echo "$all_sgs" | jq -r '.[] | select(.GroupName | test("hbase|HBase|emr|EMR|ElasticMapReduce")) | .GroupId' | head -1)
+                    ;;
+                "Phoenix_Query"|"Phoenix_Web")
+                    first_sg=$(echo "$all_sgs" | jq -r '.[] | select(.GroupName | test("phoenix|Phoenix|hbase|HBase|emr|EMR|ElasticMapReduce")) | .GroupId' | head -1)
+                    ;;
+                "EKS_API")
+                    first_sg=$(echo "$all_sgs" | jq -r '.[] | select(.GroupName | test("ControlPlane|control-plane|ControlPlaneSecurityGroup")) | .GroupId' | head -1)
+                    if [[ -z "$first_sg" || "$first_sg" == "null" ]]; then
+                        first_sg=$(echo "$all_sgs" | jq -r '.[] | select(.GroupName | test("eks.*cluster|EKS.*cluster")) | .GroupId' | head -1)
+                    fi
+                    ;;
+            esac
+            
+            # Fallback to first match if no specific match found
+            if [[ -z "$first_sg" || "$first_sg" == "null" ]]; then
+                first_sg=$(echo "$all_sgs" | jq -r '.[0].GroupId // empty')
+            fi
+        else
+            first_sg=$(aws_with_profile ec2 describe-security-groups \
+                --region "$AWS_REGION" \
+                --query "SecurityGroups[?IpPermissions[?FromPort<=\`$port\` && ToPort>=\`$port\`]].GroupId" \
+                --output text | awk '{print $1}')
+        fi
         
         if [[ -n "$first_sg" && "$first_sg" != "None" ]]; then
             echo "$service_name:$port:$first_sg" >> /tmp/discovered_services.txt
@@ -167,6 +223,9 @@ discover_services() {
     
     if [[ -s /tmp/discovered_services.txt ]]; then
         echo "📋 Summary - Primary Security Groups:"
+        if [[ -n "$target_vpc" ]]; then
+            echo "🎯 Filtered for VPC: $target_vpc"
+        fi
         echo "===================================="
         while IFS=':' read -r service port sg_id; do
             echo "export ${service}_SG=\"$sg_id\"  # Port $port"
