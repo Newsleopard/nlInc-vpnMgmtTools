@@ -1089,15 +1089,30 @@ associate_subnet_to_endpoint_lib() {
         fi
     done
     
-    # 準備安全群組參數
-    local security_groups_param=""
+    # 準備並更新 VPN 端點安全群組
     if [ -n "$SECURITY_GROUPS" ]; then
         # 移除引號並轉換為適合 AWS CLI 的格式
         local sg_list=$(echo "$SECURITY_GROUPS" | tr -d '"' | tr ',' ' ')
-        security_groups_param="--security-group-ids $sg_list"
         echo -e "${CYAN}使用配置的安全群組: $SECURITY_GROUPS${NC}"
+        
+        # 首先更新 VPN 端點的安全群組
+        echo -e "${BLUE}正在更新 VPN 端點安全群組...${NC}"
+        local sg_update_output sg_update_exit_code
+        sg_update_output=$(aws ec2 modify-client-vpn-endpoint \
+            --client-vpn-endpoint-id "$endpoint_id" \
+            --security-group-ids $sg_list \
+            --vpc-id "$VPC_ID" \
+            --region "$aws_region" 2>&1)
+        sg_update_exit_code=$?
+        
+        if [ $sg_update_exit_code -eq 0 ]; then
+            echo -e "${GREEN}✓ VPN 端點安全群組已更新${NC}"
+        else
+            echo -e "${YELLOW}警告: 更新 VPN 端點安全群組失敗，但繼續關聯操作${NC}"
+            echo -e "${YELLOW}錯誤詳情: $sg_update_output${NC}"
+        fi
     else
-        echo -e "${YELLOW}警告: 未配置安全群組，將使用 VPC 預設安全群組${NC}"
+        echo -e "${YELLOW}警告: 未配置安全群組，將使用現有 VPN 端點安全群組${NC}"
     fi
     
     # 執行關聯操作
@@ -1106,18 +1121,10 @@ associate_subnet_to_endpoint_lib() {
     local start_time end_time output exit_code
     start_time=$(date)
     
-    if [ -n "$security_groups_param" ]; then
-        output=$(aws ec2 associate-client-vpn-target-network \
-            --client-vpn-endpoint-id "$endpoint_id" \
-            --subnet-id "$subnet_id" \
-            $security_groups_param \
-            --region "$aws_region" 2>&1)
-    else
-        output=$(aws ec2 associate-client-vpn-target-network \
-            --client-vpn-endpoint-id "$endpoint_id" \
-            --subnet-id "$subnet_id" \
-            --region "$aws_region" 2>&1)
-    fi
+    output=$(aws ec2 associate-client-vpn-target-network \
+        --client-vpn-endpoint-id "$endpoint_id" \
+        --subnet-id "$subnet_id" \
+        --region "$aws_region" 2>&1)
     exit_code=$?
     
     end_time=$(date)
