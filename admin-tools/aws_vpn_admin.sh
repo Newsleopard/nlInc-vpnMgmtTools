@@ -323,8 +323,20 @@ create_vpn_endpoint() {
         log_message "VPN 端點創建過程中發生錯誤。"
         return 1
     fi
-    # create_vpn_endpoint_lib 應該返回 ENDPOINT_ID
-    export ENDPOINT_ID="$creation_output" # 直接賦值，不再需要 cut
+    # Extract just the endpoint ID from the output, ignoring console messages
+    if [[ "$creation_output" =~ ENDPOINT_ID_RESULT=([a-zA-Z0-9-]+) ]]; then
+        export ENDPOINT_ID="${BASH_REMATCH[1]}"
+    else
+        # Fallback: try to extract using grep and cut
+        export ENDPOINT_ID=$(echo "$creation_output" | grep "ENDPOINT_ID_RESULT=" | tail -1 | cut -d'=' -f2)
+    fi
+    
+    # Validate that we extracted a valid endpoint ID
+    if [[ -z "$ENDPOINT_ID" || ! "$ENDPOINT_ID" =~ ^cvpn-endpoint-[a-f0-9]{17}$ ]]; then
+        log_error "Failed to extract valid ENDPOINT_ID from function output"
+        log_error "Raw output: $creation_output"
+        return 1
+    fi
     
     # 保存 ENDPOINT_ID 到配置文件
     update_config "$CONFIG_FILE" "ENDPOINT_ID" "$ENDPOINT_ID"
