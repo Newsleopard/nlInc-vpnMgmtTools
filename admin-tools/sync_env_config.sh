@@ -733,9 +733,9 @@ fetch_aws_values() {
         while IFS=$'\t' read -r vpc_id cidr_block vpc_name; do
             # 尋找包含EKS或primary關鍵字的VPC
             if [[ "$vpc_name" =~ [Ee][Kk][Ss] ]] || [[ "$vpc_name" =~ [Pp]rimary ]] || [[ "$vpc_name" =~ $env_name ]]; then
-                echo "PRIMARY_VPC_ID=$vpc_id"
-                echo "PRIMARY_VPC_CIDR=$cidr_block"
-                echo "PRIMARY_VPC_NAME=$vpc_name"
+                echo "VPC_ID=$vpc_id"
+                echo "VPC_CIDR=$cidr_block"
+                echo "VPC_NAME=$vpc_name"
                 echo "[SUCCESS] 發現主要VPC: $vpc_id ($vpc_name)" >&2
                 vpc_found=true
                 
@@ -743,7 +743,7 @@ fetch_aws_values() {
                 local subnets
                 subnets=$($aws_cmd ec2 describe-subnets --filters "Name=vpc-id,Values=$vpc_id" --query 'Subnets[0].SubnetId' --output text 2>/dev/null || echo "")
                 if [[ -n "$subnets" && "$subnets" != "None" ]]; then
-                    echo "PRIMARY_SUBNET_ID=$subnets"
+                    echo "SUBNET_ID=$subnets"
                     echo "[SUCCESS] 發現主要子網: $subnets" >&2
                 fi
                 break

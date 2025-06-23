@@ -693,7 +693,7 @@ validate_main_config() {
     fi
     
     # 檢查基本必要變數 - 只驗證實際使用的變數
-    local required_vars_main=("AWS_REGION" "PRIMARY_VPC_ID" "PRIMARY_SUBNET_ID")
+    local required_vars_main=("AWS_REGION" "VPC_ID" "SUBNET_ID")
     local missing_vars=()
     for var in "${required_vars_main[@]}"; do
         if [ -z "${!var}" ]; then
@@ -708,15 +708,15 @@ validate_main_config() {
     fi
     
     # 驗證 VPC ID 和 Subnet ID 格式
-    if ! validate_vpc_id "$PRIMARY_VPC_ID"; then
-        echo -e "${RED}錯誤：PRIMARY_VPC_ID 格式無效: $PRIMARY_VPC_ID${NC}" >&2
-        log_message_core "錯誤：PRIMARY_VPC_ID 格式無效: $PRIMARY_VPC_ID"
+    if ! validate_vpc_id "$VPC_ID"; then
+        echo -e "${RED}錯誤：VPC_ID 格式無效: $VPC_ID${NC}" >&2
+        log_message_core "錯誤：VPC_ID 格式無效: $VPC_ID"
         return 1
     fi
     
-    if ! validate_subnet_id "$PRIMARY_SUBNET_ID"; then
-        echo -e "${RED}錯誤：PRIMARY_SUBNET_ID 格式無效: $PRIMARY_SUBNET_ID${NC}" >&2
-        log_message_core "錯誤：PRIMARY_SUBNET_ID 格式無效: $PRIMARY_SUBNET_ID"
+    if ! validate_subnet_id "$SUBNET_ID"; then
+        echo -e "${RED}錯誤：SUBNET_ID 格式無效: $SUBNET_ID${NC}" >&2
+        log_message_core "錯誤：SUBNET_ID 格式無效: $SUBNET_ID"
         return 1
     fi
     

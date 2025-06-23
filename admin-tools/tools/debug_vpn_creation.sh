@@ -41,22 +41,22 @@ echo -e "${GREEN}✅ AWS CLI configured: $aws_identity${NC}"
 
 # 2. Check VPC and Subnet availability
 echo -e "\n${YELLOW}2. Checking VPC and Subnet...${NC}"
-if ! aws ec2 describe-vpcs --vpc-ids "$PRIMARY_VPC_ID" > /dev/null 2>&1; then
-    echo -e "${RED}❌ VPC $PRIMARY_VPC_ID not found or accessible${NC}"
+if ! aws ec2 describe-vpcs --vpc-ids "$VPC_ID" > /dev/null 2>&1; then
+    echo -e "${RED}❌ VPC $VPC_ID not found or accessible${NC}"
     exit 1
 fi
-echo -e "${GREEN}✅ VPC $PRIMARY_VPC_ID is accessible${NC}"
+echo -e "${GREEN}✅ VPC $VPC_ID is accessible${NC}"
 
 # Check subnet
-if ! aws ec2 describe-subnets --subnet-ids "$PRIMARY_SUBNET_ID" > /dev/null 2>&1; then
-    echo -e "${RED}❌ Subnet $PRIMARY_SUBNET_ID not found or accessible${NC}"
+if ! aws ec2 describe-subnets --subnet-ids "$SUBNET_ID" > /dev/null 2>&1; then
+    echo -e "${RED}❌ Subnet $SUBNET_ID not found or accessible${NC}"
     
     # List available subnets in the VPC
-    echo -e "${YELLOW}Available subnets in VPC $PRIMARY_VPC_ID:${NC}"
-    aws ec2 describe-subnets --filters "Name=vpc-id,Values=$PRIMARY_VPC_ID" --query 'Subnets[*].[SubnetId,AvailabilityZone,CidrBlock,State]' --output table
+    echo -e "${YELLOW}Available subnets in VPC $VPC_ID:${NC}"
+    aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[*].[SubnetId,AvailabilityZone,CidrBlock,State]' --output table
     exit 1
 fi
-echo -e "${GREEN}✅ Subnet $PRIMARY_SUBNET_ID is accessible${NC}"
+echo -e "${GREEN}✅ Subnet $SUBNET_ID is accessible${NC}"
 
 # 3. Check Certificate in ACM
 echo -e "\n${YELLOW}3. Checking Server Certificate...${NC}"

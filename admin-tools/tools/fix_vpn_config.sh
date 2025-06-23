@@ -52,28 +52,28 @@ update_config() {
 echo -e "\n${YELLOW}1. Checking and fixing subnet configuration...${NC}"
 
 # Check if current subnet is available
-if ! aws ec2 describe-subnets --subnet-ids "$PRIMARY_SUBNET_ID" > /dev/null 2>&1; then
-    echo -e "${RED}❌ Current subnet $PRIMARY_SUBNET_ID is not accessible${NC}"
+if ! aws ec2 describe-subnets --subnet-ids "$SUBNET_ID" > /dev/null 2>&1; then
+    echo -e "${RED}❌ Current subnet $SUBNET_ID is not accessible${NC}"
     
     # Find available subnets in the same VPC
-    available_subnets=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$PRIMARY_VPC_ID" "Name=state,Values=available" --query 'Subnets[*].[SubnetId,AvailabilityZone,CidrBlock]' --output text)
+    available_subnets=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" "Name=state,Values=available" --query 'Subnets[*].[SubnetId,AvailabilityZone,CidrBlock]' --output text)
     
     if [ -n "$available_subnets" ]; then
-        echo -e "${YELLOW}Available subnets in VPC $PRIMARY_VPC_ID:${NC}"
+        echo -e "${YELLOW}Available subnets in VPC $VPC_ID:${NC}"
         echo "$available_subnets" | nl
         
         # Use the first available subnet
         new_subnet=$(echo "$available_subnets" | head -1 | awk '{print $1}')
         echo -e "${BLUE}Selecting subnet: $new_subnet${NC}"
         
-        update_config "PRIMARY_SUBNET_ID" "$new_subnet" "$CONFIG_FILE"
-        PRIMARY_SUBNET_ID="$new_subnet"
+        update_config "SUBNET_ID" "$new_subnet" "$CONFIG_FILE"
+        SUBNET_ID="$new_subnet"
     else
-        echo -e "${RED}❌ No available subnets found in VPC $PRIMARY_VPC_ID${NC}"
+        echo -e "${RED}❌ No available subnets found in VPC $VPC_ID${NC}"
         exit 1
     fi
 else
-    echo -e "${GREEN}✅ Current subnet $PRIMARY_SUBNET_ID is accessible${NC}"
+    echo -e "${GREEN}✅ Current subnet $SUBNET_ID is accessible${NC}"
 fi
 
 # 2. Fix Certificate Issues

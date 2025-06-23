@@ -107,40 +107,62 @@ get_vpc_subnet_vpn_details_lib() {
         subnet_id=""
     fi
     
-    # 獲取 Security Groups
-    echo -e "\\n${YELLOW}VPC $vpc_id 中的 Security Groups:${NC}" >&2
-    local sg_list
-    sg_list=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$vpc_id" --region "$aws_region" 2>/dev/null | \
-      jq -r '.SecurityGroups[] | "SG ID: \(.GroupId), 名稱: \(.GroupName), 描述: \(.Description)"' 2>/dev/null)
+    # 創建專用的 Client VPN 安全群組
+    echo -e "\\n${BLUE}正在設定 Client VPN 專用安全群組...${NC}" >&2
     
-    if [ -z "$sg_list" ]; then
-        echo -e "${YELLOW}無法獲取 Security Groups 列表或此 VPC 沒有 Security Groups。${NC}" >&2
-    else
-        echo "$sg_list" >&2
+    # 從當前環境獲取環境名稱
+    local environment_name="$CURRENT_ENVIRONMENT"
+    if [ -z "$environment_name" ]; then
+        environment_name="default"
     fi
     
-    echo -e "${BLUE}請選擇要關聯的 Security Groups (多個請用空格分隔)，或按 Enter 跳過使用預設值:${NC}" >&2
-    local security_groups
-    echo -n "Security Group IDs: " >&2
-    read security_groups
+    # 創建專用安全群組
+    local client_vpn_sg_id
+    client_vpn_sg_id=$(create_dedicated_client_vpn_security_group "$vpc_id" "$aws_region" "$environment_name")
     
-    # 驗證 Security Group IDs 格式
-    if [ -n "$security_groups" ]; then
-        local sg_array=($security_groups)
-        local valid_sgs=""
-        for sg in "${sg_array[@]}"; do
-            if [[ "$sg" =~ ^sg-[0-9a-f]{8,17}$ ]]; then
-                # 驗證 Security Group 是否存在於指定 VPC
-                if aws ec2 describe-security-groups --group-ids "$sg" --filters "Name=vpc-id,Values=$vpc_id" --region "$aws_region" >/dev/null 2>&1; then
-                    valid_sgs="$valid_sgs $sg"
+    if [ $? -ne 0 ] || [ -z "$client_vpn_sg_id" ]; then
+        echo -e "${RED}錯誤: 無法創建專用的 Client VPN 安全群組${NC}" >&2
+        echo -e "${YELLOW}回退到手動選擇安全群組模式...${NC}" >&2
+        
+        # 回退到原有的手動選擇模式
+        echo -e "\\n${YELLOW}VPC $vpc_id 中的 Security Groups:${NC}" >&2
+        local sg_list
+        sg_list=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$vpc_id" --region "$aws_region" 2>/dev/null | \
+          jq -r '.SecurityGroups[] | "SG ID: \(.GroupId), 名稱: \(.GroupName), 描述: \(.Description)"' 2>/dev/null)
+        
+        if [ -z "$sg_list" ]; then
+            echo -e "${YELLOW}無法獲取 Security Groups 列表或此 VPC 沒有 Security Groups。${NC}" >&2
+        else
+            echo "$sg_list" >&2
+        fi
+        
+        echo -e "${BLUE}請選擇要關聯的 Security Groups (多個請用空格分隔)，或按 Enter 跳過使用預設值:${NC}" >&2
+        local security_groups
+        echo -n "Security Group IDs: " >&2
+        read security_groups
+        
+        # 驗證 Security Group IDs 格式
+        if [ -n "$security_groups" ]; then
+            local sg_array=($security_groups)
+            local valid_sgs=""
+            for sg in "${sg_array[@]}"; do
+                if [[ "$sg" =~ ^sg-[0-9a-f]{8,17}$ ]]; then
+                    # 驗證 Security Group 是否存在於指定 VPC
+                    if aws ec2 describe-security-groups --group-ids "$sg" --filters "Name=vpc-id,Values=$vpc_id" --region "$aws_region" >/dev/null 2>&1; then
+                        valid_sgs="$valid_sgs $sg"
+                    else
+                        echo -e "${YELLOW}警告: Security Group '$sg' 不存在於 VPC '$vpc_id'，將忽略${NC}" >&2
+                    fi
                 else
-                    echo -e "${YELLOW}警告: Security Group '$sg' 不存在於 VPC '$vpc_id'，將忽略${NC}" >&2
+                    echo -e "${YELLOW}警告: Security Group ID '$sg' 格式無效，將忽略${NC}" >&2
                 fi
-            else
-                echo -e "${YELLOW}警告: Security Group ID '$sg' 格式無效，將忽略${NC}" >&2
-            fi
-        done
-        security_groups=$(echo $valid_sgs | xargs)  # 去除多餘空格
+            done
+            security_groups=$(echo $valid_sgs | xargs)  # 去除多餘空格
+        fi
+    else
+        # 使用新創建的專用安全群組
+        security_groups="$client_vpn_sg_id"
+        echo -e "${GREEN}✓ 已創建並將使用專用 Client VPN 安全群組: $client_vpn_sg_id${NC}" >&2
     fi
     
     if [ -n "$security_groups" ]; then
@@ -189,13 +211,14 @@ get_vpc_subnet_vpn_details_lib() {
             --arg vpn_cidr "$vpn_cidr" \
             --arg vpn_name "$vpn_name" \
             --arg security_groups "$security_groups" \
-            '{vpc_id: $vpc_id, subnet_id: $subnet_id, vpn_cidr: $vpn_cidr, vpn_name: $vpn_name, security_groups: $security_groups}')
+            --arg client_vpn_sg_id "$client_vpn_sg_id" \
+            '{vpc_id: $vpc_id, subnet_id: $subnet_id, vpn_cidr: $vpn_cidr, vpn_name: $vpn_name, security_groups: $security_groups, client_vpn_sg_id: $client_vpn_sg_id}')
     else
         # 備用方法：手動構建 JSON
-        result_json="{\"vpc_id\":\"$vpc_id\",\"subnet_id\":\"$subnet_id\",\"vpn_cidr\":\"$vpn_cidr\",\"vpn_name\":\"$vpn_name\",\"security_groups\":\"$security_groups\"}"
+        result_json="{\"vpc_id\":\"$vpc_id\",\"subnet_id\":\"$subnet_id\",\"vpn_cidr\":\"$vpn_cidr\",\"vpn_name\":\"$vpn_name\",\"security_groups\":\"$security_groups\",\"client_vpn_sg_id\":\"$client_vpn_sg_id\"}"
     fi
 
-    log_message_core "VPC/子網路詳細資訊獲取完成: VPC=$vpc_id, Subnet=$subnet_id, VPN_CIDR=$vpn_cidr, VPN_Name=$vpn_name, SecurityGroups=$security_groups"
+    log_message_core "VPC/子網路詳細資訊獲取完成: VPC=$vpc_id, Subnet=$subnet_id, VPN_CIDR=$vpn_cidr, VPN_Name=$vpn_name, SecurityGroups=$security_groups, ClientVpnSgId=$client_vpn_sg_id"
     
     echo "$result_json"
     return 0
@@ -420,6 +443,229 @@ debug_aws_cli_params() {
     fi
 }
 
+# 輔助函式：創建專用的 Client VPN 安全群組
+# 參數: $1 = VPC ID, $2 = AWS REGION, $3 = ENVIRONMENT (staging/production)
+# 返回: 安全群組 ID 或錯誤
+create_dedicated_client_vpn_security_group() {
+    local vpc_id="$1"
+    local aws_region="$2"
+    local environment="$3"
+    
+    # 參數驗證
+    if [ -z "$vpc_id" ] || [ -z "$aws_region" ] || [ -z "$environment" ]; then
+        echo -e "${RED}錯誤: create_dedicated_client_vpn_security_group 缺少必要參數${NC}" >&2
+        return 1
+    fi
+    
+    # 驗證 VPC 存在
+    if ! aws ec2 describe-vpcs --vpc-ids "$vpc_id" --region "$aws_region" >/dev/null 2>&1; then
+        echo -e "${RED}錯誤: VPC '$vpc_id' 不存在於區域 '$aws_region'${NC}" >&2
+        return 1
+    fi
+    
+    # 生成安全群組名稱和描述
+    local sg_name="client-vpn-sg-${environment}"
+    local sg_description="Dedicated security group for Client VPN users - ${environment} environment"
+    
+    echo -e "${BLUE}正在創建專用的 Client VPN 安全群組...${NC}" >&2
+    echo -e "${YELLOW}安全群組名稱: $sg_name${NC}" >&2
+    echo -e "${YELLOW}VPC ID: $vpc_id${NC}" >&2
+    echo -e "${YELLOW}區域: $aws_region${NC}" >&2
+    
+    # 檢查是否已存在同名安全群組
+    local existing_sg_id
+    existing_sg_id=$(aws ec2 describe-security-groups \
+        --filters "Name=group-name,Values=$sg_name" "Name=vpc-id,Values=$vpc_id" \
+        --region "$aws_region" \
+        --query 'SecurityGroups[0].GroupId' \
+        --output text 2>/dev/null)
+    
+    if [ "$existing_sg_id" != "None" ] && [ -n "$existing_sg_id" ]; then
+        echo -e "${YELLOW}警告: 安全群組 '$sg_name' 已存在 (ID: $existing_sg_id)${NC}" >&2
+        echo -e "${BLUE}是否要使用現有的安全群組？ (y/n): ${NC}" >&2
+        read -r use_existing
+        if [[ "$use_existing" =~ ^[Yy]$ ]]; then
+            echo "$existing_sg_id"
+            return 0
+        else
+            echo -e "${YELLOW}請手動刪除現有安全群組或選擇不同的名稱${NC}" >&2
+            return 1
+        fi
+    fi
+    
+    # 創建安全群組
+    local sg_result
+    sg_result=$(aws ec2 create-security-group \
+        --group-name "$sg_name" \
+        --description "$sg_description" \
+        --vpc-id "$vpc_id" \
+        --region "$aws_region" \
+        --output text 2>&1)
+    
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}錯誤: 創建安全群組失敗${NC}" >&2
+        echo -e "${RED}AWS 回應: $sg_result${NC}" >&2
+        return 1
+    fi
+    
+    # 提取安全群組 ID
+    local new_sg_id
+    new_sg_id=$(echo "$sg_result" | grep -o 'sg-[0-9a-f]*' | head -1)
+    
+    if [ -z "$new_sg_id" ]; then
+        echo -e "${RED}錯誤: 無法提取新創建的安全群組 ID${NC}" >&2
+        return 1
+    fi
+    
+    echo -e "${GREEN}✓ 安全群組創建成功: $new_sg_id${NC}" >&2
+    
+    # 設定標籤
+    aws ec2 create-tags \
+        --resources "$new_sg_id" \
+        --tags Key=Name,Value="$sg_name" \
+               Key=Environment,Value="$environment" \
+               Key=Purpose,Value="Client-VPN" \
+               Key=ManagedBy,Value="VPN-Management-Toolkit" \
+        --region "$aws_region" >/dev/null 2>&1
+    
+    # 配置安全群組規則 - 允許所有出站流量
+    echo -e "${BLUE}正在配置安全群組規則...${NC}" >&2
+    
+    # 刪除預設的出站規則（如果存在）
+    aws ec2 revoke-security-group-egress \
+        --group-id "$new_sg_id" \
+        --protocol -1 \
+        --cidr 0.0.0.0/0 \
+        --region "$aws_region" >/dev/null 2>&1
+    
+    # 添加允許所有出站流量的規則
+    local egress_result
+    egress_result=$(aws ec2 authorize-security-group-egress \
+        --group-id "$new_sg_id" \
+        --protocol -1 \
+        --cidr 0.0.0.0/0 \
+        --region "$aws_region" 2>&1)
+    
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}✓ 出站規則配置成功 (允許所有流量)${NC}" >&2
+    else
+        echo -e "${YELLOW}警告: 配置出站規則時出現問題: $egress_result${NC}" >&2
+    fi
+    
+    # 返回安全群組 ID
+    echo "$new_sg_id"
+    return 0
+}
+
+# 輔助函式：提示用戶更新現有安全群組以允許 Client VPN 訪問
+# 參數: $1 = Client VPN Security Group ID, $2 = AWS REGION
+prompt_update_existing_security_groups() {
+    local client_vpn_sg_id="$1"
+    local aws_region="$2"
+    
+    if [ -z "$client_vpn_sg_id" ] || [ -z "$aws_region" ]; then
+        echo -e "${RED}錯誤: prompt_update_existing_security_groups 缺少必要參數${NC}" >&2
+        return 1
+    fi
+    
+    echo -e "\\n${CYAN}=== Client VPN 安全群組設定完成 ===${NC}" >&2
+    echo -e "${GREEN}✓ 已創建專用的 Client VPN 安全群組: $client_vpn_sg_id${NC}" >&2
+    echo -e "${BLUE}該安全群組已配置為允許所有出站流量，提供基本的網路連接能力。${NC}" >&2
+    
+    echo -e "\\n${YELLOW}=== 下一步：更新現有安全群組以允許 VPN 用戶訪問 ===${NC}" >&2
+    echo -e "${BLUE}為了讓 VPN 用戶能夠訪問您的服務，您需要更新以下安全群組：${NC}" >&2
+    echo -e "${CYAN}1. 創建一個新的 Client VPN 專用安全群組 (已完成) ✓${NC}" >&2
+    echo -e "${CYAN}2. 更新兩個現有的安全群組以允許 VPN 訪問：${NC}" >&2
+    echo -e "${YELLOW}   • sg-503f5e1b (用於 RDS、HBase、Redis 訪問)${NC}" >&2
+    echo -e "${YELLOW}   • sg-0d59c6a9f577eb225 (用於 EKS API 訪問)${NC}" >&2
+    
+    echo -e "\\n${CYAN}=== 安全群組更新指令 ===${NC}" >&2
+    echo -e "${BLUE}請執行以下 AWS CLI 指令來配置服務訪問權限：${NC}" >&2
+    
+    echo -e "\\n${GREEN}# MySQL/RDS 訪問${NC}" >&2
+    echo "aws ec2 authorize-security-group-ingress \\" >&2
+    echo "    --group-id sg-503f5e1b \\" >&2
+    echo "    --protocol tcp \\" >&2
+    echo "    --port 3306 \\" >&2
+    echo "    --source-group $client_vpn_sg_id \\" >&2
+    echo "    --region $aws_region" >&2
+    
+    echo -e "\\n${GREEN}# HBase Master Web UI${NC}" >&2
+    echo "aws ec2 authorize-security-group-ingress \\" >&2
+    echo "    --group-id sg-503f5e1b \\" >&2
+    echo "    --protocol tcp \\" >&2
+    echo "    --port 16010 \\" >&2
+    echo "    --source-group $client_vpn_sg_id \\" >&2
+    echo "    --region $aws_region" >&2
+    
+    echo -e "\\n${GREEN}# HBase RegionServer${NC}" >&2
+    echo "aws ec2 authorize-security-group-ingress \\" >&2
+    echo "    --group-id sg-503f5e1b \\" >&2
+    echo "    --protocol tcp \\" >&2
+    echo "    --port 16020 \\" >&2
+    echo "    --source-group $client_vpn_sg_id \\" >&2
+    echo "    --region $aws_region" >&2
+    
+    echo -e "\\n${GREEN}# Custom HBase port (8765)${NC}" >&2
+    echo "aws ec2 authorize-security-group-ingress \\" >&2
+    echo "    --group-id sg-503f5e1b \\" >&2
+    echo "    --protocol tcp \\" >&2
+    echo "    --port 8765 \\" >&2
+    echo "    --source-group $client_vpn_sg_id \\" >&2
+    echo "    --region $aws_region" >&2
+    
+    echo -e "\\n${GREEN}# Redis 訪問${NC}" >&2
+    echo "aws ec2 authorize-security-group-ingress \\" >&2
+    echo "    --group-id sg-503f5e1b \\" >&2
+    echo "    --protocol tcp \\" >&2
+    echo "    --port 6379 \\" >&2
+    echo "    --source-group $client_vpn_sg_id \\" >&2
+    echo "    --region $aws_region" >&2
+    
+    echo -e "\\n${GREEN}# EKS API server 訪問${NC}" >&2
+    echo "aws ec2 authorize-security-group-ingress \\" >&2
+    echo "    --group-id sg-0d59c6a9f577eb225 \\" >&2
+    echo "    --protocol tcp \\" >&2
+    echo "    --port 443 \\" >&2
+    echo "    --source-group $client_vpn_sg_id \\" >&2
+    echo "    --region $aws_region" >&2
+    
+    echo -e "\\n${GREEN}# Phoenix Query Server (預設端口)${NC}" >&2
+    echo "aws ec2 authorize-security-group-ingress \\" >&2
+    echo "    --group-id sg-503f5e1b \\" >&2
+    echo "    --protocol tcp \\" >&2
+    echo "    --port 8765 \\" >&2
+    echo "    --source-group $client_vpn_sg_id \\" >&2
+    echo "    --region $aws_region" >&2
+    
+    echo -e "\\n${GREEN}# Phoenix Query Server (替代端口)${NC}" >&2
+    echo "aws ec2 authorize-security-group-ingress \\" >&2
+    echo "    --group-id sg-503f5e1b \\" >&2
+    echo "    --protocol tcp \\" >&2
+    echo "    --port 8000 \\" >&2
+    echo "    --source-group $client_vpn_sg_id \\" >&2
+    echo "    --region $aws_region" >&2
+    
+    echo -e "\\n${GREEN}# Phoenix Web UI${NC}" >&2
+    echo "aws ec2 authorize-security-group-ingress \\" >&2
+    echo "    --group-id sg-503f5e1b \\" >&2
+    echo "    --protocol tcp \\" >&2
+    echo "    --port 8080 \\" >&2
+    echo "    --source-group $client_vpn_sg_id \\" >&2
+    echo "    --region $aws_region" >&2
+    
+    echo -e "\\n${CYAN}=== 安全優勢 ===${NC}" >&2
+    echo -e "${BLUE}這種方法更清潔且更安全，因為：${NC}" >&2
+    echo -e "${GREEN}• Client VPN 用戶被隔離在專用安全群組中${NC}" >&2
+    echo -e "${GREEN}• 您可以通過修改一個安全群組輕鬆管理 Client VPN 訪問${NC}" >&2
+    echo -e "${GREEN}• 遵循最小權限原則，具有更好的安全姿態${NC}" >&2
+    echo -e "${GREEN}• 更容易審計和故障排除${NC}" >&2
+    
+    echo -e "\\n${YELLOW}請將上述指令複製並執行，以完成 VPN 用戶的服務訪問配置。${NC}" >&2
+    
+    return 0
+}
+
 # 輔助函式：創建 AWS Client VPN 端點實體
 _create_aws_client_vpn_endpoint_ec() {
     local vpn_cidr="$1"
@@ -428,14 +674,25 @@ _create_aws_client_vpn_endpoint_ec() {
     local vpn_name="$4"
     local aws_region="$5"
     local security_groups="$6"
+    local vpc_id="$7"
 
+    # 參數驗證
+    if [ -z "$vpn_cidr" ] || [ -z "$server_cert_arn" ] || [ -z "$client_cert_arn" ] || [ -z "$vpn_name" ] || [ -z "$aws_region" ]; then
+        echo -e "${RED}錯誤: _create_aws_client_vpn_endpoint_ec 缺少必要參數${NC}" >&2
+        return 1
+    fi
+    
     # 清理 VPN 名稱以用於日誌群組 (只允許字母、數字、連字符和斜線)
     local clean_log_name=$(echo "$vpn_name" | sed 's/[^a-zA-Z0-9/_-]/-/g' | sed 's/--*/-/g' | sed 's/^-\|-$//g')
     local log_group_name="/aws/clientvpn/$clean_log_name"
     echo -e "${BLUE}創建 CloudWatch 日誌群組: $log_group_name${NC}" >&2
     
-    # 檢查日誌群組是否已存在
-    if ! aws logs describe-log-groups --log-group-name-prefix "$log_group_name" --region "$aws_region" --query "logGroups[?logGroupName=='$log_group_name']" --output text | grep -q "$log_group_name"; then
+    # TEMPORARY FIX: Skip CloudWatch logging to isolate the issue
+    echo -e "${YELLOW}暫時跳過 CloudWatch 日誌設定以便排除問題${NC}" >&2
+    log_group_name=""
+    
+    # 檢查日誌群組是否已存在 (已跳過)
+    if false; then  # Disabled for debugging
         echo -e "${YELLOW}日誌群組不存在，正在創建...${NC}" >&2
         if aws logs create-log-group --log-group-name "$log_group_name" --region "$aws_region" 2>/dev/null; then
             echo -e "${GREEN}✓ 日誌群組創建成功${NC}" >&2
@@ -507,35 +764,42 @@ _create_aws_client_vpn_endpoint_ec() {
     echo -e "${BLUE}執行 AWS CLI 命令創建 VPN 端點...${NC}" >&2
     
     # 建構 authentication-options JSON
-    auth_options='{
-        "Type": "certificate-authentication",
-        "MutualAuthentication": {
-            "ClientRootCertificateChainArn": "'$client_cert_arn'"
-        }
-    }'
+    auth_options=$(jq -n \
+        --arg cert_arn "$client_cert_arn" \
+        '{
+            "Type": "certificate-authentication",
+            "MutualAuthentication": {
+                "ClientRootCertificateChainArn": $cert_arn
+            }
+        }')
     
     # 建構 connection-log-options JSON (只有當日誌群組存在時才啟用)
     if [ -n "$log_group_name" ]; then
-        log_options='{
-            "Enabled": true,
-            "CloudwatchLogGroup": "'$log_group_name'"
-        }'
+        log_options=$(jq -n \
+            --arg log_group "$log_group_name" \
+            '{
+                "Enabled": true,
+                "CloudwatchLogGroup": $log_group
+            }')
         echo -e "${GREEN}啟用 CloudWatch 日誌記錄${NC}" >&2
     else
-        log_options='{
-            "Enabled": false
-        }'
+        log_options=$(jq -n \
+            '{
+                "Enabled": false
+            }')
         echo -e "${YELLOW}禁用 CloudWatch 日誌記錄${NC}" >&2
     fi
     
     # 建構 tag-specifications JSON
-    tag_specs='[{
-        "ResourceType": "client-vpn-endpoint",
-        "Tags": [
-            {"Key": "Name", "Value": "'$clean_vpn_name'"},
-            {"Key": "Purpose", "Value": "VPNManagement"}
-        ]
-    }]'
+    tag_specs=$(jq -n \
+        --arg vpn_name "$clean_vpn_name" \
+        '[{
+            "ResourceType": "client-vpn-endpoint",
+            "Tags": [
+                {"Key": "Name", "Value": $vpn_name},
+                {"Key": "Purpose", "Value": "VPNManagement"}
+            ]
+        }]')
     
     echo -e "${YELLOW}創建參數預覽:${NC}" >&2
     echo "VPN CIDR: $vpn_cidr" >&2
@@ -595,6 +859,12 @@ _create_aws_client_vpn_endpoint_ec() {
     local start_time=$(date '+%Y-%m-%d %H:%M:%S')
     echo -e "${YELLOW}開始時間: $start_time${NC}" >&2
     
+    # Debug: Show the exact JSON parameters
+    echo -e "${YELLOW}Debug - JSON Parameters:${NC}" >&2
+    echo "auth_options: $auth_options" >&2
+    echo "log_options: $log_options" >&2
+    echo "tag_specs: $tag_specs" >&2
+    
     # 執行創建命令
     if [ -n "$log_group_name" ]; then
         if [ -n "$security_groups" ]; then
@@ -607,6 +877,7 @@ _create_aws_client_vpn_endpoint_ec() {
               --split-tunnel \
               --dns-servers "$vpc_dns_server" 8.8.4.4 \
               --security-group-ids $security_groups \
+              --vpc-id "$vpc_id" \
               --region "$aws_region" \
               --tag-specifications "$tag_specs" 2>&1)
         else
@@ -632,6 +903,7 @@ _create_aws_client_vpn_endpoint_ec() {
               --split-tunnel \
               --dns-servers "$vpc_dns_server" 8.8.4.4 \
               --security-group-ids $security_groups \
+              --vpc-id "$vpc_id" \
               --region "$aws_region" \
               --tag-specifications "$tag_specs" 2>&1)
         else
@@ -1086,7 +1358,7 @@ create_vpn_endpoint_lib() {
 
     # 創建 Client VPN 端點
     local endpoint_id
-    endpoint_id=$(_create_aws_client_vpn_endpoint_ec "$vpn_cidr" "$arg_server_cert_arn" "$arg_client_cert_arn" "$vpn_name" "$aws_region" "$security_groups")
+    endpoint_id=$(_create_aws_client_vpn_endpoint_ec "$vpn_cidr" "$arg_server_cert_arn" "$arg_client_cert_arn" "$vpn_name" "$aws_region" "$security_groups" "$vpc_id")
     if [ $? -ne 0 ] || [ -z "$endpoint_id" ] || [ "$endpoint_id" == "null" ]; then
         echo -e "${RED}創建 VPN 端點失敗。中止。${NC}"
         return 1

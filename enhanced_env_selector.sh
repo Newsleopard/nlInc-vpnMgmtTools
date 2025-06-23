@@ -151,7 +151,7 @@ enhanced_env_health_check() {
     local env_file="$PROJECT_ROOT/configs/${env_name}/${env_name}.env"
     if [[ -f "$env_file" ]]; then
         source "$env_file"
-        if [[ -n "$AWS_REGION" && -n "$VPN_CIDR" && -n "$PRIMARY_VPC_ID" ]]; then
+        if [[ -n "$AWS_REGION" && -n "$VPN_CIDR" && -n "$VPC_ID" ]]; then
             health_score=$((health_score + 25))
         fi
     fi
@@ -197,7 +197,7 @@ show_env_details() {
     echo -e "${BLUE}連線資訊:${NC}"
     echo -e "  活躍連線: $(get_env_connection_count "$env_name") 個"
     echo -e "  端點 ID: ${ENDPOINT_ID:-未設定}"
-    echo -e "  主要 VPC: ${PRIMARY_VPC_ID:-未設定}"
+    echo -e "  主要 VPC: ${VPC_ID:-未設定}"
     echo ""
     
     echo -e "${BLUE}資源使用:${NC}"

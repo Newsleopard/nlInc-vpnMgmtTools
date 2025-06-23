@@ -6,10 +6,14 @@
 
 1. [概述](#概述)
 2. [雙環境架構](#雙環境架構)
-3. [工具介紹](#工具介紹)
-4. [診斷和修復工具](#診斷和修復工具)
-5. [💰 成本試算與注意事項](#💰-成本試算與注意事項)
-6. [詳細文檔](#詳細文檔)
+3. [系統要求](#系統要求)
+4. [工具介紹](#工具介紹)
+5. [🌐 進階 VPN 配置功能](#🌐-進階-vpn-配置功能)
+6. [🛡️ AWS Client VPN 安全群組最佳實踐](#🛡️-aws-client-vpn-安全群組最佳實踐)
+7. [🔐 安全 CSR 工作流程](#🔐-安全-csr-工作流程)
+8. [快速使用指南](#快速使用指南)
+9. [💰 成本試算與注意事項](#💰-成本試算與注意事項)
+10. [詳細文檔](#詳細文檔)
 
 ---
 
@@ -35,19 +39,22 @@ AWS Client VPN 雙環境管理工具套件是一個專為 macOS 設計的企業�
 
 ```bash
 configs/
-├── staging/                 # 🟡 Staging 環境配置
-│   └── staging.env
-└── production/             # 🔴 Production 環境配置
-    └── production.env
+├── staging/                    # 🟡 Staging 環境配置
+│   ├── staging.env            # 主配置文件（基本/靜態配置）
+│   └── vpn_endpoint.conf      # 端點專用配置（證書/動態配置）
+├── prod/                      # 🔴 Production 環境配置  
+│   ├── prod.env              # 主配置文件（基本/靜態配置）
+│   └── vpn_endpoint.conf     # 端點專用配置（證書/動態配置）
+└── template.env.example       # 配置模板
 
 certs/
-├── staging/                # Staging 環境證書
-└── production/             # Production 環境證書
+├── staging/                   # Staging 環境證書
+└── production/                # Production 環境證書
 
 logs/
-├── staging/                # Staging 環境日誌
-└── production/             # Production 環境日誌
-```bash
+├── staging/                   # Staging 環境日誌
+└── production/                # Production 環境日誌
+```
 
 ### 🎯 環境特性
 
@@ -256,6 +263,143 @@ route 169.254.169.253 255.255.255.255  # VPC DNS Resolver
 - **動態配置**: 根據目標環境（Staging/Production）自動調整路由規則  
 - **相容性**: 支援 macOS、Linux 和 Windows 的 OpenVPN 客戶端
 - **故障排除**: 包含詳細的連線測試和診斷指令
+
+---
+
+## 🛡️ AWS Client VPN 安全群組最佳實踐
+
+### 概述
+
+本工具套件實施了 **AWS Client VPN 專用安全群組架構**，這是根據 AWS 最佳實踐設計的企業級安全管理方法。透過為 Client VPN 用戶創建專用的安全群組，我們能夠實現更細緻的存取控制、更好的安全隔離，以及更簡化的管理流程。
+
+### 🏗️ 架構設計原則
+
+#### 專用安全群組方法 (AWS 推薦)
+```bash
+# 自動創建專用的 Client VPN 安全群組
+CLIENT_VPN_SECURITY_GROUP_ID="sg-xxxxx"  # 保存在 vpn_endpoint.conf
+```
+
+**設計優勢:**
+- **🔒 安全隔離**: VPN 用戶與其他網路流量完全分離
+- **📋 集中管理**: 透過單一安全群組管理所有 VPN 用戶的存取權限
+- **🎯 最小權限原則**: 精確控制 VPN 用戶可以存取的服務和端口
+- **📊 審計友好**: 簡化安全審計和合規檢查流程
+
+### 🔧 自動化實施流程
+
+#### 1. 專用安全群組創建
+```bash
+# 工具套件自動執行以下操作：
+aws ec2 create-security-group \
+    --group-name "client-vpn-sg-${environment}" \
+    --description "Dedicated security group for Client VPN users - ${environment} environment" \
+    --vpc-id ${VPC_ID} \
+    --region ${AWS_REGION}
+```
+
+#### 2. 基礎規則配置
+```bash
+# 允許所有出站流量（提供基本網路連接）
+aws ec2 authorize-security-group-egress \
+    --group-id ${CLIENT_VPN_SECURITY_GROUP_ID} \
+    --protocol -1 \
+    --cidr 0.0.0.0/0 \
+    --region ${AWS_REGION}
+```
+
+#### 3. 服務存取規則配置
+工具套件會自動生成針對現有服務安全群組的存取規則：
+
+**資料庫服務存取:**
+```bash
+# MySQL/RDS 存取
+aws ec2 authorize-security-group-ingress \
+    --group-id sg-503f5e1b \
+    --protocol tcp --port 3306 \
+    --source-group ${CLIENT_VPN_SECURITY_GROUP_ID}
+
+# Redis 存取  
+aws ec2 authorize-security-group-ingress \
+    --group-id sg-503f5e1b \
+    --protocol tcp --port 6379 \
+    --source-group ${CLIENT_VPN_SECURITY_GROUP_ID}
+```
+
+**大數據服務存取:**
+```bash
+# HBase Master Web UI
+aws ec2 authorize-security-group-ingress \
+    --group-id sg-503f5e1b \
+    --protocol tcp --port 16010 \
+    --source-group ${CLIENT_VPN_SECURITY_GROUP_ID}
+
+# Phoenix Query Server
+aws ec2 authorize-security-group-ingress \
+    --group-id sg-503f5e1b \
+    --protocol tcp --port 8765 \
+    --source-group ${CLIENT_VPN_SECURITY_GROUP_ID}
+```
+
+**容器服務存取:**
+```bash
+# EKS API Server 存取
+aws ec2 authorize-security-group-ingress \
+    --group-id sg-0d59c6a9f577eb225 \
+    --protocol tcp --port 443 \
+    --source-group ${CLIENT_VPN_SECURITY_GROUP_ID}
+```
+
+### 📋 配置文件組織
+
+#### 環境特定配置分離
+```bash
+# AUTO-GENERATED: 保存在 vpn_endpoint.conf（自動生成資訊）
+CLIENT_VPN_SECURITY_GROUP_ID="sg-xxxxx"
+
+# USER-CONFIGURABLE: 保存在 staging.env/production.env（用戶配置）
+VPC_ID="vpc-xxxxx"
+SUBNET_ID="subnet-xxxxx" 
+VPN_CIDR="172.16.0.0/22"
+```
+
+**檔案組織原則:**
+- **`.env` 檔案**: 用戶可配置的環境設定
+- **`.conf` 檔案**: 系統自動生成的運行時資訊
+- **清晰分離**: 避免配置混淆，便於維護和故障排除
+
+### 🔍 管理和監控
+
+#### 安全群組狀態檢查
+```bash
+# 檢視當前 VPN 安全群組配置
+aws ec2 describe-security-groups \
+    --group-ids ${CLIENT_VPN_SECURITY_GROUP_ID} \
+    --region ${AWS_REGION}
+```
+
+#### 存取日誌和審計
+- **CloudTrail 整合**: 自動記錄所有安全群組變更
+- **VPC Flow Logs**: 監控 VPN 用戶的網路流量模式
+- **標籤管理**: 自動為安全群組添加環境和用途標籤
+
+### 💡 最佳實踐建議
+
+1. **定期審查**: 定期檢查和更新安全群組規則
+2. **最小權限**: 只開放必要的服務端口
+3. **環境隔離**: Staging 和 Production 使用不同的安全群組
+4. **監控告警**: 設定 CloudWatch 告警監控異常流量
+5. **文檔記錄**: 維護安全群組規則的變更記錄
+
+### 🚀 實施效益
+
+- **🔒 增強安全性**: 比傳統 IP 白名單方法更安全
+- **⚡ 簡化管理**: 集中管理所有 VPN 用戶存取權限
+- **📈 可擴展性**: 輕鬆支援大量 VPN 用戶
+- **🛡️ 合規性**: 符合企業安全和合規要求
+- **🔧 故障排除**: 更容易診斷和解決連接問題
+
+這種專用安全群組架構不僅符合 AWS 的安全最佳實踐，也為企業提供了一個可靠、可擴展且易於管理的 VPN 存取控制解決方案。
 
 ---
 

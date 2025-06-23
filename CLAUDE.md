@@ -269,7 +269,56 @@ Scripts create/modify files in environment-specific locations:
 - Logs: `logs/{staging|production}/`
 - Current environment state: `.current_env`
 
+### Configuration File Organization
+
+Following AWS best practices, the toolkit separates user-configurable settings from auto-generated runtime information:
+
+**User-Configurable Settings (`.env` files):**
+- `configs/{staging|production}/{environment}.env` - Environment-specific user settings
+- Contains VPC_ID, SUBNET_ID, VPN_CIDR, AWS_REGION, etc.
+- Version-controlled and manually editable
+
+**Auto-Generated Runtime Data (`.conf` files):**
+- `configs/{staging|production}/vpn_endpoint.conf` - System-generated VPN data
+- Contains ENDPOINT_ID, CLIENT_VPN_SECURITY_GROUP_ID, certificate ARNs, etc.
+- Automatically managed by the toolkit, not manually editable
+
+This separation ensures:
+- Clear distinction between configuration and runtime data
+- Prevents accidental modification of auto-generated values
+- Simplifies version control and environment management
+- Follows AWS infrastructure-as-code best practices
+
 ## Security Considerations
+
+### AWS Client VPN Security Group Best Practices
+
+The toolkit implements **dedicated Client VPN security group architecture**, following AWS security best practices for enterprise-grade access control:
+
+- **🛡️ Dedicated Security Groups**: Automatically creates isolated security groups for VPN users (`client-vpn-sg-{environment}`)
+- **🔒 Least Privilege Access**: VPN users are segregated from other network traffic with precise service-level access control
+- **📋 Centralized Management**: Single security group controls all VPN user access permissions, simplifying administration
+- **🎯 Source-Based Authorization**: Uses security group references instead of CIDR blocks for better security and flexibility
+- **🔧 Auto-Generated Configuration**: `CLIENT_VPN_SECURITY_GROUP_ID` is automatically saved to `vpn_endpoint.conf` (not user-editable `.env` files)
+- **🌐 Environment Isolation**: Separate security groups for staging and production environments
+- **📊 Audit-Friendly**: Simplified security auditing and compliance verification through dedicated VPN security groups
+
+### Service Access Control Examples
+
+The toolkit automatically generates AWS CLI commands for secure service access:
+
+```bash
+# Database Services (MySQL/RDS, Redis)
+aws ec2 authorize-security-group-ingress --group-id sg-503f5e1b --source-group ${CLIENT_VPN_SECURITY_GROUP_ID}
+
+# Big Data Services (HBase, Phoenix Query Server)  
+aws ec2 authorize-security-group-ingress --group-id sg-503f5e1b --source-group ${CLIENT_VPN_SECURITY_GROUP_ID}
+
+# Container Services (EKS API Server)
+aws ec2 authorize-security-group-ingress --group-id sg-0d59c6a9f577eb225 --source-group ${CLIENT_VPN_SECURITY_GROUP_ID}
+```
+
+### Additional Security Measures
 
 - **CA Private Key Isolation**: Zero-touch workflow ensures CA private keys never leave admin systems
 - **S3 Encrypted Exchange**: All CSR/certificate exchanges use KMS-encrypted S3 storage

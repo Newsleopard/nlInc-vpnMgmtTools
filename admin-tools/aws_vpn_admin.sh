@@ -121,6 +121,10 @@ show_menu() {
 create_vpn_endpoint() {
     echo -e "\\n${CYAN}=== 建立新的 VPN 端點 ===${NC}"
     
+    # 設定專案根目錄路徑
+    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local PROJECT_ROOT="$(dirname "$script_dir")"
+    
     # 環境操作驗證
     if ! env_validate_operation "CREATE_ENDPOINT"; then
         return 1
@@ -226,8 +230,8 @@ create_vpn_endpoint() {
     local vpc_id subnet_id vpn_cidr vpn_name security_groups
     
     # 從環境配置獲取網路設定
-    vpc_id="$PRIMARY_VPC_ID"
-    subnet_id="$PRIMARY_SUBNET_ID"
+    vpc_id="$VPC_ID"
+    subnet_id="$SUBNET_ID"
     vpn_cidr="$VPN_CIDR"
     vpn_name="$VPN_NAME"
     
@@ -236,19 +240,19 @@ create_vpn_endpoint() {
     
     # 驗證 VPC 是否存在
     if ! aws ec2 describe-vpcs --vpc-ids "$vpc_id" --region "$AWS_REGION" >/dev/null 2>&1; then
-        handle_error "環境配置中的 VPC ID '$vpc_id' 無效或不存在於區域 '$AWS_REGION'。請檢查 PRIMARY_VPC_ID 設定。"
+        handle_error "環境配置中的 VPC ID '$vpc_id' 無效或不存在於區域 '$AWS_REGION'。請檢查 VPC_ID 設定。"
         return 1
     fi
     
     # 驗證子網路是否存在且屬於指定的 VPC
     local subnet_vpc_id
     if ! subnet_vpc_id=$(aws ec2 describe-subnets --subnet-ids "$subnet_id" --region "$AWS_REGION" --query 'Subnets[0].VpcId' --output text 2>/dev/null); then
-        handle_error "環境配置中的子網路 ID '$subnet_id' 無效或不存在於區域 '$AWS_REGION'。請檢查 PRIMARY_SUBNET_ID 設定。"
+        handle_error "環境配置中的子網路 ID '$subnet_id' 無效或不存在於區域 '$AWS_REGION'。請檢查 SUBNET_ID 設定。"
         return 1
     fi
     
     if [ "$subnet_vpc_id" != "$vpc_id" ]; then
-        handle_error "子網路 '$subnet_id' 不屬於 VPC '$vpc_id'。請檢查環境配置中的 PRIMARY_VPC_ID 和 PRIMARY_SUBNET_ID 設定。"
+        handle_error "子網路 '$subnet_id' 不屬於 VPC '$vpc_id'。請檢查環境配置中的 VPC_ID 和 SUBNET_ID 設定。"
         return 1
     fi
     
@@ -257,12 +261,49 @@ create_vpn_endpoint() {
     echo -e "${GREEN}✓ VPN CIDR: $vpn_cidr${NC}"
     echo -e "${GREEN}✓ VPN 名稱: $vpn_name${NC}"
     
-    # 從環境配置獲取 security_groups (可選參數)
-    security_groups="${VPN_SECURITY_GROUPS:-}"
-    if [ -n "$security_groups" ]; then
-        echo -e "${GREEN}✓ Security Groups: $security_groups${NC}"
+    # 創建專用的 Client VPN 安全群組
+    echo -e "\\n${BLUE}正在設定 Client VPN 專用安全群組...${NC}"
+    
+    # 載入 endpoint_creation.sh 以使用安全群組創建函式
+    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local lib_dir="$(dirname "$script_dir")/lib"
+    if [ -f "$lib_dir/endpoint_creation.sh" ]; then
+        source "$lib_dir/endpoint_creation.sh"
     else
-        echo -e "${GREEN}✓ Security Groups: 無 (使用 AWS 預設)${NC}"
+        echo -e "${RED}錯誤: 無法載入 endpoint_creation.sh 庫${NC}"
+        return 1
+    fi
+    
+    # 創建專用安全群組
+    local client_vpn_sg_id
+    client_vpn_sg_id=$(create_dedicated_client_vpn_security_group "$vpc_id" "$AWS_REGION" "$CURRENT_ENVIRONMENT")
+    
+    if [ $? -ne 0 ] || [ -z "$client_vpn_sg_id" ]; then
+        echo -e "${RED}錯誤: 無法創建專用的 Client VPN 安全群組${NC}"
+        echo -e "${YELLOW}回退到環境配置中的安全群組設定...${NC}"
+        
+        # 回退到環境配置獲取 security_groups (可選參數)
+        security_groups="${VPN_SECURITY_GROUPS:-}"
+        if [ -n "$security_groups" ]; then
+            echo -e "${GREEN}✓ Security Groups: $security_groups${NC}"
+        else
+            echo -e "${GREEN}✓ Security Groups: 無 (使用 AWS 預設)${NC}"
+        fi
+    else
+        # 使用新創建的專用安全群組
+        security_groups="$client_vpn_sg_id"
+        echo -e "${GREEN}✓ 已創建並將使用專用 Client VPN 安全群組: $client_vpn_sg_id${NC}"
+        echo -e "${GREEN}✓ Security Groups: $security_groups${NC}"
+        
+        # 立即保存 CLIENT_VPN_SECURITY_GROUP_ID 到 VPN 端點配置文件 (.conf)
+        local vpn_endpoint_conf="$PROJECT_ROOT/configs/${CURRENT_ENVIRONMENT}/vpn_endpoint.conf"
+        if [ -f "$vpn_endpoint_conf" ]; then
+            update_config "$vpn_endpoint_conf" "CLIENT_VPN_SECURITY_GROUP_ID" "$client_vpn_sg_id"
+            echo -e "${GREEN}✓ CLIENT_VPN_SECURITY_GROUP_ID 已保存到 vpn_endpoint.conf: $client_vpn_sg_id${NC}"
+        else
+            echo -e "${YELLOW}警告: vpn_endpoint.conf 不存在，將保存到主配置文件${NC}"
+            update_config "$CONFIG_FILE" "CLIENT_VPN_SECURITY_GROUP_ID" "$client_vpn_sg_id"
+        fi
     fi
 
     # 更新配置文件
@@ -293,6 +334,18 @@ create_vpn_endpoint() {
     if [ -f "$env_config_file" ]; then
         update_config "$env_config_file" "ENDPOINT_ID" "$ENDPOINT_ID"
         echo -e "${GREEN}✓ ENDPOINT_ID 已保存到環境配置: $ENDPOINT_ID${NC}"
+        
+        # 同時確保 CLIENT_VPN_SECURITY_GROUP_ID 保存到 vpn_endpoint.conf (如果存在且尚未保存)
+        if [ -n "$client_vpn_sg_id" ]; then
+            local vpn_endpoint_conf="$PROJECT_ROOT/configs/${CURRENT_ENVIRONMENT}/vpn_endpoint.conf"
+            if [ -f "$vpn_endpoint_conf" ]; then
+                # 檢查是否已經保存過
+                if ! grep -q "CLIENT_VPN_SECURITY_GROUP_ID=\"$client_vpn_sg_id\"" "$vpn_endpoint_conf"; then
+                    update_config "$vpn_endpoint_conf" "CLIENT_VPN_SECURITY_GROUP_ID" "$client_vpn_sg_id"
+                    echo -e "${GREEN}✓ CLIENT_VPN_SECURITY_GROUP_ID 已確認保存到 vpn_endpoint.conf${NC}"
+                fi
+            fi
+        fi
     fi
 
     # 重新載入配置以獲取新創建的 ENDPOINT_ID
@@ -340,6 +393,14 @@ create_vpn_endpoint() {
     
     if [ "$admin_config_result" -ne 0 ]; then
         echo -e "${RED}生成管理員配置檔案過程中發生錯誤。${NC}"
+    fi
+    
+    # 提示用戶更新現有安全群組以允許 VPN 訪問
+    if [ -n "$client_vpn_sg_id" ] && [ -n "$AWS_REGION" ]; then
+        prompt_update_existing_security_groups "$client_vpn_sg_id" "$AWS_REGION"
+    else
+        echo -e "\\n${YELLOW}注意: 無法提供安全群組更新指令 (client_vpn_sg_id 或 AWS_REGION 未設定)${NC}"
+        echo -e "${BLUE}請手動檢查並更新現有安全群組以允許 Client VPN 訪問。${NC}"
     fi
     
     echo -e "\\n${YELLOW}按任意鍵繼續...${NC}"

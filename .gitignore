@@ -117,3 +117,5 @@ lambda/**/yarn-error.log*
 lambda/**/lerna-debug.log*
 *chatlog.json
 configs/**/vpn_endpoints.json
+configs_backup*/
+configs/**/vpn_endpoint.conf.backup*
