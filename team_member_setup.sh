@@ -1153,11 +1153,20 @@ zero_touch_init_mode() {
     fi
     
     # 設定用戶資訊
-    setup_user_info
+    if ! setup_user_info; then
+        echo -e "${RED}用戶資訊設定失敗${NC}"
+        return 1
+    fi
     
     # 載入配置以獲取用戶名
+    if [ ! -f "$USER_CONFIG_FILE" ]; then
+        echo -e "${RED}用戶配置文件不存在: $USER_CONFIG_FILE${NC}"
+        echo -e "${YELLOW}提示: setup_user_info 可能未正確創建配置文件${NC}"
+        return 1
+    fi
+    
     if ! source "$USER_CONFIG_FILE"; then
-        echo -e "${RED}載入配置文件失敗${NC}"
+        echo -e "${RED}載入配置文件失敗: $USER_CONFIG_FILE${NC}"
         return 1
     fi
     
