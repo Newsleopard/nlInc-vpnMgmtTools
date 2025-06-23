@@ -257,9 +257,13 @@ create_vpn_endpoint() {
     echo -e "${GREEN}✓ VPN CIDR: $vpn_cidr${NC}"
     echo -e "${GREEN}✓ VPN 名稱: $vpn_name${NC}"
     
-    # 設定空的 security_groups (可選參數)
-    security_groups=""
-    echo -e "${GREEN}✓ Security Groups: ${security_groups:-無 (使用預設)}${NC}"
+    # 從環境配置獲取 security_groups (可選參數)
+    security_groups="${VPN_SECURITY_GROUPS:-}"
+    if [ -n "$security_groups" ]; then
+        echo -e "${GREEN}✓ Security Groups: $security_groups${NC}"
+    else
+        echo -e "${GREEN}✓ Security Groups: 無 (使用 AWS 預設)${NC}"
+    fi
 
     # 更新配置文件
     update_config "$CONFIG_FILE" "VPC_ID" "$vpc_id"
@@ -280,6 +284,16 @@ create_vpn_endpoint() {
     fi
     # create_vpn_endpoint_lib 應該返回 ENDPOINT_ID
     export ENDPOINT_ID="$creation_output" # 直接賦值，不再需要 cut
+    
+    # 保存 ENDPOINT_ID 到配置文件
+    update_config "$CONFIG_FILE" "ENDPOINT_ID" "$ENDPOINT_ID"
+    
+    # 同時更新環境配置文件中的 ENDPOINT_ID
+    local env_config_file="$CONFIG_DIR/${CURRENT_ENVIRONMENT}.env"
+    if [ -f "$env_config_file" ]; then
+        update_config "$env_config_file" "ENDPOINT_ID" "$ENDPOINT_ID"
+        echo -e "${GREEN}✓ ENDPOINT_ID 已保存到環境配置: $ENDPOINT_ID${NC}"
+    fi
 
     # 重新載入配置以獲取新創建的 ENDPOINT_ID
     if ! load_config_core "$CONFIG_FILE"; then
