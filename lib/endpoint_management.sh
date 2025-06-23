@@ -1089,16 +1089,35 @@ associate_subnet_to_endpoint_lib() {
         fi
     done
     
+    # 準備安全群組參數
+    local security_groups_param=""
+    if [ -n "$SECURITY_GROUPS" ]; then
+        # 移除引號並轉換為適合 AWS CLI 的格式
+        local sg_list=$(echo "$SECURITY_GROUPS" | tr -d '"' | tr ',' ' ')
+        security_groups_param="--security-group-ids $sg_list"
+        echo -e "${CYAN}使用配置的安全群組: $SECURITY_GROUPS${NC}"
+    else
+        echo -e "${YELLOW}警告: 未配置安全群組，將使用 VPC 預設安全群組${NC}"
+    fi
+    
     # 執行關聯操作
     echo -e "${BLUE}正在關聯子網路 $subnet_id 到端點 $endpoint_id...${NC}"
     
     local start_time end_time output exit_code
     start_time=$(date)
     
-    output=$(aws ec2 associate-client-vpn-target-network \
-        --client-vpn-endpoint-id "$endpoint_id" \
-        --subnet-id "$subnet_id" \
-        --region "$aws_region" 2>&1)
+    if [ -n "$security_groups_param" ]; then
+        output=$(aws ec2 associate-client-vpn-target-network \
+            --client-vpn-endpoint-id "$endpoint_id" \
+            --subnet-id "$subnet_id" \
+            $security_groups_param \
+            --region "$aws_region" 2>&1)
+    else
+        output=$(aws ec2 associate-client-vpn-target-network \
+            --client-vpn-endpoint-id "$endpoint_id" \
+            --subnet-id "$subnet_id" \
+            --region "$aws_region" 2>&1)
+    fi
     exit_code=$?
     
     end_time=$(date)
