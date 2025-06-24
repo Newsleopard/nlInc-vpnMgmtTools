@@ -27,7 +27,11 @@ fi
 env_setup_paths
 
 # 環境感知的配置檔案
-CONFIG_FILE="$VPN_ENDPOINT_CONFIG_FILE"
+# For creation: use environment config (.env) for user-configurable values
+# For management: use endpoint config (.conf) for auto-generated values
+ENV_CONFIG_FILE="$VPN_CONFIG_DIR/${CURRENT_ENVIRONMENT}.env"
+ENDPOINT_CONFIG_FILE="$VPN_ENDPOINT_CONFIG_FILE"
+CONFIG_FILE="$ENV_CONFIG_FILE"  # Primary config for creation process
 LOG_FILE="$VPN_ADMIN_LOG_FILE"
 
 # 載入核心函式庫
@@ -449,8 +453,8 @@ list_vpn_endpoints() {
 manage_vpn_settings() {
     echo -e "\n${CYAN}=== 管理 VPN 端點設定 ===${NC}"
     
-    # 使用統一的端點操作驗證
-    if ! validate_endpoint_operation "$CONFIG_FILE"; then
+    # 使用統一的端點操作驗證 (use endpoint config for existing endpoints)
+    if ! validate_endpoint_operation "$ENDPOINT_CONFIG_FILE"; then
         echo -e "\\n${YELLOW}按任意鍵繼續...${NC}"
         read -n 1
         return 1
@@ -541,7 +545,7 @@ delete_vpn_endpoint() {
     log_message "開始刪除 VPN 端點 (主腳本)"
 
     # 使用統一的端點操作驗證 (已包含 load_config_core 和對 AWS_REGION, ENDPOINT_ID 的檢查)
-    if ! validate_endpoint_operation "$CONFIG_FILE"; then
+    if ! validate_endpoint_operation "$ENDPOINT_CONFIG_FILE"; then
         echo -e "\\n${YELLOW}按任意鍵繼續...${NC}"
         read -n 1 -s
         return 1
@@ -556,7 +560,7 @@ delete_vpn_endpoint() {
 
     # 調用庫函式
     # 參數: aws_region, endpoint_id, vpn_name (用於日誌群組), config_file_path
-    terminate_vpn_endpoint_lib "$AWS_REGION" "$ENDPOINT_ID" "$VPN_NAME" "$CONFIG_FILE"
+    terminate_vpn_endpoint_lib "$AWS_REGION" "$ENDPOINT_ID" "$VPN_NAME" "$ENDPOINT_CONFIG_FILE"
     local result=$?
 
     # 使用統一的日誌記錄
@@ -624,14 +628,14 @@ export_team_config() {
     echo -e "\\n${CYAN}=== 匯出團隊成員設定檔 ===${NC}"
     
     # 使用統一的端點操作驗證 (已包含 load_config_core 和對 ENDPOINT_ID 的檢查)
-    if ! validate_endpoint_operation "$CONFIG_FILE"; then
+    if ! validate_endpoint_operation "$ENDPOINT_CONFIG_FILE"; then
         echo -e "\\n${YELLOW}按任意鍵繼續...${NC}"
         read -n 1
         return 1
     fi
     
     # 調用庫函式
-    export_team_config_lib "$SCRIPT_DIR" "$CONFIG_FILE"
+    export_team_config_lib "$SCRIPT_DIR" "$ENDPOINT_CONFIG_FILE"
     local result=$?
     
     log_operation_result "匯出團隊成員設定檔" "$result" "aws_vpn_admin.sh"
@@ -649,7 +653,7 @@ system_health_check() {
     echo -e "\\n${CYAN}=== 系統健康檢查 ===${NC}"
     
     # 使用統一的端點操作驗證 (已包含 load_config_core 和對 ENDPOINT_ID, AWS_REGION 的檢查)
-    if ! validate_endpoint_operation "$CONFIG_FILE"; then
+    if ! validate_endpoint_operation "$ENDPOINT_CONFIG_FILE"; then
         echo -e "\\n${YELLOW}按任意鍵繼續...${NC}"
         read -n 1
         return 1
@@ -742,7 +746,7 @@ add_vpc_to_endpoint() {
     echo -e "\\n${CYAN}=== 添加 VPC 到現有端點 ===${NC}"
     
     # 使用統一的端點操作驗證
-    if ! validate_endpoint_operation "$CONFIG_FILE"; then
+    if ! validate_endpoint_operation "$ENDPOINT_CONFIG_FILE"; then
         echo -e "\\n${YELLOW}按任意鍵繼續...${NC}"
         read -n 1
         return 1
@@ -752,7 +756,7 @@ add_vpc_to_endpoint() {
     echo -e "${BLUE}當前 AWS 區域: $AWS_REGION${NC}"
 
     # 調用庫函式來處理單一 VPC 的關聯
-    associate_single_vpc_lib "$CONFIG_FILE" "$AWS_REGION" "$ENDPOINT_ID"
+    associate_single_vpc_lib "$ENDPOINT_CONFIG_FILE" "$AWS_REGION" "$ENDPOINT_ID"
     local result=$?
 
     log_operation_result "VPC 添加" "$result" "aws_vpn_admin.sh"
@@ -760,7 +764,7 @@ add_vpc_to_endpoint() {
     if [ "$result" -eq 0 ]; then
         echo -e "${GREEN}VPC 添加操作成功完成。${NC}"
         # 重新載入配置以確保任何更改都已反映
-        if ! load_config_core "$CONFIG_FILE"; then # 使用統一函式
+        if ! load_config_core "$ENDPOINT_CONFIG_FILE"; then # 使用統一函式
             echo -e "${RED}錯誤：無法重新載入更新的配置文件${NC}"
             # 即使重載失敗，也可能部分成功，所以不立即返回 1
         fi
@@ -777,7 +781,7 @@ show_multi_vpc_topology() {
     echo -e "\\n${CYAN}=== 多 VPC 網路拓撲 ===${NC}"
     
     # 使用統一的配置驗證
-    if ! validate_main_config "$CONFIG_FILE"; then
+    if ! validate_main_config "$ENV_CONFIG_FILE"; then
         echo -e "\\n${YELLOW}按任意鍵繼續...${NC}"
         read -n 1
         return 1
@@ -798,7 +802,7 @@ show_multi_vpc_topology() {
     done
 
     # 調用庫函式
-    show_multi_vpc_topology_lib "$CONFIG_FILE" "$AWS_REGION" "$ENDPOINT_ID" "$VPN_CIDR" "$VPC_ID" "$VPC_CIDR" "$SUBNET_ID"
+    show_multi_vpc_topology_lib "$ENDPOINT_CONFIG_FILE" "$AWS_REGION" "$ENDPOINT_ID" "$VPN_CIDR" "$VPC_ID" "$VPC_CIDR" "$SUBNET_ID"
     local result=$?
 
     log_operation_result "顯示多 VPC 拓撲" "$result" "aws_vpn_admin.sh"
@@ -816,7 +820,7 @@ remove_vpc_association() {
     echo -e "\\n${CYAN}=== 移除 VPC 關聯 ===${NC}"
     
     # 使用統一的端點操作驗證
-    if ! validate_endpoint_operation "$CONFIG_FILE"; then
+    if ! validate_endpoint_operation "$ENDPOINT_CONFIG_FILE"; then
         echo -e "\\n${YELLOW}按任意鍵繼續...${NC}"
         read -n 1
         return 1
@@ -826,7 +830,7 @@ remove_vpc_association() {
     echo -e "${BLUE}當前 AWS 區域: $AWS_REGION${NC}"
 
     # 調用庫函式來處理 VPC 的解除關聯
-    disassociate_vpc_lib "$CONFIG_FILE" "$AWS_REGION" "$ENDPOINT_ID"
+    disassociate_vpc_lib "$ENDPOINT_CONFIG_FILE" "$AWS_REGION" "$ENDPOINT_ID"
     local result=$?
 
     log_operation_result "VPC 解除關聯" "$result" "aws_vpn_admin.sh"
@@ -834,7 +838,7 @@ remove_vpc_association() {
     if [ "$result" -eq 0 ]; then
         echo -e "${GREEN}VPC 解除關聯操作成功完成。${NC}"
         # 重新載入配置以確保任何更改都已反映
-        if ! load_config_core "$CONFIG_FILE"; then # 使用統一函式
+        if ! load_config_core "$ENDPOINT_CONFIG_FILE"; then # 使用統一函式
              echo -e "${RED}錯誤：無法重新載入更新的配置文件${NC}"
         fi
     else
@@ -850,7 +854,7 @@ manage_batch_vpc_auth() {
     echo -e "\\n${CYAN}=== 批量管理 VPC 授權規則 ===${NC}"
     
     # 使用統一的端點操作驗證
-    if ! validate_endpoint_operation "$CONFIG_FILE"; then
+    if ! validate_endpoint_operation "$ENDPOINT_CONFIG_FILE"; then
         echo -e "\\n${YELLOW}按任意鍵返回多 VPC 管理選單...${NC}"
         read -n 1 -s
         return 1
@@ -873,7 +877,7 @@ manage_batch_vpc_auth() {
 # 多 VPC 管理主函數
 manage_multi_vpc() {
     # 在進入循環前，先做一次配置檢查，確保 AWS_REGION 等基本配置存在
-    if ! validate_main_config "$CONFIG_FILE"; then
+    if ! validate_main_config "$ENV_CONFIG_FILE"; then
         echo -e "\\n${YELLOW}按任意鍵返回主選單...${NC}"
         read -n 1
         return 1
@@ -933,7 +937,7 @@ manage_cross_vpc_routes() {
     echo -e "\\n${CYAN}=== 跨 VPC 路由管理 ===${NC}"
     
     # 使用統一的端點操作驗證
-    if ! validate_endpoint_operation "$CONFIG_FILE"; then
+    if ! validate_endpoint_operation "$ENDPOINT_CONFIG_FILE"; then
         echo -e "\\n${YELLOW}按任意鍵返回多 VPC 管理選單...${NC}"
         read -n 1 -s
         return 1
