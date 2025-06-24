@@ -48,13 +48,152 @@ _load_endpoint_modules
 # 參數: $1 = AWS_REGION
 # 返回: JSON 格式 {"vpc_id": "vpc-xxx", "subnet_id": "subnet-xxx", "vpn_cidr": "172.16.0.0/22", "vpn_name": "Production-VPN", "security_groups": "sg-xxx sg-yyy"}
 get_vpc_subnet_vpn_details_lib() {
-    # 直接調用 VPC 操作模組中的函式
-    if command -v get_vpc_subnet_vpn_details_lib >/dev/null 2>&1; then
-        get_vpc_subnet_vpn_details_lib "$@"
-    else
-        echo -e "${RED}錯誤: VPC 操作模組未正確載入${NC}" >&2
+    local aws_region="$1"
+    # 載入環境管理器以獲取環境變數
+    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local project_root="$(dirname "$script_dir")"
+    if [ -f "$script_dir/env_manager.sh" ]; then
+        source "$script_dir/env_manager.sh"
+        load_current_env
+        local env_file="$project_root/configs/${CURRENT_ENVIRONMENT}/${CURRENT_ENVIRONMENT}.env"
+        if [ -f "$env_file" ]; then
+            source "$env_file"
+        fi
+    fi
+
+    # 參數驗證
+    if ! validate_aws_region "$aws_region"; then
         return 1
     fi
+
+    log_message_core "開始獲取 VPC/子網路/VPN 詳細資訊 (lib) - Region: $aws_region"
+
+    # 提示使用者選擇 VPC
+    echo -e "\\n${BLUE}選擇網絡設定...${NC}" >&2
+    
+    echo -e "${YELLOW}可用的 VPCs:${NC}" >&2
+    aws ec2 describe-vpcs --region "$aws_region" | jq -r '.Vpcs[] | "VPC ID: \(.VpcId), CIDR: \(.CidrBlock), 名稱: \(if .Tags then (.Tags[] | select(.Key=="Name") | .Value) else "無名稱" end)"' >&2
+    
+    local vpc_id
+    while true; do
+        echo -n "請輸入要連接的 VPC ID: " >&2
+        read vpc_id
+        if aws ec2 describe-vpcs --vpc-ids "$vpc_id" --region "$aws_region" >/dev/null 2>&1; then
+            break
+        else
+            echo -e "${RED}VPC ID '$vpc_id' 無效或不存在於區域 '$aws_region'。請重試。${NC}" >&2
+        fi
+    done
+    
+    # 顯示選定 VPC 中的子網路
+    echo -e "\\n${YELLOW}VPC $vpc_id 中的子網路:${NC}" >&2
+    local subnet_list
+    subnet_list=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$vpc_id" --region "$aws_region" 2>/dev/null | \
+      jq -r '.Subnets[] | "子網路 ID: \(.SubnetId), 可用區: \(.AvailabilityZone), CIDR: \(.CidrBlock)"' 2>/dev/null)
+    
+    if [ -z "$subnet_list" ]; then
+        echo -e "${YELLOW}無法獲取子網路列表或此 VPC 沒有子網路。${NC}" >&2
+        echo -e "${BLUE}您可以手動輸入子網路 ID，或輸入 'skip' 跳過此步驟。${NC}" >&2
+    else
+        echo "$subnet_list" >&2
+        echo -e "${BLUE}請從上述列表中選擇一個子網路 ID，或輸入 'skip' 跳過此步驟。${NC}" >&2
+    fi
+    
+    local subnet_id
+    local max_attempts=5
+    local attempts=0
+    while [ $attempts -lt $max_attempts ]; do
+        echo -n "請輸入要關聯的子網路 ID (或輸入 'skip' 跳過): " >&2
+        read subnet_id
+        
+        # 允許跳過
+        if [ "$subnet_id" = "skip" ]; then
+            echo -e "${YELLOW}跳過子網路關聯步驟。您稍後可以手動關聯子網路。${NC}" >&2
+            subnet_id=""
+            break
+        fi
+        
+        # 驗證子網路 ID 格式
+        if [[ ! "$subnet_id" =~ ^subnet-[0-9a-f]{8,17}$ ]]; then
+            echo -e "${RED}子網路 ID 格式無效。正確格式應為 'subnet-xxxxxxxxx'。${NC}" >&2
+            attempts=$((attempts + 1))
+            continue
+        fi
+        
+        # 驗證子網路是否存在
+        if aws ec2 describe-subnets --subnet-ids "$subnet_id" --filters "Name=vpc-id,Values=$vpc_id" --region "$aws_region" >/dev/null 2>&1; then
+            echo -e "${GREEN}✓ 子網路 ID 驗證成功${NC}" >&2
+            break
+        else
+            echo -e "${RED}子網路 ID '$subnet_id' 無效、不存在於 VPC '$vpc_id' 或區域 '$aws_region'。${NC}" >&2
+            attempts=$((attempts + 1))
+            if [ $attempts -lt $max_attempts ]; then
+                echo -e "${YELLOW}請重試 ($attempts/$max_attempts) 或輸入 'skip' 跳過。${NC}" >&2
+            else
+                echo -e "${RED}達到最大嘗試次數。跳過子網路關聯步驟。${NC}" >&2
+                subnet_id=""
+                break
+            fi
+        fi
+    done
+    
+    # 獲取 VPC CIDR
+    local vpc_cidr
+    vpc_cidr=$(aws ec2 describe-vpcs --vpc-ids "$vpc_id" --region "$aws_region" | jq -r '.Vpcs[0].CidrBlock' 2>/dev/null)
+    if [ -z "$vpc_cidr" ] || [ "$vpc_cidr" = "null" ]; then
+        echo -e "${YELLOW}警告: 無法獲取 VPC CIDR，使用預設值。${NC}" >&2
+        vpc_cidr="10.0.0.0/16"
+    fi
+    
+    # VPN 設定 - 使用環境變數或互動式輸入
+    local vpn_cidr vpn_name
+    if [ -n "$VPN_CIDR" ] && [ -n "$VPN_NAME" ]; then
+        vpn_cidr="$VPN_CIDR"
+        vpn_name="$VPN_NAME"
+        echo -e "${GREEN}✓ 使用環境配置中的 VPN 設定${NC}" >&2
+        echo -e "${GREEN}  VPN CIDR: $vpn_cidr${NC}" >&2
+        echo -e "${GREEN}  VPN 名稱: $vpn_name${NC}" >&2
+    else
+        echo -e "\\n${BLUE}設定 VPN 配置...${NC}" >&2
+        
+        while true; do
+            echo -n "請輸入 VPN 客戶端 IP 範圍 (CIDR 格式，例如: 172.16.0.0/22): " >&2
+            read vpn_cidr
+            if [[ "$vpn_cidr" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}$ ]]; then
+                break
+            else
+                echo -e "${RED}無效的 CIDR 格式。請使用類似 '172.16.0.0/22' 的格式。${NC}" >&2
+            fi
+        done
+        
+        echo -n "請輸入 VPN 端點名稱 (例如: My-VPN): " >&2
+        read vpn_name
+        if [ -z "$vpn_name" ]; then
+            vpn_name="ClientVPN-$(date +%Y%m%d)"
+            echo -e "${YELLOW}使用預設名稱: $vpn_name${NC}" >&2
+        fi
+    fi
+    
+    local security_groups="${SECURITY_GROUPS:-}"
+    
+    # 建構並返回 JSON 結果
+    local result_json
+    if command -v jq >/dev/null 2>&1; then
+        result_json=$(jq -n \
+            --arg vpc_id "$vpc_id" \
+            --arg subnet_id "$subnet_id" \
+            --arg vpc_cidr "$vpc_cidr" \
+            --arg vpn_cidr "$vpn_cidr" \
+            --arg vpn_name "$vpn_name" \
+            --arg security_groups "$security_groups" \
+            '{vpc_id: $vpc_id, subnet_id: $subnet_id, vpc_cidr: $vpc_cidr, vpn_cidr: $vpn_cidr, vpn_name: $vpn_name, security_groups: $security_groups}')
+    else
+        result_json='{"vpc_id":"'$vpc_id'","subnet_id":"'$subnet_id'","vpc_cidr":"'$vpc_cidr'","vpn_cidr":"'$vpn_cidr'","vpn_name":"'$vpn_name'","security_groups":"'$security_groups'"}'
+    fi
+    
+    log_message_core "VPC/子網路/VPN 詳細資訊獲取完成 (lib): $result_json"
+    echo "$result_json"
+    return 0
 }
 
 # 輔助函式：提示網絡詳細資訊
