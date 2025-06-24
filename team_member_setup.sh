@@ -45,8 +45,6 @@ show_welcome() {
     echo -e "${BLUE}以便安全連接到目標環境進行除錯${NC}"
     echo -e ""
     echo -e "${YELLOW}請確保您已從管理員那裡獲得：${NC}"
-    echo -e "  - VPN 端點 ID 和 AWS 區域"
-    echo -e "  - CA 證書文件 (ca.crt)"
     echo -e "  - 適當的 AWS 帳戶訪問權限"
     echo -e ""
     echo -e "${CYAN}========================================================${NC}"
@@ -1466,6 +1464,23 @@ import_certificate() {
     # 載入配置
     if ! source "$USER_CONFIG_FILE"; then
         echo -e "${RED}載入配置文件失敗${NC}"
+        return 1
+    fi
+    
+    # 確保環境配置已載入，特別是 AWS_REGION
+    local endpoint_config="$TEAM_SCRIPT_DIR/configs/$TARGET_ENVIRONMENT/vpn_endpoint.conf"
+    if [ -f "$endpoint_config" ]; then
+        source "$endpoint_config"
+    fi
+    
+    local env_config="$TEAM_SCRIPT_DIR/configs/$TARGET_ENVIRONMENT/${TARGET_ENVIRONMENT}.env"
+    if [ -f "$env_config" ]; then
+        source "$env_config"
+    fi
+    
+    # 驗證 AWS_REGION 是否有效
+    if [[ -z "$AWS_REGION" ]]; then
+        echo -e "${RED}AWS_REGION 未設定，無法繼續${NC}"
         return 1
     fi
     
