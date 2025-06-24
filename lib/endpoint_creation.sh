@@ -159,6 +159,13 @@ get_vpc_subnet_vpn_details_lib() {
             done
             security_groups=$(echo $valid_sgs | xargs)  # 去除多餘空格
         fi
+        
+        # 在手動選擇模式下，如果用戶選擇了security groups，使用第一個作為client_vpn_sg_id
+        if [ -n "$security_groups" ]; then
+            client_vpn_sg_id=$(echo $security_groups | awk '{print $1}')
+        else
+            client_vpn_sg_id=""
+        fi
     else
         # 使用新創建的專用安全群組
         security_groups="$client_vpn_sg_id"
@@ -1604,28 +1611,24 @@ create_vpn_endpoint_lib() {
                 continue
             fi
             
-            # 更新需要修改的配置項
+            # 更新需要修改的配置項 (僅限用戶可配置設定)
             case "$key" in
-                "ENDPOINT_ID") echo "ENDPOINT_ID=$endpoint_id" >> "$temp_config" ;;
                 "AWS_REGION") echo "AWS_REGION=$aws_region" >> "$temp_config" ;;
                 "VPN_CIDR") echo "VPN_CIDR=$vpn_cidr" >> "$temp_config" ;;
                 "VPN_NAME") echo "VPN_NAME=$vpn_name" >> "$temp_config" ;;
-                "SERVER_CERT_ARN") echo "SERVER_CERT_ARN=$arg_server_cert_arn" >> "$temp_config" ;;
-                "CLIENT_CERT_ARN") echo "CLIENT_CERT_ARN=$arg_client_cert_arn" >> "$temp_config" ;;
                 "VPC_ID") echo "VPC_ID=$vpc_id" >> "$temp_config" ;;
-                "VPC_CIDR") echo "VPC_CIDR=$vpc_cidr" >> "$temp_config" ;;
                 "SUBNET_ID") echo "SUBNET_ID=$subnet_id" >> "$temp_config" ;;
-                "MULTI_VPC_COUNT") echo "MULTI_VPC_COUNT=0" >> "$temp_config" ;;
+                # 跳過自動生成的運行時數據 - 這些會保存到 .conf 文件
+                "ENDPOINT_ID"|"SERVER_CERT_ARN"|"CLIENT_CERT_ARN"|"VPC_CIDR"|"MULTI_VPC_COUNT"|"CLIENT_VPN_SECURITY_GROUP_ID"|"SECURITY_GROUPS") 
+                    echo "$key=$value" >> "$temp_config" ;;
                 *) echo "$key=$value" >> "$temp_config" ;;
             esac
         done < "$main_config_file"
         config_updated=true
     fi
     
-    # 如果配置文件不存在或某些必需的配置項缺失，添加它們
-    if [ ! -f "$main_config_file" ] || ! grep -q "^ENDPOINT_ID=" "$temp_config" 2>/dev/null; then
-        echo "ENDPOINT_ID=$endpoint_id" >> "$temp_config"
-    fi
+    # 如果配置文件不存在或某些必需的用戶可配置項缺失，添加它們
+    # 注意：僅添加用戶可配置設定，運行時數據會保存到 .conf 文件
     if ! grep -q "^AWS_REGION=" "$temp_config" 2>/dev/null; then
         echo "AWS_REGION=$aws_region" >> "$temp_config"
     fi
@@ -1635,28 +1638,74 @@ create_vpn_endpoint_lib() {
     if ! grep -q "^VPN_NAME=" "$temp_config" 2>/dev/null; then
         echo "VPN_NAME=$vpn_name" >> "$temp_config"
     fi
-    if ! grep -q "^SERVER_CERT_ARN=" "$temp_config" 2>/dev/null; then
-        echo "SERVER_CERT_ARN=$arg_server_cert_arn" >> "$temp_config"
-    fi
-    if ! grep -q "^CLIENT_CERT_ARN=" "$temp_config" 2>/dev/null; then
-        echo "CLIENT_CERT_ARN=$arg_client_cert_arn" >> "$temp_config"
-    fi
     if ! grep -q "^VPC_ID=" "$temp_config" 2>/dev/null; then
         echo "VPC_ID=$vpc_id" >> "$temp_config"
     fi
-    if ! grep -q "^VPC_CIDR=" "$temp_config" 2>/dev/null; then
-        echo "VPC_CIDR=$vpc_cidr" >> "$temp_config"
-    fi
     if ! grep -q "^SUBNET_ID=" "$temp_config" 2>/dev/null; then
         echo "SUBNET_ID=$subnet_id" >> "$temp_config"
-    fi
-    if ! grep -q "^MULTI_VPC_COUNT=" "$temp_config" 2>/dev/null; then
-        echo "MULTI_VPC_COUNT=0" >> "$temp_config"
     fi
     
     # 原子性地替換配置文件
     mv "$temp_config" "$main_config_file"
     echo -e "${GREEN}✓ 配置已安全更新，現有設置得到保留${NC}"
+    
+    # 創建/更新 vpn_endpoint.conf 文件 (runtime data)
+    local endpoint_config_file="${main_config_file%/*}/vpn_endpoint.conf"
+    echo -e "${BLUE}創建端點運行時配置文件 \"$endpoint_config_file\"...${NC}"
+    
+    # 創建端點配置文件內容
+    cat > "$endpoint_config_file" << EOF
+# VPN Endpoint Specific Configuration
+# Contains only endpoint-specific and certificate management settings
+# Basic network config moved to ${CURRENT_ENVIRONMENT}.env to eliminate duplication
+# Updated: $(date '+%Y年 %m月%d日')
+
+# ====================================================================
+# CERTIFICATE MANAGEMENT CONFIGURATION
+# ====================================================================
+
+# EasyRSA 工具配置
+EASYRSA_DIR=/opt/homebrew/opt/easy-rsa/libexec
+SERVER_CERT_NAME_PREFIX=server
+CLIENT_CERT_NAME_PREFIX=client
+
+# ====================================================================
+# VPN ENDPOINT CONFIGURATION - AUTO-GENERATED
+# ====================================================================
+
+# VPN Endpoint ID (generated when endpoint is created)
+ENDPOINT_ID="$endpoint_id"
+
+# Dedicated Client VPN Security Group ID (auto-generated during endpoint creation)
+CLIENT_VPN_SECURITY_GROUP_ID="${client_vpn_sg_id:-}"
+
+# ====================================================================
+# CERTIFICATE ARNs - AUTO-GENERATED/IMPORTED
+# ====================================================================
+
+# AWS Certificate Manager ARNs (generated during certificate import)
+CA_CERT_ARN=""
+SERVER_CERT_ARN="$arg_server_cert_arn"
+CLIENT_CERT_ARN="$arg_client_cert_arn"
+CLIENT_CERT_ARN_admin=""
+
+# ====================================================================
+# VPC RUNTIME CONFIGURATION
+# ====================================================================
+
+# VPC 實際 CIDR（從 AWS 查詢得到，與 VPN_CIDR 不同）
+VPC_CIDR="$vpc_cidr"
+
+# 多 VPC 配置
+MULTI_VPC_COUNT=0
+VPC_ID="$vpc_id"
+SUBNET_ID="$subnet_id"
+VPN_CIDR="$vpn_cidr"
+VPN_NAME=$vpn_name
+SECURITY_GROUPS="${client_vpn_sg_id:-$security_groups}"
+EOF
+    
+    echo -e "${GREEN}✓ 端點運行時配置文件已創建${NC}"
 
     log_message_core "VPN 端點已建立 (lib): $endpoint_id" # Use log_message_core, endpoint_id is a variable
     echo -e "${GREEN}VPN 端點建立完成！${NC}"
