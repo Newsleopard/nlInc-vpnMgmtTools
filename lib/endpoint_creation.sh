@@ -2243,9 +2243,66 @@ terminate_vpn_endpoint_lib() {
         echo -e "${DIM}3. 使用發現的安全群組 ID 手動清理規則${NC}"
     fi
     
-    # 步驟 4: 刪除日誌群組 (如果存在)
+    # 步驟 4: 刪除專用的 Client VPN 安全群組 (如果存在)
+    if [[ -n "$client_vpn_sg_id" && "$client_vpn_sg_id" != "null" && "$client_vpn_sg_id" != '""' ]]; then
+        echo -e "\\n${YELLOW}步驟 4: 刪除專用的 Client VPN 安全群組...${NC}"
+        log_message_core "開始刪除專用 Client VPN 安全群組: $client_vpn_sg_id"
+        
+        # 檢查安全群組是否存在
+        local sg_exists
+        sg_exists=$(aws ec2 describe-security-groups \
+            --group-ids "$client_vpn_sg_id" \
+            --region "$aws_region" \
+            --query 'SecurityGroups[0].GroupId' \
+            --output text 2>/dev/null)
+        
+        if [[ "$sg_exists" == "$client_vpn_sg_id" ]]; then
+            # 檢查安全群組是否為專用的 Client VPN 群組
+            local sg_purpose
+            sg_purpose=$(aws ec2 describe-security-groups \
+                --group-ids "$client_vpn_sg_id" \
+                --region "$aws_region" \
+                --query 'SecurityGroups[0].Tags[?Key==`Purpose`].Value' \
+                --output text 2>/dev/null)
+            
+            if [[ "$sg_purpose" == "Client-VPN" ]]; then
+                echo -e "${BLUE}正在刪除專用 Client VPN 安全群組: $client_vpn_sg_id${NC}"
+                
+                local delete_sg_result
+                delete_sg_result=$(aws ec2 delete-security-group \
+                    --group-id "$client_vpn_sg_id" \
+                    --region "$aws_region" 2>&1)
+                local delete_sg_exit_code=$?
+                
+                if [ $delete_sg_exit_code -eq 0 ]; then
+                    echo -e "${GREEN}✓ 專用 Client VPN 安全群組刪除成功${NC}"
+                    log_message_core "專用 Client VPN 安全群組刪除成功: $client_vpn_sg_id"
+                else
+                    echo -e "${YELLOW}⚠️ 專用 Client VPN 安全群組刪除失敗${NC}"
+                    echo -e "${DIM}錯誤: $delete_sg_result${NC}"
+                    log_message_core "警告: 專用 Client VPN 安全群組刪除失敗: $client_vpn_sg_id - $delete_sg_result"
+                    
+                    # 可能是因為還有其他資源在使用，提供建議
+                    echo -e "${BLUE}💡 可能的解決方案：${NC}"
+                    echo -e "${DIM}1. 檢查是否有其他資源仍在使用此安全群組${NC}"
+                    echo -e "${DIM}2. 稍後手動刪除: aws ec2 delete-security-group --group-id $client_vpn_sg_id --region $aws_region${NC}"
+                fi
+            else
+                echo -e "${YELLOW}⚠️ 安全群組 $client_vpn_sg_id 不是專用的 Client VPN 群組，跳過刪除${NC}"
+                log_message_core "跳過刪除安全群組 $client_vpn_sg_id - 不是專用 Client VPN 群組 (Purpose: $sg_purpose)"
+            fi
+        else
+            echo -e "${YELLOW}⚠️ 安全群組 $client_vpn_sg_id 不存在或已被刪除${NC}"
+            log_message_core "安全群組不存在或已被刪除: $client_vpn_sg_id"
+        fi
+    else
+        echo -e "\\n${YELLOW}步驟 4: 跳過安全群組刪除 (未找到有效的 CLIENT_VPN_SECURITY_GROUP_ID)${NC}"
+        log_message_core "跳過專用 Client VPN 安全群組刪除 - 未找到有效 ID"
+    fi
+
+    # 步驟 5: 刪除日誌群組 (如果存在)
     if [ -n "$log_group_name" ]; then
-        echo -e "\\n${YELLOW}步驟 4: 刪除日誌群組...${NC}"
+        echo -e "\\n${YELLOW}步驟 5: 刪除日誌群組...${NC}"
         log_message_core "開始刪除 CloudWatch 日誌群組: $log_group_name"
         
         aws logs delete-log-group \
@@ -2261,9 +2318,9 @@ terminate_vpn_endpoint_lib() {
         fi
     fi
 
-    # 步驟 5: 更新配置文件
+    # 步驟 6: 更新配置文件
     if [ -f "$config_file_path" ]; then
-        echo -e "\\n${YELLOW}步驟 5: 更新配置文件...${NC}"
+        echo -e "\\n${YELLOW}步驟 6: 更新配置文件...${NC}"
         log_message_core "開始更新配置文件: $config_file_path"
         
         # 創建臨時文件來安全地更新配置
@@ -2287,19 +2344,15 @@ terminate_vpn_endpoint_lib() {
                 continue
             fi
             
-            # 更新需要修改的配置項
+            # 更新需要修改的配置項 (清空已刪除資源的 ID)
             case "$key" in
                 "ENDPOINT_ID") echo "ENDPOINT_ID=" >> "$temp_config" ;; # 清空端點 ID
-                "AWS_REGION") echo "AWS_REGION=$aws_region" >> "$temp_config" ;;
-                "VPN_CIDR") echo "VPN_CIDR=$vpn_cidr" >> "$temp_config" ;;
-                "VPN_NAME") echo "VPN_NAME=$vpn_name" >> "$temp_config" ;;
-                "SERVER_CERT_ARN") echo "SERVER_CERT_ARN=$arg_server_cert_arn" >> "$temp_config" ;;
-                "CLIENT_CERT_ARN") echo "CLIENT_CERT_ARN=$arg_client_cert_arn" >> "$temp_config" ;;
-                "VPC_ID") echo "VPC_ID=$vpc_id" >> "$temp_config" ;;
-                "VPC_CIDR") echo "VPC_CIDR=$vpc_cidr" >> "$temp_config" ;;
-                "SUBNET_ID") echo "SUBNET_ID=$subnet_id" >> "$temp_config" ;;
-                "MULTI_VPC_COUNT") echo "MULTI_VPC_COUNT=0" >> "$temp_config" ;;
-                *) echo "$key=$value" >> "$temp_config" ;;
+                "CLIENT_VPN_SECURITY_GROUP_ID") echo "CLIENT_VPN_SECURITY_GROUP_ID=" >> "$temp_config" ;; # 清空已刪除的安全群組 ID
+                "SERVER_CERT_ARN") echo "SERVER_CERT_ARN=" >> "$temp_config" ;; # 清空服務器證書 ARN
+                "CLIENT_CERT_ARN") echo "CLIENT_CERT_ARN=" >> "$temp_config" ;; # 清空客戶端證書 ARN  
+                "VPC_CIDR") echo "VPC_CIDR=" >> "$temp_config" ;; # 清空 VPC CIDR
+                "SECURITY_GROUPS") echo "SECURITY_GROUPS=" >> "$temp_config" ;; # 清空安全群組列表
+                *) echo "$key=$value" >> "$temp_config" ;; # 保留其他設定
             esac
         done < "$config_file_path"
         
