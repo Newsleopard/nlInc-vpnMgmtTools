@@ -810,3 +810,103 @@ generate_admin_certificate_lib() {
     log_message_core "管理員證書生成成功"
     return 0
 }
+
+# 可選匯入管理員證書到 ACM (庫函式版本)
+# 參數: $1 = cert_dir, $2 = aws_region, $3 = config_file
+# 功能: 匯入管理員客戶端證書到 ACM，並更新 CLIENT_CERT_ARN_admin
+# 注意: 這是可選操作，主要用於需要在 ACM 中追蹤所有證書的情況
+import_admin_certificate_to_acm_lib() {
+    local cert_dir="$1"
+    local aws_region="$2"
+    local config_file="$3"
+    local easyrsa_dir="$cert_dir"
+
+    # 參數驗證
+    if [ -z "$cert_dir" ] || [ ! -d "$cert_dir" ]; then
+        echo -e "${RED}錯誤: 證書目錄參數無效${NC}" >&2
+        log_message_core "錯誤: import_admin_certificate_to_acm_lib - 證書目錄無效: $cert_dir"
+        return 1
+    fi
+    if ! validate_aws_region "$aws_region"; then
+        return 1
+    fi
+    if [ -z "$config_file" ] || [ ! -f "$config_file" ]; then
+        echo -e "${RED}錯誤: 配置文件不存在: $config_file${NC}" >&2
+        log_message_core "錯誤: import_admin_certificate_to_acm_lib - 配置文件不存在: $config_file"
+        return 1
+    fi
+    if [ ! -d "$easyrsa_dir/pki" ]; then
+        echo -e "${RED}錯誤: EasyRSA PKI 目錄不存在於 $easyrsa_dir${NC}" >&2
+        log_message_core "錯誤: import_admin_certificate_to_acm_lib - PKI 目錄不存在: $easyrsa_dir/pki"
+        return 1
+    fi
+
+    log_message_core "開始可選匯入管理員證書到 AWS ACM (lib) - Region: $aws_region"
+
+    local admin_cert_file="$easyrsa_dir/pki/issued/admin.crt"
+    local admin_key_file="$easyrsa_dir/pki/private/admin.key"
+    local ca_cert_file="$easyrsa_dir/pki/ca.crt"
+
+    # 檢查管理員證書檔案
+    if [ ! -f "$admin_cert_file" ]; then
+        echo -e "${YELLOW}警告: 管理員證書檔案不存在: $admin_cert_file${NC}" >&2
+        echo -e "${BLUE}跳過管理員證書匯入到 ACM${NC}" >&2
+        log_message_core "警告: 管理員證書檔案不存在，跳過 ACM 匯入"
+        return 0
+    fi
+    if [ ! -f "$admin_key_file" ]; then
+        echo -e "${YELLOW}警告: 管理員私鑰檔案不存在: $admin_key_file${NC}" >&2
+        echo -e "${BLUE}跳過管理員證書匯入到 ACM${NC}" >&2
+        log_message_core "警告: 管理員私鑰檔案不存在，跳過 ACM 匯入"
+        return 0
+    fi
+    if [ ! -f "$ca_cert_file" ]; then
+        echo -e "${YELLOW}警告: CA 證書檔案不存在: $ca_cert_file${NC}" >&2
+        echo -e "${BLUE}跳過管理員證書匯入到 ACM${NC}" >&2
+        log_message_core "警告: CA 證書檔案不存在，跳過 ACM 匯入"
+        return 0
+    fi
+
+    echo -e "${BLUE}正在匯入管理員證書 (admin.crt) 到 ACM...${NC}" >&2
+    local admin_import_output
+    admin_import_output=$(aws acm import-certificate \
+      --certificate "fileb://$admin_cert_file" \
+      --private-key "fileb://$admin_key_file" \
+      --certificate-chain "fileb://$ca_cert_file" \
+      --region "$aws_region" \
+      --tags Key=Name,Value="VPN-Admin-Client-Cert" Key=Purpose,Value="ClientVPN" Key=ManagedBy,Value="nlInc-vpnMgmtTools" Key=CertType,Value="AdminClient" 2>&1)
+
+    local admin_import_status=$?
+    local admin_cert_arn=""
+
+    if [ $admin_import_status -ne 0 ] || ! admin_cert_arn=$(echo "$admin_import_output" | jq -r '.CertificateArn' 2>/dev/null); then
+        echo -e "${YELLOW}警告: 匯入管理員證書到 ACM 失敗，這不會影響 VPN 功能${NC}" >&2
+        log_message_core "警告: 匯入管理員證書失敗. AWS CLI 輸出: $admin_import_output"
+        return 0  # 不返回錯誤，因為這是可選功能
+    fi
+
+    # 驗證 ARN 格式
+    if [ -z "$admin_cert_arn" ] || [ "$admin_cert_arn" == "null" ]; then
+        echo -e "${YELLOW}警告: 無效的管理員證書 ARN，跳過配置更新${NC}" >&2
+        log_message_core "警告: 無效的管理員證書 ARN: $admin_cert_arn"
+        return 0
+    fi
+
+    # 更新配置文件中的 CLIENT_CERT_ARN_admin
+    # 檢查是否已存在該行
+    if grep -q "^CLIENT_CERT_ARN_admin=" "$config_file"; then
+        # 更新現有行
+        sed -i.bak "s|^CLIENT_CERT_ARN_admin=.*|CLIENT_CERT_ARN_admin=\"$admin_cert_arn\"|" "$config_file"
+        log_message_core "已更新配置文件中的 CLIENT_CERT_ARN_admin"
+    else
+        # 添加新行
+        echo "CLIENT_CERT_ARN_admin=\"$admin_cert_arn\"" >> "$config_file"
+        log_message_core "已添加 CLIENT_CERT_ARN_admin 到配置文件"
+    fi
+
+    echo -e "${GREEN}✓ 管理員證書成功匯入到 ACM${NC}" >&2
+    echo -e "${GREEN}✓ 管理員證書 ARN: $admin_cert_arn${NC}" >&2
+    log_message_core "管理員證書成功匯入到 ACM。ARN: $admin_cert_arn"
+
+    return 0
+}

@@ -450,6 +450,82 @@ debug_aws_cli_params() {
     fi
 }
 
+# 輔助函式：立即保存端點基本配置 (防止後續步驟失敗)
+# 參數: $1=config_file, $2=endpoint_id, $3=sg_id, $4=server_cert_arn, $5=ca_cert_arn, $6=vpc_id, $7=subnet_id, $8=vpn_cidr, $9=vpn_name, $10=vpc_cidr
+# 注意: $5 是 CA 證書 ARN (來自 import_certificates_to_acm_lib 的 client_cert_arn)
+save_initial_endpoint_config() {
+    local config_file="$1"
+    local endpoint_id="$2"
+    local sg_id="$3"
+    local server_cert_arn="$4"
+    local ca_cert_arn="$5"
+    local vpc_id="$6"
+    local subnet_id="$7"
+    local vpn_cidr="$8"
+    local vpn_name="$9"
+    local vpc_cidr="${10}"
+    
+    # 參數驗證
+    if [ -z "$config_file" ] || [ -z "$endpoint_id" ]; then
+        log_message_core "錯誤: save_initial_endpoint_config 缺少必要參數"
+        return 1
+    fi
+    
+    # 創建端點配置文件內容
+    cat > "$config_file" << EOF
+# VPN Endpoint Specific Configuration
+# Contains only endpoint-specific and certificate management settings
+# Basic network config moved to ${CURRENT_ENVIRONMENT:-staging}.env to eliminate duplication
+# Updated: $(date '+%Y年 %m月%d日')
+
+# ====================================================================
+# CERTIFICATE MANAGEMENT CONFIGURATION
+# ====================================================================
+
+# EasyRSA 工具配置
+EASYRSA_DIR=/opt/homebrew/opt/easy-rsa/libexec
+SERVER_CERT_NAME_PREFIX=server
+CLIENT_CERT_NAME_PREFIX=client
+
+# ====================================================================
+# VPN ENDPOINT CONFIGURATION - AUTO-GENERATED
+# ====================================================================
+
+# VPN Endpoint ID (generated when endpoint is created)
+ENDPOINT_ID="$endpoint_id"
+
+# Dedicated Client VPN Security Group ID (auto-generated during endpoint creation)
+CLIENT_VPN_SECURITY_GROUP_ID="${sg_id:-}"
+
+# ====================================================================
+# CERTIFICATE ARNs - AUTO-GENERATED/IMPORTED
+# ====================================================================
+
+# AWS Certificate Manager ARNs (generated during certificate import)
+CA_CERT_ARN="$ca_cert_arn"
+SERVER_CERT_ARN="$server_cert_arn"
+CLIENT_CERT_ARN=""
+CLIENT_CERT_ARN_admin=""
+
+# ====================================================================
+# VPC RUNTIME CONFIGURATION
+# ====================================================================
+
+# VPC 實際 CIDR（從 AWS 查詢得到，與 VPN_CIDR 不同）
+VPC_CIDR="${vpc_cidr:-}"
+
+# 多 VPC 配置
+MULTI_VPC_COUNT=0
+VPC_ID="${vpc_id:-}"
+SUBNET_ID="${subnet_id:-}"
+VPN_CIDR="${vpn_cidr:-}"
+VPN_NAME=${vpn_name:-}
+SECURITY_GROUPS="${sg_id:-}"
+EOF
+    
+    return $?
+}
+
 # 輔助函式：創建專用的 Client VPN 安全群組
 # 參數: $1 = VPC ID, $2 = AWS REGION, $3 = ENVIRONMENT (staging/production)
 # 返回: 安全群組 ID 或錯誤
@@ -1565,6 +1641,19 @@ create_vpn_endpoint_lib() {
     fi
     log_message_core "VPN 端點已可用: $endpoint_id"
 
+    # 立即保存端點配置以防後續步驟失敗
+    echo -e "${BLUE}保存端點基本配置...${NC}"
+    log_message_core "立即保存端點基本配置: $endpoint_id"
+    
+    local endpoint_config_file="${main_config_file%/*}/vpn_endpoint.conf"
+    if save_initial_endpoint_config "$endpoint_config_file" "$endpoint_id" "$client_vpn_sg_id" "$arg_server_cert_arn" "$arg_client_cert_arn" "$vpc_id" "$subnet_id" "$vpn_cidr" "$vpn_name" "$vpc_cidr"; then
+        echo -e "${GREEN}✓ 端點基本配置已保存${NC}"
+        log_message_core "端點基本配置保存成功: $endpoint_config_file"
+    else
+        echo -e "${YELLOW}⚠️ 端點基本配置保存失敗，但繼續執行${NC}"
+        log_message_core "警告: 端點基本配置保存失敗，但繼續執行"
+    fi
+
     # 關聯子網路
     echo -e "\n${CYAN}=== 步驟：關聯子網路到 VPN 端點 ===${NC}"
     log_message_core "開始執行關聯子網路步驟: 端點=$endpoint_id, 子網路=$subnet_id"
@@ -1649,63 +1738,54 @@ create_vpn_endpoint_lib() {
     mv "$temp_config" "$main_config_file"
     echo -e "${GREEN}✓ 配置已安全更新，現有設置得到保留${NC}"
     
-    # 創建/更新 vpn_endpoint.conf 文件 (runtime data)
+    # 更新 vpn_endpoint.conf 文件 (補充完整配置)
     local endpoint_config_file="${main_config_file%/*}/vpn_endpoint.conf"
-    echo -e "${BLUE}創建端點運行時配置文件 \"$endpoint_config_file\"...${NC}"
+    echo -e "${BLUE}更新端點運行時配置文件 \"$endpoint_config_file\"...${NC}"
     
-    # 創建端點配置文件內容
-    cat > "$endpoint_config_file" << EOF
-# VPN Endpoint Specific Configuration
-# Contains only endpoint-specific and certificate management settings
-# Basic network config moved to ${CURRENT_ENVIRONMENT}.env to eliminate duplication
-# Updated: $(date '+%Y年 %m月%d日')
+    # 使用更新函數補充完整配置 (基本配置已在早期保存)
+    if save_initial_endpoint_config "$endpoint_config_file" "$endpoint_id" "$client_vpn_sg_id" "$arg_server_cert_arn" "$arg_client_cert_arn" "$vpc_id" "$subnet_id" "$vpn_cidr" "$vpn_name" "$vpc_cidr"; then
+        echo -e "${GREEN}✓ 端點運行時配置文件已完成更新${NC}"
+        log_message_core "端點運行時配置文件最終更新成功: $endpoint_config_file"
+    else
+        echo -e "${YELLOW}⚠️ 端點運行時配置文件最終更新失敗${NC}"
+        log_message_core "警告: 端點運行時配置文件最終更新失敗，但基本配置已保存"
+    fi
 
-# ====================================================================
-# CERTIFICATE MANAGEMENT CONFIGURATION
-# ====================================================================
-
-# EasyRSA 工具配置
-EASYRSA_DIR=/opt/homebrew/opt/easy-rsa/libexec
-SERVER_CERT_NAME_PREFIX=server
-CLIENT_CERT_NAME_PREFIX=client
-
-# ====================================================================
-# VPN ENDPOINT CONFIGURATION - AUTO-GENERATED
-# ====================================================================
-
-# VPN Endpoint ID (generated when endpoint is created)
-ENDPOINT_ID="$endpoint_id"
-
-# Dedicated Client VPN Security Group ID (auto-generated during endpoint creation)
-CLIENT_VPN_SECURITY_GROUP_ID="${client_vpn_sg_id:-}"
-
-# ====================================================================
-# CERTIFICATE ARNs - AUTO-GENERATED/IMPORTED
-# ====================================================================
-
-# AWS Certificate Manager ARNs (generated during certificate import)
-CA_CERT_ARN=""
-SERVER_CERT_ARN="$arg_server_cert_arn"
-CLIENT_CERT_ARN="$arg_client_cert_arn"
-CLIENT_CERT_ARN_admin=""
-
-# ====================================================================
-# VPC RUNTIME CONFIGURATION
-# ====================================================================
-
-# VPC 實際 CIDR（從 AWS 查詢得到，與 VPN_CIDR 不同）
-VPC_CIDR="$vpc_cidr"
-
-# 多 VPC 配置
-MULTI_VPC_COUNT=0
-VPC_ID="$vpc_id"
-SUBNET_ID="$subnet_id"
-VPN_CIDR="$vpn_cidr"
-VPN_NAME=$vpn_name
-SECURITY_GROUPS="${client_vpn_sg_id:-$security_groups}"
-EOF
+    # 可選：匯入管理員證書到 ACM（Fix 3）
+    echo -e "\n${CYAN}=== 可選步驟：匯入管理員證書到 ACM ===${NC}"
+    log_message_core "開始可選管理員證書匯入"
     
-    echo -e "${GREEN}✓ 端點運行時配置文件已創建${NC}"
+    # 確保載入了證書管理函式庫
+    local lib_dir="$(dirname "${BASH_SOURCE[0]}")"
+    if [ -f "$lib_dir/cert_management.sh" ]; then
+        source "$lib_dir/cert_management.sh"
+    fi
+    
+    if command -v import_admin_certificate_to_acm_lib >/dev/null 2>&1; then
+        # 獲取證書目錄
+        local cert_dir=""
+        # 從環境變數或配置獲取證書目錄
+        if [ -n "$VPN_CERT_DIR" ]; then
+            cert_dir="$VPN_CERT_DIR"
+        elif [ -n "$CERT_DIR" ]; then
+            cert_dir="$CERT_DIR"
+        else
+            # 回退到預設路徑
+            cert_dir="./certs/${CURRENT_ENVIRONMENT:-staging}"
+        fi
+        
+        echo -e "${BLUE}嘗試可選的管理員證書匯入...${NC}"
+        if import_admin_certificate_to_acm_lib "$cert_dir" "$aws_region" "$endpoint_config_file"; then
+            echo -e "${GREEN}✓ 管理員證書已成功匯入到 ACM${NC}"
+            log_message_core "管理員證書已成功匯入到 ACM"
+        else
+            echo -e "${YELLOW}ℹ️ 管理員證書匯入跳過或失敗（不影響 VPN 功能）${NC}"
+            log_message_core "管理員證書匯入跳過或失敗（不影響 VPN 功能）"
+        fi
+    else
+        echo -e "${YELLOW}ℹ️ 管理員證書匯入函式不可用，跳過此步驟${NC}"
+        log_message_core "管理員證書匯入函式不可用，跳過此步驟"
+    fi
 
     log_message_core "VPN 端點已建立 (lib): $endpoint_id" # Use log_message_core, endpoint_id is a variable
     echo -e "${GREEN}VPN 端點建立完成！${NC}"
@@ -2300,9 +2380,88 @@ terminate_vpn_endpoint_lib() {
         log_message_core "跳過專用 Client VPN 安全群組刪除 - 未找到有效 ID"
     fi
 
-    # 步驟 5: 刪除日誌群組 (如果存在)
+    # 步驟 5: 刪除 ACM 證書 (如果存在)
+    echo -e "\\n${YELLOW}步驟 5: 刪除 ACM 證書...${NC}"
+    log_message_core "開始刪除 ACM 證書"
+    
+    # 收集需要刪除的證書 ARN
+    local cert_arns_to_delete=()
+    
+    # 檢查並收集證書 ARN
+    for config_file in "${config_files[@]}"; do
+        if [ -f "$config_file" ]; then
+            # 收集 SERVER_CERT_ARN
+            local server_arn=$(grep "^SERVER_CERT_ARN=" "$config_file" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'" | xargs)
+            if [[ -n "$server_arn" && "$server_arn" != "null" && "$server_arn" != '""' ]]; then
+                cert_arns_to_delete+=("$server_arn")
+                echo -e "${BLUE}  找到服務器證書 ARN: $server_arn${NC}"
+            fi
+            
+            # 收集 CA_CERT_ARN
+            local ca_arn=$(grep "^CA_CERT_ARN=" "$config_file" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'" | xargs)
+            if [[ -n "$ca_arn" && "$ca_arn" != "null" && "$ca_arn" != '""' ]]; then
+                cert_arns_to_delete+=("$ca_arn")
+                echo -e "${BLUE}  找到 CA 證書 ARN: $ca_arn${NC}"
+            fi
+            
+            # 收集 CLIENT_CERT_ARN (如果存在)
+            local client_arn=$(grep "^CLIENT_CERT_ARN=" "$config_file" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'" | xargs)
+            if [[ -n "$client_arn" && "$client_arn" != "null" && "$client_arn" != '""' ]]; then
+                cert_arns_to_delete+=("$client_arn")
+                echo -e "${BLUE}  找到客戶端證書 ARN: $client_arn${NC}"
+            fi
+            
+            # 收集 CLIENT_CERT_ARN_admin (如果存在)
+            local admin_arn=$(grep "^CLIENT_CERT_ARN_admin=" "$config_file" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'" | xargs)
+            if [[ -n "$admin_arn" && "$admin_arn" != "null" && "$admin_arn" != '""' ]]; then
+                cert_arns_to_delete+=("$admin_arn")
+                echo -e "${BLUE}  找到管理員證書 ARN: $admin_arn${NC}"
+            fi
+        fi
+    done
+    
+    # 刪除找到的證書
+    if [ ${#cert_arns_to_delete[@]} -gt 0 ]; then
+        echo -e "${BLUE}正在刪除 ${#cert_arns_to_delete[@]} 個 ACM 證書...${NC}"
+        
+        for cert_arn in "${cert_arns_to_delete[@]}"; do
+            echo -e "${YELLOW}  刪除證書: $cert_arn${NC}"
+            
+            local delete_cert_result
+            delete_cert_result=$(aws acm delete-certificate \
+                --certificate-arn "$cert_arn" \
+                --region "$aws_region" 2>&1)
+            local delete_cert_exit_code=$?
+            
+            if [ $delete_cert_exit_code -eq 0 ]; then
+                echo -e "${GREEN}  ✓ 證書刪除成功${NC}"
+                log_message_core "ACM 證書刪除成功: $cert_arn"
+            else
+                echo -e "${YELLOW}  ⚠️ 證書刪除失敗或已被刪除${NC}"
+                echo -e "${DIM}    錯誤: $delete_cert_result${NC}"
+                log_message_core "警告: ACM 證書刪除失敗: $cert_arn - $delete_cert_result"
+                
+                # 可能是證書正在使用中或已被刪除，提供建議
+                if echo "$delete_cert_result" | grep -q "ResourceInUseException"; then
+                    echo -e "${BLUE}    💡 證書可能仍在使用中，將在資源釋放後自動清理${NC}"
+                elif echo "$delete_cert_result" | grep -q "ResourceNotFoundException"; then
+                    echo -e "${BLUE}    💡 證書已不存在，可能已被刪除${NC}"
+                else
+                    echo -e "${BLUE}    💡 稍後手動刪除: aws acm delete-certificate --certificate-arn $cert_arn --region $aws_region${NC}"
+                fi
+            fi
+        done
+        
+        echo -e "${GREEN}✓ ACM 證書清理完成${NC}"
+        log_message_core "ACM 證書清理完成，處理了 ${#cert_arns_to_delete[@]} 個證書"
+    else
+        echo -e "${YELLOW}⚠️ 未找到需要刪除的 ACM 證書${NC}"
+        log_message_core "未找到需要刪除的 ACM 證書"
+    fi
+
+    # 步驟 6: 刪除日誌群組 (如果存在)
     if [ -n "$log_group_name" ]; then
-        echo -e "\\n${YELLOW}步驟 5: 刪除日誌群組...${NC}"
+        echo -e "\\n${YELLOW}步驟 6: 刪除日誌群組...${NC}"
         log_message_core "開始刪除 CloudWatch 日誌群組: $log_group_name"
         
         aws logs delete-log-group \
@@ -2318,9 +2477,9 @@ terminate_vpn_endpoint_lib() {
         fi
     fi
 
-    # 步驟 6: 更新配置文件
+    # 步驟 7: 更新配置文件
     if [ -f "$config_file_path" ]; then
-        echo -e "\\n${YELLOW}步驟 6: 更新配置文件...${NC}"
+        echo -e "\\n${YELLOW}步驟 7: 更新配置文件...${NC}"
         log_message_core "開始更新配置文件: $config_file_path"
         
         # 創建臨時文件來安全地更新配置
@@ -2349,7 +2508,9 @@ terminate_vpn_endpoint_lib() {
                 "ENDPOINT_ID") echo "ENDPOINT_ID=" >> "$temp_config" ;; # 清空端點 ID
                 "CLIENT_VPN_SECURITY_GROUP_ID") echo "CLIENT_VPN_SECURITY_GROUP_ID=" >> "$temp_config" ;; # 清空已刪除的安全群組 ID
                 "SERVER_CERT_ARN") echo "SERVER_CERT_ARN=" >> "$temp_config" ;; # 清空服務器證書 ARN
+                "CA_CERT_ARN") echo "CA_CERT_ARN=" >> "$temp_config" ;; # 清空 CA 證書 ARN
                 "CLIENT_CERT_ARN") echo "CLIENT_CERT_ARN=" >> "$temp_config" ;; # 清空客戶端證書 ARN  
+                "CLIENT_CERT_ARN_admin") echo "CLIENT_CERT_ARN_admin=" >> "$temp_config" ;; # 清空管理員證書 ARN
                 "VPC_CIDR") echo "VPC_CIDR=" >> "$temp_config" ;; # 清空 VPC CIDR
                 "SECURITY_GROUPS") echo "SECURITY_GROUPS=" >> "$temp_config" ;; # 清空安全群組列表
                 *) echo "$key=$value" >> "$temp_config" ;; # 保留其他設定
