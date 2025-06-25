@@ -159,51 +159,76 @@ prompt_update_existing_security_groups() {
     
     echo -e "\n${CYAN}=== 自動 VPN 服務訪問配置 ===${NC}" >&2
     
-    # 步驟 1: 服務發現和預覽
-    echo -e "\n${YELLOW}🔍 步驟 1: 發現當前環境中的服務...${NC}" >&2
+    # 建立發現結果快取文件
+    local discovery_cache="/tmp/vpn_discovery_${client_vpn_sg_id}.json"
+    local discovery_summary="/tmp/vpn_discovery_summary_${client_vpn_sg_id}.txt"
+    
+    # 步驟 1: 服務發現 (只執行一次並快取結果)
+    # 直接寫入終端 (繞過重導向)
+    echo -e "\n${YELLOW}🔍 步驟 1: 發現當前環境中的服務...${NC}" > /dev/tty 2>/dev/null || echo -e "\n🔍 步驟 1: 發現當前環境中的服務..."
+    echo -e "${BLUE}   正在掃描 VPC 中的 AWS 服務，這可能需要幾分鐘時間...${NC}" > /dev/tty 2>/dev/null || echo -e "   正在掃描 VPC 中的 AWS 服務，這可能需要幾分鐘時間..."
     log_message_core "執行服務發現: $vpn_service_script discover $client_vpn_sg_id --region $aws_region"
     
-    # Execute discovery with VPN security group parameter and ensure results are saved
-    if ! "$vpn_service_script" discover "$client_vpn_sg_id" --region "$aws_region"; then
+    # 顯示進度指示器 (直接寫入終端)
+    echo -e "${CYAN}   📡 正在執行多層服務發現...${NC}" > /dev/tty 2>/dev/null || echo -e "   📡 正在執行多層服務發現..."
+    
+    # 記錄開始時間以顯示進度
+    local discovery_start_time=$(date +%s)
+    
+    # Execute discovery with progress feedback and cache results  
+    if ! "$vpn_service_script" discover "$client_vpn_sg_id" --region "$aws_region" > "$discovery_summary" 2>&1; then
         log_message_core "警告: VPN 服務發現失敗，回退到手動配置"
         echo -e "${YELLOW}⚠️  服務發現失敗，建議稍後手動運行：${NC}" >&2
         echo -e "${BLUE}$vpn_service_script discover $client_vpn_sg_id --region $aws_region${NC}" >&2
         return 1
     else
+        local discovery_end_time=$(date +%s)
+        local discovery_duration=$((discovery_end_time - discovery_start_time))
         log_message_core "VPN 服務發現成功完成，結果已保存到配置文件"
-        echo -e "${GREEN}✅ 服務發現完成，結果已保存到配置文件${NC}" >&2
+        
+        # 直接寫入終端顯示完成狀態
+        echo -e "${GREEN}✅ 服務發現完成 (耗時: ${discovery_duration}秒)，結果已保存到配置文件${NC}" > /dev/tty 2>/dev/null || echo -e "✅ 服務發現完成 (耗時: ${discovery_duration}秒)，結果已保存到配置文件"
+        
+        # 顯示發現結果摘要 (直接寫入終端)
+        if [[ -f "$discovery_summary" ]]; then
+            echo -e "${CYAN}   📊 發現結果摘要：${NC}" > /dev/tty 2>/dev/null || echo -e "   📊 發現結果摘要："
+            # 顯示最重要的摘要信息
+            local services_found=$(grep -c "Discovery Summary:" "$discovery_summary" | head -1 || echo "0")
+            local summary_line=$(grep "Discovery Summary:" "$discovery_summary" | tail -1 || echo "無摘要")
+            echo -e "${YELLOW}   $summary_line${NC}" > /dev/tty 2>/dev/null || echo -e "   $summary_line"
+        fi
     fi
     
-    # 步驟 2: 預覽即將創建的規則
-    echo -e "\n${YELLOW}🔍 步驟 2: 預覽即將創建的 VPN 服務訪問規則...${NC}" >&2
-    log_message_core "執行規則預覽: $vpn_service_script create $client_vpn_sg_id --region $aws_region --dry-run"
+    # 步驟 2: 顯示發現的服務給用戶查看
+    echo -e "\n${YELLOW}🔍 步驟 2: 顯示發現的 VPN 服務...${NC}" > /dev/tty 2>/dev/null || echo -e "\n🔍 步驟 2: 顯示發現的 VPN 服務..."
+    log_message_core "顯示發現的服務給用戶確認"
     
-    if ! "$vpn_service_script" create "$client_vpn_sg_id" --region "$aws_region" --dry-run; then
-        log_message_core "警告: VPN 服務訪問規則預覽失敗，繼續手動配置"
-        echo -e "${YELLOW}⚠️  規則預覽失敗，建議稍後手動運行：${NC}" >&2
-        echo -e "${BLUE}$vpn_service_script create $client_vpn_sg_id --region $aws_region${NC}" >&2
+    # Call the display function from the VPN service script
+    if ! "$vpn_service_script" display-services; then
+        log_message_core "警告: 顯示服務失敗，繼續手動配置"
+        echo -e "${YELLOW}⚠️  無法顯示發現的服務${NC}" > /dev/tty 2>/dev/null || echo -e "⚠️  無法顯示發現的服務"
         return 1
     fi
     
     # 步驟 3: 詢問用戶是否執行自動配置
-    echo -e "\n${CYAN}🚀 步驟 3: 是否自動執行上述 VPN 服務訪問規則配置？${NC}" >&2
-    echo -e "${YELLOW}[y] 是，自動配置所有服務訪問規則${NC}" >&2
-    echo -e "${YELLOW}[n] 否，稍後手動配置${NC}" >&2
-    echo -e "${YELLOW}[s] 跳過，我會自己處理${NC}" >&2
+    echo -e "\n${CYAN}🚀 步驟 3: 是否自動執行上述 VPN 服務訪問規則配置？${NC}" > /dev/tty 2>/dev/null || echo -e "\n🚀 步驟 3: 是否自動執行上述 VPN 服務訪問規則配置？"
+    echo -e "${YELLOW}[y] 是，自動配置所有服務訪問規則${NC}" > /dev/tty 2>/dev/null || echo -e "[y] 是，自動配置所有服務訪問規則"
+    echo -e "${YELLOW}[n] 否，稍後手動配置${NC}" > /dev/tty 2>/dev/null || echo -e "[n] 否，稍後手動配置"
+    echo -e "${YELLOW}[s] 跳過，我會自己處理${NC}" > /dev/tty 2>/dev/null || echo -e "[s] 跳過，我會自己處理"
     
     local choice
     local max_attempts=3
     local attempts=0
     
     while [ $attempts -lt $max_attempts ]; do
-        echo -n "請選擇 [y/n/s]: " >&2
+        echo -n "請選擇 [y/n/s]: " > /dev/tty 2>/dev/null || echo -n "請選擇 [y/n/s]: "
         read choice
         case "$choice" in
             [Yy]* )
                 echo -e "\n${GREEN}✅ 開始自動配置 VPN 服務訪問規則...${NC}" >&2
                 log_message_core "用戶選擇自動配置，開始執行: $vpn_service_script create $client_vpn_sg_id --region $aws_region"
                 
-                if "$vpn_service_script" create "$client_vpn_sg_id" --region "$aws_region"; then
+                if VPN_USE_CACHED_DISCOVERY="true" "$vpn_service_script" create "$client_vpn_sg_id" --region "$aws_region"; then
                     echo -e "\n${GREEN}🎉 VPN 服務訪問規則配置完成！${NC}" >&2
                     log_message_core "VPN 服務訪問規則自動配置成功"
                     

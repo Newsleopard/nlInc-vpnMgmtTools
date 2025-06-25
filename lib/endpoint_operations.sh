@@ -268,8 +268,42 @@ terminate_vpn_endpoint_lib() {
             echo -e "${GREEN}✓ 沒有關聯的目標網絡${NC}"
         fi
         
-        # 步驟 3: 刪除授權規則
-        echo -e "\n${CYAN}步驟 3: 刪除授權規則${NC}"
+        # 步驟 3: 刪除路由規則
+        echo -e "\n${CYAN}步驟 3: 刪除路由規則${NC}"
+        local routes
+        routes=$(aws ec2 describe-client-vpn-routes \
+            --client-vpn-endpoint-id "$endpoint_id" \
+            --region "$aws_region" \
+            --query 'Routes[?Status.Code!=`deleting` && Status.Code!=`deleted`].[DestinationCidr,TargetSubnet]' \
+            --output text 2>/dev/null)
+        
+        if [ -n "$routes" ] && [ "$routes" != "None" ]; then
+            echo -e "${BLUE}發現路由規則，正在刪除...${NC}"
+            echo "$routes" | while read -r dest_cidr target_subnet; do
+                if [ -n "$dest_cidr" ] && [ "$dest_cidr" != "None" ]; then
+                    echo -e "${YELLOW}  刪除路由: $dest_cidr -> $target_subnet${NC}"
+                    local delete_route_cmd="aws ec2 delete-client-vpn-route --client-vpn-endpoint-id $endpoint_id --destination-cidr-block $dest_cidr --region $aws_region"
+                    if [ -n "$target_subnet" ] && [ "$target_subnet" != "None" ]; then
+                        delete_route_cmd="$delete_route_cmd --target-vpc-subnet-id $target_subnet"
+                    fi
+                    
+                    if eval "$delete_route_cmd" >/dev/null 2>&1; then
+                        echo -e "${GREEN}  ✓ 成功刪除路由: $dest_cidr${NC}"
+                    else
+                        echo -e "${YELLOW}  ⚠️ 無法刪除路由: $dest_cidr（可能已被刪除）${NC}"
+                    fi
+                fi
+            done
+            
+            # 等待路由刪除完成
+            echo -e "${BLUE}等待路由刪除完成...${NC}"
+            sleep 5
+        else
+            echo -e "${GREEN}✓ 沒有路由規則需要刪除${NC}"
+        fi
+        
+        # 步驟 4: 刪除授權規則
+        echo -e "\n${CYAN}步驟 4: 刪除授權規則${NC}"
         local auth_rules
         auth_rules=$(aws ec2 describe-client-vpn-authorization-rules \
             --client-vpn-endpoint-id "$endpoint_id" \
@@ -302,8 +336,8 @@ terminate_vpn_endpoint_lib() {
             echo -e "${GREEN}✓ 沒有授權規則需要刪除${NC}"
         fi
         
-        # 步驟 4: 刪除端點
-        echo -e "\n${CYAN}步驟 4: 刪除 VPN 端點${NC}"
+        # 步驟 5: 刪除端點
+        echo -e "\n${CYAN}步驟 5: 刪除 VPN 端點${NC}"
         if aws ec2 delete-client-vpn-endpoint \
             --client-vpn-endpoint-id "$endpoint_id" \
             --region "$aws_region" >/dev/null 2>&1; then
@@ -315,8 +349,8 @@ terminate_vpn_endpoint_lib() {
         fi
     fi
     
-    # 步驟 5: 刪除 ACM 證書 (Fix 2)
-    echo -e "\n${CYAN}步驟 5: 刪除 ACM 證書${NC}"
+    # 步驟 6: 刪除 ACM 證書 (Fix 2)
+    echo -e "\n${CYAN}步驟 6: 刪除 ACM 證書${NC}"
     
     # 從配置文件收集證書 ARN
     local cert_arns_to_delete=()
@@ -416,8 +450,45 @@ terminate_vpn_endpoint_lib() {
         echo -e "${GREEN}✓ 沒有專用安全群組需要清理${NC}"
     fi
     
-    # 步驟 8: 清理配置文件
-    echo -e "\n${CYAN}步驟 8: 清理配置文件${NC}"
+    # 步驟 8: 清理 CloudWatch 日誌群組
+    echo -e "\n${CYAN}步驟 8: 清理 CloudWatch 日誌群組${NC}"
+    
+    # 從配置文件或約定命名獲取 VPN 名稱
+    local vpn_name=""
+    if [ -n "$config_file" ] && [ -f "$config_file" ]; then
+        vpn_name=$(grep "^VPN_NAME=" "$config_file" | cut -d'=' -f2 | tr -d '"' || echo "")
+    fi
+    
+    if [ -n "$vpn_name" ]; then
+        local log_group_name="/aws/clientvpn/${vpn_name}"
+        echo -e "${BLUE}檢查 CloudWatch 日誌群組: $log_group_name${NC}"
+        
+        # 檢查日誌群組是否存在
+        if aws logs describe-log-groups \
+            --log-group-name-prefix "$log_group_name" \
+            --region "$aws_region" \
+            --query "logGroups[?logGroupName=='$log_group_name']" \
+            --output text 2>/dev/null | grep -q "$log_group_name"; then
+            
+            echo -e "${YELLOW}正在刪除 CloudWatch 日誌群組: $log_group_name${NC}"
+            if aws logs delete-log-group \
+                --log-group-name "$log_group_name" \
+                --region "$aws_region" 2>/dev/null; then
+                echo -e "${GREEN}✓ 成功刪除 CloudWatch 日誌群組${NC}"
+                log_message_core "CloudWatch 日誌群組已刪除: $log_group_name"
+            else
+                echo -e "${YELLOW}⚠️ 無法刪除 CloudWatch 日誌群組（可能已不存在）${NC}"
+                log_message_core "警告: CloudWatch 日誌群組刪除失敗: $log_group_name"
+            fi
+        else
+            echo -e "${GREEN}✓ CloudWatch 日誌群組不存在或已被刪除${NC}"
+        fi
+    else
+        echo -e "${YELLOW}⚠️ 無法確定 VPN 名稱，跳過 CloudWatch 日誌群組清理${NC}"
+    fi
+    
+    # 步驟 9: 清理配置文件
+    echo -e "\n${CYAN}步驟 9: 清理配置文件${NC}"
     
     if [ -n "$config_file" ] && [ -f "$config_file" ]; then
         echo -e "${BLUE}清理配置文件: $config_file${NC}"
@@ -428,7 +499,7 @@ terminate_vpn_endpoint_lib() {
             source "$script_dir/endpoint_config.sh"
             
             if command -v clear_config_values >/dev/null 2>&1; then
-                # 清空關鍵配置值 (包含 VPN 服務訪問追蹤變數)
+                # 清空關鍵配置值 (包含所有 VPN 服務訪問追蹤變數和服務發現變數)
                 clear_config_values "$config_file" \
                     "ENDPOINT_ID" \
                     "CLIENT_VPN_SECURITY_GROUP_ID" \
@@ -446,7 +517,14 @@ terminate_vpn_endpoint_lib() {
                     "VPN_WEB_GROUPS" \
                     "VPN_OTHER_GROUPS" \
                     "VPN_SERVICE_ACCESS_LAST_CONFIGURED" \
-                    "VPN_SERVICE_ACCESS_METHOD"
+                    "VPN_SERVICE_ACCESS_METHOD" \
+                    "VPN_SERVICE_ACCESS_LAST_DISCOVERED" \
+                    "VPN_DISCOVERY_TOTAL_SERVICES" \
+                    "VPN_DISCOVERY_HIGH_CONFIDENCE" \
+                    "VPN_DISCOVERY_MEDIUM_CONFIDENCE" \
+                    "VPN_DISCOVERY_METHODS_USED" \
+                    "VPN_DISCOVERY_MIN_CONFIDENCE_USED" \
+                    "VPN_DISCOVERED_SERVICES_SUMMARY"
                 echo -e "${GREEN}✓ 配置文件已清理${NC}"
             else
                 echo -e "${YELLOW}⚠️ 配置清理函式不可用${NC}"
@@ -459,6 +537,19 @@ terminate_vpn_endpoint_lib() {
     fi
     
     echo -e "\n${GREEN}=== VPN 端點刪除流程完成 ===${NC}"
+    
+    # 刪除總結
+    echo -e "\n${CYAN}清理總結 - 已處理的資源：${NC}"
+    echo -e "${GREEN}  ✓ VPN 端點及其所有配置${NC}"
+    echo -e "${GREEN}  ✓ 子網路關聯和路由${NC}"
+    echo -e "${GREEN}  ✓ 授權規則${NC}"
+    echo -e "${GREEN}  ✓ CloudWatch 日誌群組${NC}"
+    echo -e "${GREEN}  ✓ 專用 Client VPN 安全群組${NC}"
+    echo -e "${GREEN}  ✓ ACM 證書 (伺服器、CA、客戶端)${NC}"
+    echo -e "${GREEN}  ✓ VPN 服務訪問追蹤規則${NC}"
+    echo -e "${GREEN}  ✓ 配置文件中的相關設定${NC}"
+    echo -e "${GREEN}  ✓ 服務發現追蹤資料${NC}"
+    
     log_message_core "VPN 端點刪除流程完成: $endpoint_id"
     
     return 0

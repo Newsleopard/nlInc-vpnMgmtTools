@@ -31,8 +31,11 @@ SERVICES="MySQL_RDS:3306 Redis:6379 HBase_Master:16010 HBase_RegionServer:16020 
 
 # Discovery method configuration (priority order)
 VPN_DISCOVERY_METHOD="${VPN_DISCOVERY_METHOD:-tag-based,resource-verified,pattern-based,port-based}"
-VPN_DISCOVERY_INTERACTIVE="${VPN_DISCOVERY_INTERACTIVE:-true}"
 VPN_DISCOVERY_MIN_CONFIDENCE="${VPN_DISCOVERY_MIN_CONFIDENCE:-MEDIUM}"
+
+# Discovery caching configuration
+VPN_USE_CACHED_DISCOVERY="${VPN_USE_CACHED_DISCOVERY:-false}"
+VPN_DISCOVERY_CACHE_TTL="${VPN_DISCOVERY_CACHE_TTL:-3600}"  # 1 hour default cache
 
 # Colors
 GREEN='\033[0;32m'
@@ -360,8 +363,15 @@ perform_multi_tier_discovery() {
     # Get discovery methods from configuration
     IFS=',' read -ra DISCOVERY_METHODS <<< "$VPN_DISCOVERY_METHOD"
     
+    # Progress tracking
+    local total_methods=${#DISCOVERY_METHODS[@]}
+    local current_method=0
+    
     # Execute discovery methods in priority order
     for method in "${DISCOVERY_METHODS[@]}"; do
+        ((current_method++))
+        echo -e "Progress: [$current_method/$total_methods] $method discovery..." > /dev/tty 2>/dev/null || true
+        
         case "$method" in
             "tag-based")
                 discover_services_by_tags "$vpc_id"
@@ -377,6 +387,9 @@ perform_multi_tier_discovery() {
                 log_info "⚠️ Port-based discovery used as fallback"
                 ;;
         esac
+        
+        # Show completion status for each method
+        echo -e "✓ Completed: $method discovery" > /dev/tty 2>/dev/null || true
     done
     
     # Combine all discoveries and remove duplicates (keeping highest priority)
@@ -394,9 +407,11 @@ perform_multi_tier_discovery() {
     awk -F: '!seen[$1]++' /tmp/combined_discoveries.txt > /tmp/unique_discoveries.txt
     
     # Validate and score all discoveries
+    echo -e "🔍 Validating and scoring discovered services..." > /dev/tty 2>/dev/null || true
     validate_and_score_discoveries /tmp/unique_discoveries.txt /tmp/scored_discoveries.txt
     
     # Filter by minimum confidence level
+    echo -e "📊 Filtering by confidence level: $VPN_DISCOVERY_MIN_CONFIDENCE..." > /dev/tty 2>/dev/null || true
     > /tmp/final_discoveries.txt
     while IFS=':' read -r service port sg_id method score confidence; do
         case "$VPN_DISCOVERY_MIN_CONFIDENCE" in
@@ -419,140 +434,84 @@ perform_multi_tier_discovery() {
     
     # Display summary
     local total_discoveries
-    total_discoveries=$(wc -l < /tmp/final_discoveries.txt 2>/dev/null || echo "0")
+    total_discoveries=$(wc -l < /tmp/final_discoveries.txt 2>/dev/null | xargs || echo "0")
     log_info "📈 Discovery Summary: $total_discoveries services found meeting minimum confidence: $VPN_DISCOVERY_MIN_CONFIDENCE"
     
     return 0
 }
 
 # Interactive confirmation and manual override system
-interactive_service_confirmation() {
+auto_confirm_discovered_services() {
     local discoveries_file="$1"
     local confirmed_services=()
     
-    echo
-    echo -e "${CYAN}=== 🔍 Interactive Service Discovery Confirmation ===${NC}"
-    echo -e "${BLUE}Please review and confirm the discovered services:${NC}"
-    echo
+    log_info "Auto-confirming all discovered services"
     
-    local counter=1
-    while IFS=':' read -r service port sg_id method score confidence; do
-        local sg_name
-        sg_name=$(aws_with_profile ec2 describe-security-groups \
-            --group-ids "$sg_id" --region "$AWS_REGION" \
-            --query 'SecurityGroups[0].GroupName' --output text 2>/dev/null || echo "Unknown")
-        
-        # Color code by confidence level
-        local confidence_color=""
-        case "$confidence" in
-            "HIGH") confidence_color="${GREEN}" ;;
-            "MEDIUM") confidence_color="${YELLOW}" ;;
-            "LOW") confidence_color="${YELLOW}" ;;
-            *) confidence_color="${RED}" ;;
-        esac
-        
-        echo -e "${YELLOW}[$counter] $service (Port $port)${NC}"
-        echo -e "    Security Group: $sg_id ($sg_name)"
-        echo -e "    Discovery Method: $method"
-        echo -e "    Confidence: ${confidence_color}$confidence${NC} (Score: $score)"
-        echo
-        
-        local choice
-        local attempts=0
-        local max_attempts=5
-        
-        while [ $attempts -lt $max_attempts ]; do
-            echo -n "Confirm this service? [y/n/s(kip)/m(anual override)]: "
-            read -r choice
-            
-            # Clean input - remove any extra whitespace and take only first character for simple choices
-            choice=$(echo "$choice" | xargs | tr '[:upper:]' '[:lower:]')
-            
-            case "$choice" in
-                y|yes)
-                    confirmed_services+=("$service:$port:$sg_id")
-                    echo -e "${GREEN}✓ Confirmed${NC}"
-                    echo
-                    break
-                    ;;
-                n|no)
-                    echo -e "${RED}✗ Rejected${NC}"
-                    echo
-                    break
-                    ;;
-                s|skip)
-                    echo -e "${YELLOW}⏭ Skipped${NC}"
-                    echo
-                    break
-                    ;;
-                m|manual)
-                    echo -e "${CYAN}Manual override for $service:${NC}"
-                    local manual_sg_id
-                    while true; do
-                        echo -n "Enter security group ID (or 'cancel' to skip): "
-                        read -r manual_sg_id
-                        manual_sg_id=$(echo "$manual_sg_id" | xargs)
-                        
-                        if [[ "$manual_sg_id" == "cancel" ]]; then
-                            echo -e "${YELLOW}⏭ Manual override cancelled${NC}"
-                            break
-                        elif [[ -n "$manual_sg_id" && "$manual_sg_id" =~ ^sg-[0-9a-f]{8,17}$ ]]; then
-                            # Validate security group exists
-                            if aws_with_profile ec2 describe-security-groups --group-ids "$manual_sg_id" --region "$AWS_REGION" >/dev/null 2>&1; then
-                                confirmed_services+=("$service:$port:$manual_sg_id")
-                                echo -e "${GREEN}✓ Manual override accepted: $manual_sg_id${NC}"
-                                break
-                            else
-                                echo -e "${RED}✗ Invalid or non-existent security group ID: $manual_sg_id${NC}"
-                                echo -e "${YELLOW}Please enter a valid security group ID (format: sg-xxxxxxxxx)${NC}"
-                            fi
-                        else
-                            echo -e "${RED}✗ Invalid format. Security group ID should start with 'sg-'${NC}"
-                            echo -e "${YELLOW}Example: sg-1234567890abcdef0${NC}"
-                        fi
-                    done
-                    echo
-                    break
-                    ;;
-                "")
-                    echo -e "${YELLOW}Please enter a choice (y/n/s/m)${NC}"
-                    attempts=$((attempts + 1))
-                    ;;
-                *)
-                    if [[ ${#choice} -gt 20 ]]; then
-                        echo -e "${RED}Invalid input detected. Please enter only: y, n, s, or m${NC}"
-                        echo -e "${YELLOW}Hint: Don't paste discovery results here, just choose y/n/s/m${NC}"
-                    else
-                        echo -e "${RED}Invalid choice: '$choice'. Please enter y, n, s, or m${NC}"
-                    fi
-                    attempts=$((attempts + 1))
-                    ;;
-            esac
-            
-            if [ $attempts -eq $max_attempts ]; then
-                echo -e "${YELLOW}Too many invalid attempts. Skipping this service.${NC}"
-                echo
-                break
-            fi
-        done
-        
-        ((counter++))
-    done < "$discoveries_file"
-    
-    # Option to manually add completely new services
-    echo -e "${CYAN}🔧 Add Additional Services?${NC}"
-    echo -n "Would you like to manually add any services not discovered? [y/n]: "
-    read choice
-    if [[ "$choice" =~ ^[Yy] ]]; then
-        manual_service_addition confirmed_services
+    # Copy all discoveries to confirmed services
+    if [[ -f "$discoveries_file" && -s "$discoveries_file" ]]; then
+        while IFS=':' read -r service port sg_id method score confidence; do
+            confirmed_services+=("$service:$port:$sg_id")
+            log_info "Auto-confirmed: $service -> $sg_id (port $port, $confidence confidence)"
+        done < "$discoveries_file"
+    else
+        log_warning "No discoveries found in file: $discoveries_file"
     fi
     
-    # Save confirmed services
-    printf '%s\n' "${confirmed_services[@]}" > /tmp/confirmed_services.txt
+    # Save confirmed services for processing
+    if [[ ${#confirmed_services[@]} -gt 0 ]]; then
+        printf '%s\n' "${confirmed_services[@]}" > /tmp/confirmed_services.txt
+        log_info "Auto-confirmed services: ${#confirmed_services[@]}"
+    else
+        log_warning "No services to auto-confirm"
+        echo "" > /tmp/confirmed_services.txt
+    fi
+    return 0
+}
+
+# Display discovered services and ask user for confirmation
+display_services_and_ask_confirmation() {
+    local services_file="$1"
+    
+    if [[ ! -f "$services_file" || ! -s "$services_file" ]]; then
+        echo -e "${YELLOW}⚠️ No services were discovered.${NC}"
+        return 1
+    fi
+    
+    local service_count=$(wc -l < "$services_file" | xargs)
+    echo
+    echo -e "${CYAN}=== 🔍 Discovered VPN Services ===${NC}"
+    echo -e "${GREEN}Found $service_count services that can be configured for VPN access:${NC}"
+    echo
+    
+    printf "%-20s %-8s %-20s %-12s\n" "Service" "Port" "Security Group" "Confidence"
+    echo "────────────────────────────────────────────────────────────"
+    
+    while IFS=':' read -r service port sg_id rest; do
+        # Extract confidence from rest if it's in the 6-field format
+        local confidence=""
+        if [[ "$rest" =~ :.*:.*:(.*) ]]; then
+            confidence=$(echo "$rest" | cut -d':' -f3)
+        else
+            confidence="AUTO"
+        fi
+        
+        # Color code by confidence level
+        local color="${YELLOW}"
+        case "$confidence" in
+            "HIGH") color="${GREEN}" ;;
+            "MEDIUM") color="${YELLOW}" ;;
+            "LOW") color="${BLUE}" ;;
+            *) color="${NC}" ;;
+        esac
+        
+        printf "${color}%-20s %-8s %-20s %-12s${NC}\n" "$service" "$port" "${sg_id:0:18}..." "$confidence"
+    done < "$services_file"
     
     echo
-    log_info "✅ Interactive confirmation completed"
-    log_info "Confirmed services: ${#confirmed_services[@]}"
+    echo -e "${BLUE}These services will be configured to allow VPN access through security group rules.${NC}"
+    echo
+    
+    return 0
 }
 
 # Manual service addition capability
@@ -642,7 +601,7 @@ save_discovery_results_to_conf() {
     
     # Update discovery metadata
     local current_time=$(date)
-    local total_discovered=$(wc -l < "$discovery_file" 2>/dev/null || echo "0")
+    local total_discovered=$(wc -l < "$discovery_file" 2>/dev/null | xargs || echo "0")
     local high_confidence=$(grep -c ":HIGH$" "$discovery_file" 2>/dev/null || echo "0")
     local medium_confidence=$(grep -c ":MEDIUM$" "$discovery_file" 2>/dev/null || echo "0")
     
@@ -762,7 +721,7 @@ record_vpn_configured_security_groups() {
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
-        discover|create|remove)
+        discover|create|remove|display-services)
             ACTION="$1"
             shift
             ;;
@@ -781,9 +740,10 @@ while [[ $# -gt 0 ]]; do
             echo "Integrated with toolkit's AWS profile and environment management"
             echo ""
             echo "Actions:"
-            echo "  discover [vpn-sg-id]  - Find security groups for services (VPN SG ID optional for scoping)"
-            echo "  create <vpn-sg-id>    - Create VPN access rules (VPN SG ID required)"
-            echo "  remove <vpn-sg-id>    - Remove VPN access rules (VPN SG ID required)"
+            echo "  discover [vpn-sg-id]     - Find security groups for services (VPN SG ID optional for scoping)"
+            echo "  display-services         - Show discovered services in a formatted table"
+            echo "  create <vpn-sg-id>       - Create VPN access rules (VPN SG ID required)"
+            echo "  remove <vpn-sg-id>       - Remove VPN access rules (VPN SG ID required)"
             echo ""
             echo "Options:"
             echo "  --region REGION       - AWS region (default: us-east-1)"
@@ -809,11 +769,11 @@ done
 
 # Validate
 if [[ -z "$ACTION" ]]; then
-    log_error "Action required: discover, create, or remove"
+    log_error "Action required: discover, display-services, create, or remove"
     exit 1
 fi
 
-if [[ "$ACTION" != "discover" && -z "$VPN_SG" ]]; then
+if [[ "$ACTION" != "discover" && "$ACTION" != "display-services" && -z "$VPN_SG" ]]; then
     log_error "VPN Security Group ID required for $ACTION"
     exit 1
 fi
@@ -843,8 +803,55 @@ else
     log_warning "無法獲取 AWS 身份信息，但基本連接正常"
 fi
 
+# Check if cached discovery results are available and valid
+use_cached_discovery_if_available() {
+    local vpn_sg_id="$1"
+    local cache_file="/tmp/vpn_discovery_${vpn_sg_id}.json"
+    local summary_file="/tmp/vpn_discovery_summary_${vpn_sg_id}.txt"
+    
+    # Check if caching is enabled
+    if [[ "$VPN_USE_CACHED_DISCOVERY" != "true" ]]; then
+        return 1  # Caching disabled, run full discovery
+    fi
+    
+    # Check if cache files exist
+    if [[ ! -f "/tmp/final_discoveries.txt" && ! -f "$summary_file" ]]; then
+        log_info "💾 No cached discovery results found, running full discovery..."
+        return 1  # No cache available
+    fi
+    
+    # Check cache age (if cache file exists)
+    if [[ -f "/tmp/final_discoveries.txt" ]]; then
+        local cache_age=$(($(date +%s) - $(stat -f %m "/tmp/final_discoveries.txt" 2>/dev/null || echo 0)))
+        if [[ $cache_age -gt $VPN_DISCOVERY_CACHE_TTL ]]; then
+            log_info "💾 Cached discovery results expired (${cache_age}s > ${VPN_DISCOVERY_CACHE_TTL}s), running full discovery..."
+            return 1  # Cache expired
+        fi
+    fi
+    
+    # Use cached results
+    log_info "💾 Using cached discovery results (cache age: ${cache_age:-0}s)"
+    log_info "🔍 Cached Service Discovery - Reusing Previous Results"
+    
+    # Display cached summary if available
+    if [[ -f "$summary_file" ]]; then
+        log_info "📊 Cached Discovery Summary:"
+        grep -E "(Discovery Summary|Found by)" "$summary_file" | tail -3 | while read line; do
+            log_info "   $line"
+        done
+    fi
+    
+    return 0  # Successfully using cache
+}
+
 # Enhanced discover services function with multi-tier discovery
 discover_services() {
+    # Check if we should use cached results first
+    if use_cached_discovery_if_available "${VPN_SG:-global}"; then
+        log_info "✅ Using cached discovery results - skipping AWS API calls"
+        return 0
+    fi
+    
     log_info "🔍 Enhanced Service Discovery - Multi-Tier Approach"
     log_info "Discovery methods: $VPN_DISCOVERY_METHOD"
     log_info "Minimum confidence: $VPN_DISCOVERY_MIN_CONFIDENCE"
@@ -875,6 +882,14 @@ discover_services() {
     # Perform multi-tier discovery
     if [[ -n "$target_vpc" ]]; then
         perform_multi_tier_discovery "$target_vpc"
+        
+        # Cache the discovery results for future use
+        if [[ -f "/tmp/final_discoveries.txt" && -s "/tmp/final_discoveries.txt" ]]; then
+            local cache_file="/tmp/vpn_discovery_${VPN_SG:-global}.json"
+            log_info "💾 Caching discovery results for future use..."
+            cp "/tmp/final_discoveries.txt" "${cache_file%.json}.txt" 2>/dev/null || true
+            log_info "✅ Discovery results cached successfully"
+        fi
     else
         log_warning "⚠️ Falling back to original discovery method (no VPC context)"
         discover_services_fallback
@@ -887,47 +902,35 @@ discover_services() {
         while IFS=':' read -r service port sg_id method score confidence; do
             echo "$service:$port:$sg_id" >> /tmp/discovered_services.txt
         done < /tmp/final_discoveries.txt
+        log_info "Created backward compatibility file: /tmp/discovered_services.txt with $(wc -l < /tmp/discovered_services.txt | xargs) services"
+    else
+        log_warning "No final discoveries to copy to discovered_services.txt"
     fi
     
-    # Apply interactive confirmation if enabled
-    if [[ "$VPN_DISCOVERY_INTERACTIVE" == "true" && -s /tmp/final_discoveries.txt ]]; then
-        log_info "🔄 Starting interactive service confirmation..."
-        
-        # Check if we're in a non-interactive environment (CI/automation)
-        if [[ ! -t 0 ]]; then
-            log_warning "⚠️ Non-interactive environment detected, auto-confirming HIGH confidence services"
-            > /tmp/confirmed_services.txt
-            while IFS=':' read -r service port sg_id method score confidence; do
-                if [[ "$confidence" == "HIGH" ]]; then
-                    echo "$service:$port:$sg_id" >> /tmp/confirmed_services.txt
-                    log_info "Auto-confirmed: $service -> $sg_id ($confidence confidence)"
-                fi
-            done < /tmp/final_discoveries.txt
+    # Always auto-confirm all discovered services (simplified logic)
+    log_info "📋 Auto-confirming all discovered services"
+    
+    if [[ -s /tmp/final_discoveries.txt ]]; then
+        # Use the auto-confirmation function
+        if auto_confirm_discovered_services /tmp/final_discoveries.txt; then
+            log_info "✅ Auto-confirmation completed successfully"
         else
-            # Interactive mode
-            if interactive_service_confirmation /tmp/final_discoveries.txt 2>/dev/null; then
-                log_info "✅ Interactive confirmation completed successfully"
-            else
-                log_warning "⚠️ Interactive confirmation failed, using auto-confirmation for HIGH confidence services"
-                > /tmp/confirmed_services.txt
-                while IFS=':' read -r service port sg_id method score confidence; do
-                    if [[ "$confidence" == "HIGH" ]]; then
-                        echo "$service:$port:$sg_id" >> /tmp/confirmed_services.txt
-                        log_info "Auto-confirmed after failure: $service -> $sg_id ($confidence confidence)"
-                    fi
-                done < /tmp/final_discoveries.txt
-            fi
+            log_warning "⚠️ Auto-confirmation failed, using fallback"
         fi
         
-        # Update discovered_services.txt with confirmed results
+        # Ensure discovered_services.txt is properly created
         if [[ -f /tmp/confirmed_services.txt && -s /tmp/confirmed_services.txt ]]; then
             cp /tmp/confirmed_services.txt /tmp/discovered_services.txt
-            log_info "✅ Using confirmed services for VPN access rule creation"
+            log_info "✅ Using confirmed services for VPN access rule creation ($(wc -l < /tmp/confirmed_services.txt | xargs) services)"
         else
-            log_warning "⚠️ No services confirmed, keeping all discovered services"
+            # Fallback: create from final discoveries
+            while IFS=':' read -r service port sg_id method score confidence; do
+                echo "$service:$port:$sg_id" >> /tmp/discovered_services.txt
+            done < /tmp/final_discoveries.txt
+            log_info "Fallback: Created discovered_services.txt from final_discoveries.txt"
         fi
     else
-        log_info "📋 Interactive confirmation disabled, using all discovered services"
+        log_info "📋 No services discovered"
     fi
     
     # Save discovery results to .conf file for tracking and audit
@@ -1020,9 +1023,28 @@ discover_services_fallback() {
 create_rules() {
     local vpn_sg="$1"
     
-    if [[ ! -s /tmp/discovered_services.txt ]]; then
-        log_error "No services discovered. Run 'discover' first."
-        exit 1
+    # Check multiple possible service files for backward compatibility
+    local services_file="/tmp/discovered_services.txt"
+    
+    if [[ ! -s "$services_file" ]]; then
+        # Try confirmed services first
+        if [[ -s /tmp/confirmed_services.txt ]]; then
+            services_file="/tmp/confirmed_services.txt"
+            log_info "Using confirmed services file: $services_file"
+        # Fallback to final discoveries
+        elif [[ -s /tmp/final_discoveries.txt ]]; then
+            # Convert final discoveries to expected format
+            > /tmp/discovered_services.txt
+            while IFS=':' read -r service port sg_id method score confidence; do
+                echo "$service:$port:$sg_id" >> /tmp/discovered_services.txt
+            done < /tmp/final_discoveries.txt
+            services_file="/tmp/discovered_services.txt"
+            log_info "Converted final discoveries to services file: $services_file"
+        else
+            log_error "No services discovered. Available files:"
+            ls -la /tmp/*services* /tmp/*discoveries* 2>/dev/null || echo "  No discovery files found"
+            exit 1
+        fi
     fi
     
     log_info "Creating VPN access rules for $vpn_sg..."
@@ -1057,14 +1079,32 @@ create_rules() {
             # Still track for cleanup (might have been created before)
             configured_rules+=("$service:$target_sg:$port")
         fi
-    done < /tmp/discovered_services.txt
+    done < "$services_file"
     
     echo
     log_info "Created $success/$total rules"
     
     # Record configured security groups in .conf file if not dry run
     if [[ "$DRY_RUN" != "true" && ${#configured_rules[@]} -gt 0 ]]; then
-        record_vpn_configured_security_groups "${configured_rules[@]}"
+        log_info "Recording configured security groups for cleanup tracking..."
+        for rule in "${configured_rules[@]}"; do
+            IFS=':' read -r service target_sg port <<< "$rule"
+            if [[ -n "$service" && -n "$target_sg" && -n "$port" ]]; then
+                # Load security group operations if available
+                if [ -f "$SCRIPT_DIR/../lib/security_group_operations.sh" ]; then
+                    source "$SCRIPT_DIR/../lib/security_group_operations.sh"
+                    local config_file
+                    config_file="$SCRIPT_DIR/../configs/${CURRENT_ENV}/vpn_endpoint.conf"
+                    if [ -f "$config_file" ]; then
+                        record_vpn_security_group_access "$config_file" "$service" "$target_sg" "$port" || \
+                        log_warning "  ⚠️ Failed to record: $service -> $target_sg:$port"
+                    fi
+                fi
+            else
+                log_warning "  ⚠️ Failed to record: $rule -> invalid format"
+            fi
+        done
+        log_info "✅ Security group tracking recorded for cleanup"
     fi
 }
 
@@ -1162,6 +1202,17 @@ main() {
     case "$ACTION" in
         "discover")
             discover_services
+            ;;
+        "display-services")
+            # Display discovered services (assumes discovery already ran)
+            if [[ -f /tmp/final_discoveries.txt && -s /tmp/final_discoveries.txt ]]; then
+                display_services_and_ask_confirmation /tmp/final_discoveries.txt
+            elif [[ -f /tmp/confirmed_services.txt && -s /tmp/confirmed_services.txt ]]; then
+                display_services_and_ask_confirmation /tmp/confirmed_services.txt
+            else
+                echo -e "${YELLOW}⚠️ No discovered services found. Please run discovery first.${NC}"
+                exit 1
+            fi
             ;;
         "create")
             discover_services

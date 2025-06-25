@@ -410,12 +410,9 @@ create_vpn_endpoint() {
         echo -e "${RED}生成管理員配置檔案過程中發生錯誤。${NC}"
     fi
     
-    # 提示用戶更新現有安全群組以允許 VPN 訪問
-    if [ -n "$client_vpn_sg_id" ] && [ -n "$AWS_REGION" ]; then
-        prompt_update_existing_security_groups "$client_vpn_sg_id" "$AWS_REGION" "$CURRENT_ENVIRONMENT"
-    else
-        echo -e "\\n${YELLOW}注意: 無法提供安全群組更新指令 (client_vpn_sg_id 或 AWS_REGION 未設定)${NC}"
-    fi
+    # Note: Security group configuration is now handled during endpoint creation
+    # Skip duplicate prompt to avoid repeating discovery process
+    log_message "Security group configuration completed during endpoint creation"
     
     # 最終提醒：安全群組配置腳本
     echo -e "\n${CYAN}========================================================${NC}"
