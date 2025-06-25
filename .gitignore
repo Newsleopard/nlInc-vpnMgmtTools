@@ -119,3 +119,5 @@ lambda/**/lerna-debug.log*
 configs/**/vpn_endpoints.json
 configs_backup*/
 configs/**/vpn_endpoint.conf.backup*
+configs/staging/vpn_endpoint.conf.bak
+security_group_commands_*.sh

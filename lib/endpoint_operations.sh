@@ -34,13 +34,37 @@ _create_aws_client_vpn_endpoint_ec() {
     echo -e "${YELLOW}VPN 名稱: $vpn_name${NC}" >&2
     echo -e "${YELLOW}AWS 區域: $aws_region${NC}" >&2
     
+    # 創建 CloudWatch 日誌群組（如果不存在）
+    local log_group_name="/aws/clientvpn/$vpn_name"
+    echo -e "${BLUE}檢查並創建 CloudWatch 日誌群組: $log_group_name${NC}" >&2
+    
+    if ! aws logs describe-log-groups --log-group-name-prefix "$log_group_name" --region "$aws_region" --query 'logGroups[?logGroupName==`'$log_group_name'`]' --output text | grep -q "$log_group_name"; then
+        echo -e "${BLUE}創建 CloudWatch 日誌群組...${NC}" >&2
+        if aws logs create-log-group --log-group-name "$log_group_name" --region "$aws_region" 2>/dev/null; then
+            echo -e "${GREEN}✓ CloudWatch 日誌群組已創建${NC}" >&2
+        else
+            echo -e "${YELLOW}⚠️ 無法創建 CloudWatch 日誌群組，將禁用日誌記錄${NC}" >&2
+            log_group_name=""
+        fi
+    else
+        echo -e "${GREEN}✓ CloudWatch 日誌群組已存在${NC}" >&2
+    fi
+    
+    # 準備連接日誌選項
+    local connection_log_options
+    if [ -n "$log_group_name" ]; then
+        connection_log_options="Enabled=true,CloudwatchLogGroup=$log_group_name"
+    else
+        connection_log_options="Enabled=false"
+    fi
+    
     # 執行 AWS CLI 創建端點命令
     local create_output
     create_output=$(aws ec2 create-client-vpn-endpoint \
         --client-cidr-block "$vpn_cidr" \
         --server-certificate-arn "$server_cert_arn" \
-        --authentication-options Type=certificate-authentication,MutualAuthentication.ClientRootCertificateChainArn="$client_cert_arn" \
-        --connection-log-options Enabled=true,CloudwatchLogGroup="/aws/clientvpn/$vpn_name" \
+        --authentication-options Type=certificate-authentication,MutualAuthentication="{ClientRootCertificateChainArn=$client_cert_arn}" \
+        --connection-log-options "$connection_log_options" \
         --description "Client VPN Endpoint - $vpn_name" \
         --tag-specifications ResourceType=client-vpn-endpoint,Tags='[{Key=Name,Value='$vpn_name'},{Key=ManagedBy,Value=nlInc-vpnMgmtTools}]' \
         --region "$aws_region" 2>&1)
@@ -90,8 +114,8 @@ _create_aws_client_vpn_endpoint_ec() {
 _wait_for_client_vpn_endpoint_available() {
     local endpoint_id="$1"
     local aws_region="$2"
-    local max_wait_time=300  # 最大等待時間（秒）
-    local check_interval=10  # 檢查間隔（秒）
+    local max_wait_time=600  # 最大等待時間（秒）- 增加到10分鐘
+    local check_interval=15  # 檢查間隔（秒）- 減少頻率
     local elapsed_time=0
     
     # 參數驗證

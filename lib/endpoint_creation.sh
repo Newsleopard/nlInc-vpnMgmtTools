@@ -14,7 +14,20 @@ fi
 
 # 載入所有端點相關模組
 _load_endpoint_modules() {
+    # 更強健的腳本目錄解析
     local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    
+    # 如果當前在 lib 目錄中，直接使用當前目錄
+    if [[ "$script_dir" == */lib ]]; then
+        script_dir="$script_dir"
+    # 如果當前不在 lib 目錄中，查找 lib 目錄
+    elif [ -d "$script_dir/lib" ]; then
+        script_dir="$script_dir/lib"
+    # 最後，嘗試相對於當前腳本的 lib 目錄
+    else
+        script_dir="$(dirname "$script_dir")/lib"
+    fi
+    
     local modules=(
         "endpoint_utils.sh"
         "vpc_operations.sh"
@@ -24,8 +37,9 @@ _load_endpoint_modules() {
         "network_association.sh"
     )
     
+    local module_path
     for module in "${modules[@]}"; do
-        local module_path="$script_dir/$module"
+        module_path="$script_dir/$module"
         if [ -f "$module_path" ]; then
             source "$module_path"
         else
@@ -196,115 +210,25 @@ get_vpc_subnet_vpn_details_lib() {
     return 0
 }
 
-# 輔助函式：提示網絡詳細資訊
-_prompt_network_details_ec() {
-    # 直接調用 VPC 操作模組中的函式
-    if command -v _prompt_network_details_ec >/dev/null 2>&1; then
-        _prompt_network_details_ec "$@"
-    else
-        echo -e "${RED}錯誤: VPC 操作模組未正確載入${NC}" >&2
-        return 1
-    fi
-}
+# Note: _prompt_network_details_ec is loaded from vpc_operations.sh module
 
-# 預檢查函數：驗證 AWS CLI 參數
-debug_aws_cli_params() {
-    # 直接調用配置模組中的函式
-    if command -v debug_aws_cli_params >/dev/null 2>&1; then
-        debug_aws_cli_params "$@"
-    else
-        echo -e "${RED}錯誤: 配置模組未正確載入${NC}" >&2
-        return 1
-    fi
-}
+# Note: debug_aws_cli_params is loaded from endpoint_config.sh module
 
-# 輔助函式：立即保存端點基本配置 (防止後續步驟失敗)
-save_initial_endpoint_config() {
-    # 直接調用配置模組中的函式
-    if command -v save_initial_endpoint_config >/dev/null 2>&1; then
-        save_initial_endpoint_config "$@"
-    else
-        echo -e "${RED}錯誤: 配置模組未正確載入${NC}" >&2
-        return 1
-    fi
-}
+# Note: save_initial_endpoint_config is loaded from endpoint_config.sh module
 
-# 輔助函式：創建專用的 Client VPN 安全群組
-create_dedicated_client_vpn_security_group() {
-    # 直接調用安全群組模組中的函式
-    if command -v create_dedicated_client_vpn_security_group >/dev/null 2>&1; then
-        create_dedicated_client_vpn_security_group "$@"
-    else
-        echo -e "${RED}錯誤: 安全群組模組未正確載入${NC}" >&2
-        return 1
-    fi
-}
+# Note: create_dedicated_client_vpn_security_group is loaded from security_group_operations.sh module
 
-# 提示更新現有安全群組以允許 VPN 訪問
-prompt_update_existing_security_groups() {
-    # 直接調用安全群組模組中的函式
-    if command -v prompt_update_existing_security_groups >/dev/null 2>&1; then
-        prompt_update_existing_security_groups "$@"
-    else
-        echo -e "${RED}錯誤: 安全群組模組未正確載入${NC}" >&2
-        return 1
-    fi
-}
+# Note: prompt_update_existing_security_groups is loaded from security_group_operations.sh module
 
-# 生成安全群組配置命令文件
-generate_security_group_commands_file() {
-    # 直接調用安全群組模組中的函式
-    if command -v generate_security_group_commands_file >/dev/null 2>&1; then
-        generate_security_group_commands_file "$@"
-    else
-        echo -e "${RED}錯誤: 安全群組模組未正確載入${NC}" >&2
-        return 1
-    fi
-}
+# Note: generate_security_group_commands_file is loaded from security_group_operations.sh module
 
-# 創建 AWS Client VPN 端點
-_create_aws_client_vpn_endpoint_ec() {
-    # 直接調用端點操作模組中的函式
-    if command -v _create_aws_client_vpn_endpoint_ec >/dev/null 2>&1; then
-        _create_aws_client_vpn_endpoint_ec "$@"
-    else
-        echo -e "${RED}錯誤: 端點操作模組未正確載入${NC}" >&2
-        return 1
-    fi
-}
+# Note: _create_aws_client_vpn_endpoint_ec is loaded from endpoint_operations.sh module
 
-# 關聯目標網絡到 VPN 端點
-_associate_target_network_ec() {
-    # 直接調用網路關聯模組中的函式
-    if command -v _associate_target_network_ec >/dev/null 2>&1; then
-        _associate_target_network_ec "$@"
-    else
-        echo -e "${RED}錯誤: 網路關聯模組未正確載入${NC}" >&2
-        return 1
-    fi
-}
+# Note: _associate_target_network_ec is loaded from network_association.sh module
 
-# 設定授權規則和路由
-_setup_authorization_and_routes_ec() {
-    # 直接調用網路關聯模組中的函式
-    if command -v _setup_authorization_and_routes_ec >/dev/null 2>&1; then
-        _setup_authorization_and_routes_ec "$@"
-    else
-        echo -e "${RED}錯誤: 網路關聯模組未正確載入${NC}" >&2
-        return 1
-    fi
-}
+# Note: _setup_authorization_and_routes_ec is loaded from network_association.sh module
 
-# 等待 Client VPN 端點變為可用狀態
-_wait_for_client_vpn_endpoint_available() {
-    # 直接調用端點操作模組中的函式
-    if command -v _wait_for_client_vpn_endpoint_available >/dev/null 2>&1; then
-        _wait_for_client_vpn_endpoint_available "$@"
-    else
-        echo -e "${RED}錯誤: 端點操作模組未正確載入${NC}" >&2
-        return 1
-    fi
-}
+# Note: _wait_for_client_vpn_endpoint_available is loaded from endpoint_operations.sh module
 
 # ============================================================================
 # 主要工作流程函式
@@ -368,14 +292,35 @@ create_vpn_endpoint_lib() {
 
     # 步驟 1: 創建 VPN 端點
     echo -e "\n${CYAN}=== 步驟：創建 VPN 端點 ===${NC}"
-    local endpoint_id
-    endpoint_id=$(_create_aws_client_vpn_endpoint_ec "$vpn_cidr" "$arg_server_cert_arn" "$arg_client_cert_arn" "$vpn_name" "$aws_region")
     
-    if [ $? -ne 0 ] || [ -z "$endpoint_id" ]; then
-        echo -e "${RED}錯誤: VPN 端點創建失敗${NC}"
+    # 調試：檢查關鍵函數是否可用
+    if ! command -v _create_aws_client_vpn_endpoint_ec >/dev/null 2>&1; then
+        echo -e "${RED}錯誤: _create_aws_client_vpn_endpoint_ec 函數不可用，模組載入失敗${NC}"
+        log_message_core "錯誤: _create_aws_client_vpn_endpoint_ec 函數不可用，模組載入失敗"
         return 1
     fi
-    echo -e "${GREEN}✓ VPN 端點創建成功: $endpoint_id${NC}"
+    
+    local endpoint_id
+    local endpoint_creation_output
+    
+    # 捕獲函數返回值 (只捕獲 stdout，讓 stderr 正常顯示)
+    if endpoint_id=$(_create_aws_client_vpn_endpoint_ec "$vpn_cidr" "$arg_server_cert_arn" "$arg_client_cert_arn" "$vpn_name" "$aws_region"); then
+        # 清理可能包含的多餘輸出，只保留端點 ID
+        endpoint_id=$(echo "$endpoint_id" | grep -o 'cvpn-endpoint-[0-9a-f]\{17\}' | head -1)
+        
+        if [ -n "$endpoint_id" ] && [[ "$endpoint_id" =~ ^cvpn-endpoint-[0-9a-f]{17}$ ]]; then
+            echo -e "${GREEN}✓ VPN 端點創建成功: $endpoint_id${NC}"
+            log_message_core "Client VPN 端點創建成功: $endpoint_id"
+        else
+            echo -e "${RED}錯誤: VPN 端點創建返回了無效的端點 ID: $endpoint_id${NC}"
+            log_message_core "錯誤: VPN 端點創建返回了無效的端點 ID: $endpoint_id"
+            return 1
+        fi
+    else
+        echo -e "${RED}錯誤: VPN 端點創建失敗${NC}"
+        log_message_core "錯誤: VPN 端點創建失敗"
+        return 1
+    fi
 
     # 立即保存基本配置 (防止後續步驟失敗導致信息丟失)
     local endpoint_config_file="${main_config_file%/*}/vpn_endpoint.conf"
@@ -389,14 +334,7 @@ create_vpn_endpoint_lib() {
         log_message_core "警告: 端點基本配置保存失敗，但繼續執行"
     fi
 
-    # 等待端點變為可用
-    echo -e "\n${CYAN}=== 步驟：等待端點可用 ===${NC}"
-    if ! _wait_for_client_vpn_endpoint_available "$endpoint_id" "$aws_region"; then
-        echo -e "${RED}錯誤: 端點未能在預期時間內變為可用${NC}"
-        return 1
-    fi
-
-    # 關聯子網路 (如果提供了子網路 ID)
+    # 關聯子網路 (如果提供了子網路 ID) - 必須在等待可用之前完成
     if [ -n "$subnet_id" ]; then
         echo -e "\n${CYAN}=== 步驟：關聯子網路到 VPN 端點 ===${NC}"
         log_message_core "開始執行關聯子網路步驟: 端點=$endpoint_id, 子網路=$subnet_id"
@@ -413,7 +351,27 @@ create_vpn_endpoint_lib() {
         log_message_core "警告: 未提供子網路 ID，跳過子網路關聯步驟"
     fi
 
-    # 設定授權規則和路由
+    # 檢查端點狀態並決定是否等待
+    echo -e "\n${CYAN}=== 步驟：檢查端點狀態 ===${NC}"
+    local current_status
+    current_status=$(aws ec2 describe-client-vpn-endpoints \
+        --client-vpn-endpoint-ids "$endpoint_id" \
+        --region "$aws_region" \
+        --query 'ClientVpnEndpoints[0].Status.Code' \
+        --output text 2>/dev/null)
+    
+    echo -e "${YELLOW}當前端點狀態: $current_status${NC}"
+    
+    if [ "$current_status" = "available" ]; then
+        echo -e "${GREEN}✓ 端點已可用，繼續配置${NC}"
+    elif [ "$current_status" = "pending-associate" ]; then
+        echo -e "${YELLOW}⚠️ 端點仍在關聯中，但可以繼續配置授權規則${NC}"
+        echo -e "${BLUE}註: 端點將在後台完成可用狀態轉換${NC}"
+    else
+        echo -e "${YELLOW}⚠️ 端點狀態: $current_status，嘗試繼續配置${NC}"
+    fi
+
+    # 設定授權規則和路由（不等待端點完全可用）
     echo -e "\n${CYAN}=== 步驟：設定授權規則和路由 ===${NC}"
     log_message_core "開始執行授權和路由設定步驟"
     
@@ -483,13 +441,64 @@ create_vpn_endpoint_lib() {
         log_message_core "管理員證書匯入函式不可用，跳過此步驟"
     fi
 
-    log_message_core "VPN 端點已建立 (lib): $endpoint_id"
-    echo -e "${GREEN}VPN 端點建立完成！${NC}"
-    echo -e "端點 ID: ${BLUE}$endpoint_id${NC}"
+    # 最終狀態檢查（純資訊用途）
+    echo -e "\n${CYAN}=== 最終狀態檢查 ===${NC}"
+    local final_status
+    final_status=$(aws ec2 describe-client-vpn-endpoints \
+        --client-vpn-endpoint-ids "$endpoint_id" \
+        --region "$aws_region" \
+        --query 'ClientVpnEndpoints[0].Status.Code' \
+        --output text 2>/dev/null)
+    
+    case "$final_status" in
+        "available")
+            echo -e "${GREEN}✓ 端點已完全可用並可接受客戶端連接${NC}"
+            ;;
+        "pending-associate")
+            echo -e "${YELLOW}ℹ️ 端點仍在完成關聯過程，將在幾分鐘內變為可用${NC}"
+            ;;
+        *)
+            echo -e "${YELLOW}ℹ️ 端點狀態: $final_status${NC}"
+            ;;
+    esac
 
-    # 返回 endpoint_id, vpc_id, vpc_cidr, subnet_id, vpn_cidr, vpn_name 以便主腳本後續使用 (例如多VPC關聯)
-    # 或者讓主腳本重新 source config file
-    # 這裡我們假設主腳本會重新 source config file 或直接使用這些變數 (如果它們是全域的)
+    # 提供安全群組配置腳本說明
+    echo -e "\n${CYAN}=== 📋 重要：安全群組配置 ===${NC}"
+    local sg_commands_file="security_group_commands_${CURRENT_ENVIRONMENT:-staging}.sh"
+    
+    if [ -f "$sg_commands_file" ]; then
+        echo -e "${GREEN}✓ 已自動生成安全群組配置腳本：${YELLOW}$sg_commands_file${NC}"
+        echo -e "${BLUE}📝 此腳本包含 AWS CLI 命令，用於配置現有服務訪問權限${NC}"
+        echo
+        echo -e "${YELLOW}🔧 使用說明：${NC}"
+        echo -e "  1️⃣ ${CYAN}編輯腳本${NC}：將 ${YELLOW}sg-TARGET_*_SG_ID${NC} 替換為您實際的安全群組 ID"
+        echo -e "  2️⃣ ${CYAN}啟用服務${NC}：註釋掉不需要的服務，保留需要的服務"
+        echo -e "  3️⃣ ${CYAN}執行腳本${NC}：${GREEN}bash $sg_commands_file${NC}"
+        echo
+        echo -e "${BLUE}💡 腳本功能：${NC}"
+        echo -e "  • 🔐 使用安全群組引用（AWS 最佳實務）"
+        echo -e "  • 🎯 預配置常見服務端口（MySQL、PostgreSQL、Redis、HTTP/HTTPS 等）"
+        echo -e "  • 🛡️ 集中化 VPN 用戶權限管理"
+        echo
+        echo -e "${YELLOW}⚠️ 注意：${NC}不執行此腳本，VPN 用戶將無法訪問您的內部服務"
+        echo -e "${GREEN}✅ VPN 端點本身已完成設定，可立即用於基本網路連接${NC}"
+    else
+        echo -e "${YELLOW}⚠️ 未找到安全群組配置腳本，您需要手動配置服務訪問權限${NC}"
+        echo -e "${BLUE}💡 手動配置範例：${NC}"
+        echo -e "  ${CYAN}aws ec2 authorize-security-group-ingress \\\\${NC}"
+        echo -e "  ${CYAN}    --group-id sg-YOUR_SERVICE_SG_ID \\\\${NC}"
+        echo -e "  ${CYAN}    --source-group $client_vpn_sg_id \\\\${NC}"
+        echo -e "  ${CYAN}    --protocol tcp --port 80 --region $aws_region${NC}"
+    fi
+
+    log_message_core "VPN 端點已建立 (lib): $endpoint_id, 狀態: $final_status"
+    echo -e "\n${GREEN}🎉 VPN 端點建立完成！${NC}"
+    echo -e "📍 端點 ID: ${BLUE}$endpoint_id${NC}"
+    echo -e "🔐 VPN 安全群組: ${BLUE}$client_vpn_sg_id${NC}"
+    echo -e "${BLUE}註: 如果端點還未完全可用，請等待幾分鐘讓 AWS 完成後台配置${NC}"
+
+    # 輸出結果標記供 admin 腳本提取
+    echo "ENDPOINT_ID_RESULT=$endpoint_id"
 
     return 0
 }
@@ -505,16 +514,7 @@ _associate_one_vpc_to_endpoint_lib() {
     fi
 }
 
-# 刪除 VPN 端點 (庫函式版本)
-terminate_vpn_endpoint_lib() {
-    # 直接調用端點操作模組中的函式
-    if command -v terminate_vpn_endpoint_lib >/dev/null 2>&1; then
-        terminate_vpn_endpoint_lib "$@"
-    else
-        echo -e "${RED}錯誤: 端點操作模組未正確載入${NC}" >&2
-        return 1
-    fi
-}
+# Note: terminate_vpn_endpoint_lib function is implemented in endpoint_operations.sh module
 
 # ============================================================================
 # 模組檢查和診斷函式
@@ -533,16 +533,7 @@ check_module_status() {
     fi
 }
 
-# 驗證端點操作前置條件
-validate_endpoint_operation() {
-    # 直接調用工具模組中的函式
-    if command -v validate_endpoint_operation >/dev/null 2>&1; then
-        validate_endpoint_operation "$@"
-    else
-        echo -e "${RED}錯誤: 工具模組未正確載入${NC}" >&2
-        return 1
-    fi
-}
+# Note: validate_endpoint_operation function is implemented in endpoint_utils.sh module
 
 # ============================================================================
 # 向後兼容性函式 (保持原有接口)

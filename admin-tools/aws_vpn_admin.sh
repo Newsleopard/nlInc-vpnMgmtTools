@@ -316,13 +316,12 @@ create_vpn_endpoint() {
     update_config "$CONFIG_FILE" "VPN_CIDR" "$vpn_cidr"
     update_config "$CONFIG_FILE" "VPN_NAME" "$vpn_name"
     update_config "$CONFIG_FILE" "SECURITY_GROUPS" "$security_groups"
-    update_config "$CONFIG_FILE" "SERVER_CERT_ARN" "$main_server_cert_arn" # 使用已獲取的 ARN
-    update_config "$CONFIG_FILE" "CLIENT_CERT_ARN" "$main_client_cert_arn" # 使用已獲取的 ARN
+    # Certificate ARNs will be saved to vpn_endpoint.conf by the endpoint creation function
 
     # 呼叫核心創建函式
     echo -e "\\n${CYAN}=== 開始創建 VPN 端點 ===${NC}"
     local creation_output
-    if ! creation_output=$(create_vpn_endpoint_lib "$CONFIG_FILE" "$AWS_REGION" "$vpc_id" "$subnet_id" "$vpn_cidr" "$main_server_cert_arn" "$main_client_cert_arn" "$vpn_name" "$security_groups"); then # Pass all required args
+    if ! creation_output=$(create_vpn_endpoint_lib "$CONFIG_FILE" "$AWS_REGION" "$vpc_id" "$subnet_id" "$vpn_cidr" "$vpn_name" "$main_server_cert_arn" "$main_client_cert_arn" "$security_groups"); then # Pass all required args
         echo -e "${RED}VPN 端點創建過程中發生錯誤。${NC}" # Bug fix item 5
         log_message "VPN 端點創建過程中發生錯誤。"
         return 1
@@ -337,8 +336,8 @@ create_vpn_endpoint() {
     
     # Validate that we extracted a valid endpoint ID
     if [[ -z "$ENDPOINT_ID" || ! "$ENDPOINT_ID" =~ ^cvpn-endpoint-[a-f0-9]{17}$ ]]; then
-        log_error "Failed to extract valid ENDPOINT_ID from function output"
-        log_error "Raw output: $creation_output"
+        log_message "錯誤: 無法從函數輸出中提取有效的 ENDPOINT_ID"
+        log_message "原始輸出: $creation_output"
         return 1
     fi
     
@@ -416,8 +415,22 @@ create_vpn_endpoint() {
         prompt_update_existing_security_groups "$client_vpn_sg_id" "$AWS_REGION" "$CURRENT_ENVIRONMENT"
     else
         echo -e "\\n${YELLOW}注意: 無法提供安全群組更新指令 (client_vpn_sg_id 或 AWS_REGION 未設定)${NC}"
-        echo -e "${BLUE}請手動檢查並更新現有安全群組以允許 Client VPN 訪問。${NC}"
     fi
+    
+    # 最終提醒：安全群組配置腳本
+    echo -e "\n${CYAN}========================================================${NC}"
+    echo -e "${GREEN}🎉 VPN 端點創建流程已完成！${NC}"
+    echo -e "${CYAN}========================================================${NC}"
+    echo
+    echo -e "${YELLOW}📋 下一步操作：${NC}"
+    echo -e "1️⃣ ${BLUE}檢查生成的腳本${NC}：${YELLOW}security_group_commands_${CURRENT_ENVIRONMENT}.sh${NC}"
+    echo -e "2️⃣ ${BLUE}編輯並執行腳本${NC}：配置服務訪問權限"
+    echo -e "3️⃣ ${BLUE}生成客戶端證書${NC}：使用 ${CYAN}./team_member_setup.sh${NC}"
+    echo -e "4️⃣ ${BLUE}測試 VPN 連接${NC}：驗證設定是否正確"
+    echo
+    echo -e "${GREEN}✅ VPN 端點 ID：${BLUE}$ENDPOINT_ID${NC}"
+    echo -e "${GREEN}✅ VPN 安全群組：${BLUE}$client_vpn_sg_id${NC}"
+    echo -e "${CYAN}========================================================${NC}"
     
     echo -e "\\n${YELLOW}按任意鍵繼續...${NC}"
     read -n 1
@@ -558,6 +571,101 @@ delete_vpn_endpoint() {
         # 允許繼續，lib 函式會處理 VPN_NAME 缺失的情況
     fi
 
+    # 🚨 安全確認：顯示即將刪除的資源信息
+    echo -e "\\n${RED}⚠️ 警告：您即將刪除以下 VPN 端點和相關資源：${NC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${CYAN}環境:${NC} ${CURRENT_ENVIRONMENT}"
+    echo -e "${CYAN}端點 ID:${NC} ${ENDPOINT_ID}"
+    echo -e "${CYAN}VPN 名稱:${NC} ${VPN_NAME:-未知}"
+    echo -e "${CYAN}AWS 區域:${NC} ${AWS_REGION}"
+    if [ -n "$CLIENT_VPN_SECURITY_GROUP_ID" ]; then
+        echo -e "${CYAN}安全群組:${NC} ${CLIENT_VPN_SECURITY_GROUP_ID}"
+    fi
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    
+    echo -e "\\n${RED}🔥 此操作將會刪除以下資源：${NC}"
+    echo -e "  ${RED}•${NC} VPN 端點及其所有配置"
+    echo -e "  ${RED}•${NC} 子網路關聯和路由"
+    echo -e "  ${RED}•${NC} 授權規則"
+    echo -e "  ${RED}•${NC} CloudWatch 日誌群組"
+    echo -e "  ${RED}•${NC} 專用 Client VPN 安全群組"
+    echo -e "  ${RED}•${NC} 配置文件中的相關設定"
+    
+    echo -e "\\n${YELLOW}⚠️ 注意：此操作不可逆轉！${NC}"
+    echo -e "${YELLOW}⚠️ 所有連接的用戶將立即斷線！${NC}"
+    echo -e "${YELLOW}⚠️ VPN 證書不會被刪除（需要手動管理）${NC}"
+    
+    # 第一層確認：基本確認
+    echo -e "\\n${RED}第一步確認：${NC}您確定要刪除此 VPN 端點嗎？"
+    local first_confirm
+    while true; do
+        echo -n "請輸入 'yes' 以繼續，或 'no' 取消: "
+        read -t 30 first_confirm
+        case "$first_confirm" in
+            yes|YES)
+                echo -e "${YELLOW}✓ 第一步確認通過${NC}"
+                break
+                ;;
+            no|NO|"")
+                echo -e "${GREEN}✓ 取消刪除操作${NC}"
+                echo -e "\\n${YELLOW}按任意鍵繼續...${NC}"
+                read -n 1 -s
+                return 0
+                ;;
+            *)
+                echo -e "${RED}請輸入 'yes' 或 'no'${NC}"
+                ;;
+        esac
+    done
+    
+    # 第二層確認：環境特定確認（生產環境需要額外確認）
+    if [ "$CURRENT_ENVIRONMENT" = "production" ]; then
+        echo -e "\\n${RED}⚠️ 生產環境額外確認：${NC}"
+        echo -e "${RED}您正在刪除 ${YELLOW}生產環境${RED} 的 VPN 端點！${NC}"
+        echo -e "${RED}這可能會影響正在工作的團隊成員！${NC}"
+        
+        local prod_confirm
+        while true; do
+            echo -n "請輸入 'DELETE-PRODUCTION-VPN' 以確認刪除生產環境 VPN: "
+            read -t 60 prod_confirm
+            if [ "$prod_confirm" = "DELETE-PRODUCTION-VPN" ]; then
+                echo -e "${YELLOW}✓ 生產環境確認通過${NC}"
+                break
+            elif [ -z "$prod_confirm" ]; then
+                echo -e "${GREEN}✓ 超時，取消刪除操作${NC}"
+                echo -e "\\n${YELLOW}按任意鍵繼續...${NC}"
+                read -n 1 -s
+                return 0
+            else
+                echo -e "${RED}輸入不正確，請重試或按 Ctrl+C 取消${NC}"
+            fi
+        done
+    fi
+    
+    # 第三層確認：最終確認
+    echo -e "\\n${RED}最終確認：${NC}請再次確認您要刪除此 VPN 端點"
+    echo -e "${CYAN}端點 ID: ${ENDPOINT_ID}${NC}"
+    local final_confirm
+    while true; do
+        echo -n "輸入端點 ID 的最後 8 個字符以確認刪除: "
+        read -t 30 final_confirm
+        local expected_suffix="${ENDPOINT_ID: -8}"
+        if [ "$final_confirm" = "$expected_suffix" ]; then
+            echo -e "${YELLOW}✓ 最終確認通過，開始刪除...${NC}"
+            break
+        elif [ -z "$final_confirm" ]; then
+            echo -e "${GREEN}✓ 超時，取消刪除操作${NC}"
+            echo -e "\\n${YELLOW}按任意鍵繼續...${NC}"
+            read -n 1 -s
+            return 0
+        else
+            echo -e "${RED}輸入不正確（期望: $expected_suffix），請重試或按 Ctrl+C 取消${NC}"
+        fi
+    done
+    
+    echo -e "\\n${CYAN}🚀 所有確認完成，開始執行刪除操作...${NC}"
+    log_message "用戶通過所有確認，開始刪除 VPN 端點: $ENDPOINT_ID"
+
     # 調用庫函式
     # 參數: aws_region, endpoint_id, vpn_name (用於日誌群組), config_file_path
     terminate_vpn_endpoint_lib "$AWS_REGION" "$ENDPOINT_ID" "$VPN_NAME" "$ENDPOINT_CONFIG_FILE"
@@ -567,10 +675,15 @@ delete_vpn_endpoint() {
     log_operation_result "VPN 端點刪除" "$result" "aws_vpn_admin.sh"
 
     if [ "$result" -eq 0 ]; then
-        echo -e "${GREEN}VPN 端點刪除操作成功完成。${NC}"
-        # 庫函式已清理配置文件
+        echo -e "\\n${GREEN}🎉 VPN 端點刪除操作成功完成！${NC}"
+        echo -e "${GREEN}✅ 所有相關資源已清理完畢${NC}"
+        echo -e "${BLUE}💡 提醒：VPN 證書仍保留在 ACM 中，如需要可手動刪除${NC}"
+        log_message "VPN 端點刪除成功完成: $ENDPOINT_ID"
     else
-        echo -e "${RED}VPN 端點刪除過程中發生錯誤。請檢查上面的日誌。${NC}"
+        echo -e "\\n${RED}❌ VPN 端點刪除過程中發生錯誤${NC}"
+        echo -e "${YELLOW}⚠️ 請檢查上面的詳細日誌以了解具體問題${NC}"
+        echo -e "${BLUE}💡 提示：部分資源可能已刪除，請檢查 AWS 控制台確認狀態${NC}"
+        log_message "VPN 端點刪除過程中發生錯誤: $ENDPOINT_ID"
     fi
     
     echo -e "\\n${YELLOW}按任意鍵繼續...${NC}"

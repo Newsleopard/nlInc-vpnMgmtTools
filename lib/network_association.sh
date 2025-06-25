@@ -46,16 +46,15 @@ _associate_target_network_ec() {
     echo -e "${YELLOW}子網路 ID: $subnet_id${NC}" >&2
     echo -e "${YELLOW}AWS 區域: $aws_region${NC}" >&2
     
-    # 構建 AWS CLI 命令
+    # 構建 AWS CLI 命令 (注意: associate-client-vpn-target-network 不支持 --security-groups 參數)
     local associate_cmd="aws ec2 associate-client-vpn-target-network \
         --client-vpn-endpoint-id $endpoint_id \
         --subnet-id $subnet_id \
         --region $aws_region"
     
-    # 如果提供了安全群組 ID，添加到命令中
+    # 注意: 安全群組在 VPN 端點創建時已指定，子網路關聯時無需重複指定
     if [ -n "$security_group_id" ]; then
-        echo -e "${YELLOW}安全群組 ID: $security_group_id${NC}" >&2
-        associate_cmd="$associate_cmd --security-groups $security_group_id"
+        echo -e "${YELLOW}安全群組 ID: $security_group_id (已在端點創建時配置)${NC}" >&2
     fi
     
     # 執行關聯命令
@@ -146,26 +145,47 @@ _setup_authorization_and_routes_ec() {
     
     # 設定路由規則 - 如果提供了子網路 ID
     if [ -n "$subnet_id" ]; then
-        echo -e "${CYAN}設定路由規則...${NC}" >&2
-        local route_output
-        route_output=$(aws ec2 create-client-vpn-route \
+        echo -e "${CYAN}檢查並設定路由規則...${NC}" >&2
+        
+        # 首先檢查路由是否已存在
+        local existing_routes
+        existing_routes=$(aws ec2 describe-client-vpn-routes \
             --client-vpn-endpoint-id "$endpoint_id" \
-            --destination-cidr-block "$vpc_cidr" \
-            --target-vpc-subnet-id "$subnet_id" \
-            --description "Route to VPC $vpc_cidr via subnet $subnet_id" \
-            --region "$aws_region" 2>&1)
+            --region "$aws_region" \
+            --query "Routes[?DestinationCidr=='$vpc_cidr'].DestinationCidr" \
+            --output text 2>/dev/null)
         
-        local route_status=$?
-        
-        if [ $route_status -ne 0 ]; then
-            echo -e "${RED}錯誤: 設定路由規則失敗${NC}" >&2
-            echo -e "${RED}AWS CLI 輸出: $route_output${NC}" >&2
-            log_message_core "錯誤: 設定路由規則失敗. 輸出: $route_output"
-            return 1
+        if [ -n "$existing_routes" ] && [ "$existing_routes" != "None" ]; then
+            echo -e "${GREEN}✓ 路由已存在: $vpc_cidr (AWS 自動建立)${NC}" >&2
+            log_message_core "路由已存在，跳過創建: 目標=$vpc_cidr"
+        else
+            echo -e "${CYAN}創建新路由規則...${NC}" >&2
+            local route_output
+            route_output=$(aws ec2 create-client-vpn-route \
+                --client-vpn-endpoint-id "$endpoint_id" \
+                --destination-cidr-block "$vpc_cidr" \
+                --target-vpc-subnet-id "$subnet_id" \
+                --description "Route to VPC $vpc_cidr via subnet $subnet_id" \
+                --region "$aws_region" 2>&1)
+            
+            local route_status=$?
+            
+            if [ $route_status -ne 0 ]; then
+                # 檢查是否是重複路由錯誤
+                if echo "$route_output" | grep -q "InvalidClientVpnDuplicateRoute"; then
+                    echo -e "${GREEN}✓ 路由已存在 (重複路由檢測)${NC}" >&2
+                    log_message_core "路由已存在，AWS 報告重複: 目標=$vpc_cidr"
+                else
+                    echo -e "${RED}錯誤: 設定路由規則失敗${NC}" >&2
+                    echo -e "${RED}AWS CLI 輸出: $route_output${NC}" >&2
+                    log_message_core "錯誤: 設定路由規則失敗. 輸出: $route_output"
+                    return 1
+                fi
+            else
+                echo -e "${GREEN}✓ 路由規則設定成功${NC}" >&2
+                log_message_core "路由規則設定成功: 目標=$vpc_cidr, 子網路=$subnet_id"
+            fi
         fi
-        
-        echo -e "${GREEN}✓ 路由規則設定成功${NC}" >&2
-        log_message_core "路由規則設定成功: 目標=$vpc_cidr, 子網路=$subnet_id"
     else
         echo -e "${YELLOW}⚠️ 沒有提供子網路 ID，跳過路由規則設定${NC}" >&2
         log_message_core "警告: 沒有提供子網路 ID，跳過路由規則設定"

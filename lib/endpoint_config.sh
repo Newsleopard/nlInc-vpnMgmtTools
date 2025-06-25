@@ -65,8 +65,8 @@ CLIENT_VPN_SECURITY_GROUP_ID="$sg_id"
 # AWS Certificate Manager ARNs (generated during certificate import)
 CA_CERT_ARN="$ca_cert_arn"
 SERVER_CERT_ARN="$server_cert_arn"
-CLIENT_CERT_ARN=""
-CLIENT_CERT_ARN_admin=""
+CLIENT_CERT_ARN="$ca_cert_arn"
+CLIENT_CERT_ARN_admin="$ca_cert_arn"
 
 # ====================================================================
 # VPC RUNTIME CONFIGURATION
