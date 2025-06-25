@@ -496,3 +496,264 @@ delete_client_vpn_security_group() {
     fi
 }
 
+# ============================================================================
+# VPN Security Group Tracking Functions
+# ============================================================================
+
+# 記錄已配置的 VPN 服務訪問安全群組
+# 參數: $1 = config_file_path, $2 = service_name, $3 = security_group_id, $4 = ports
+record_vpn_security_group_access() {
+    local config_file="$1"
+    local service_name="$2"
+    local security_group_id="$3" 
+    local ports="$4"
+    
+    # 參數驗證
+    if [ -z "$config_file" ] || [ -z "$service_name" ] || [ -z "$security_group_id" ]; then
+        echo -e "${RED}錯誤: record_vpn_security_group_access 缺少必要參數${NC}" >&2
+        return 1
+    fi
+    
+    if [ ! -f "$config_file" ]; then
+        echo -e "${RED}錯誤: 配置文件不存在: $config_file${NC}" >&2
+        return 1
+    fi
+    
+    # 載入配置管理函式庫
+    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [ -f "$script_dir/endpoint_config.sh" ]; then
+        source "$script_dir/endpoint_config.sh"
+    fi
+    
+    # 記錄格式: SERVICE_NAME:SECURITY_GROUP_ID:PORTS
+    local record_entry="${service_name}:${security_group_id}:${ports}"
+    
+    # 獲取當前配置的安全群組列表
+    local current_groups
+    current_groups=$(grep "^VPN_CONFIGURED_SECURITY_GROUPS=" "$config_file" | cut -d'=' -f2 | tr -d '"' || echo "")
+    
+    # 檢查是否已存在
+    if echo "$current_groups" | grep -q "$security_group_id"; then
+        echo -e "${YELLOW}⚠️ 安全群組 $security_group_id 已在追蹤列表中${NC}" >&2
+        return 0
+    fi
+    
+    # 添加新記錄
+    if [ -n "$current_groups" ]; then
+        new_groups="${current_groups};${record_entry}"
+    else
+        new_groups="$record_entry"
+    fi
+    
+    # 更新主配置
+    if command -v update_config_value >/dev/null 2>&1; then
+        update_config_value "$config_file" "VPN_CONFIGURED_SECURITY_GROUPS" "$new_groups"
+        update_config_value "$config_file" "VPN_SERVICE_ACCESS_LAST_CONFIGURED" "$(date)"
+        update_config_value "$config_file" "VPN_SERVICE_ACCESS_METHOD" "auto"
+    else
+        # 備用更新方法
+        sed -i.bak "s/^VPN_CONFIGURED_SECURITY_GROUPS=.*/VPN_CONFIGURED_SECURITY_GROUPS=\"$new_groups\"/" "$config_file"
+        sed -i.bak "s/^VPN_SERVICE_ACCESS_LAST_CONFIGURED=.*/VPN_SERVICE_ACCESS_LAST_CONFIGURED=\"$(date)\"/" "$config_file"
+        sed -i.bak "s/^VPN_SERVICE_ACCESS_METHOD=.*/VPN_SERVICE_ACCESS_METHOD=\"auto\"/" "$config_file"
+    fi
+    
+    # 更新服務特定的追蹤
+    case "$service_name" in
+        MySQL*|RDS*)
+            update_service_specific_tracking "$config_file" "VPN_MYSQL_RDS_GROUPS" "$security_group_id" "$ports"
+            ;;
+        Redis*)
+            update_service_specific_tracking "$config_file" "VPN_REDIS_GROUPS" "$security_group_id" "$ports"
+            ;;
+        HBase*|Phoenix*)
+            update_service_specific_tracking "$config_file" "VPN_HBASE_GROUPS" "$security_group_id" "$ports"
+            ;;
+        EKS*|Kubernetes*)
+            update_service_specific_tracking "$config_file" "VPN_EKS_GROUPS" "$security_group_id" "$ports"
+            ;;
+        Web*|HTTP*)
+            update_service_specific_tracking "$config_file" "VPN_WEB_GROUPS" "$security_group_id" "$ports"
+            ;;
+        *)
+            update_service_specific_tracking "$config_file" "VPN_OTHER_GROUPS" "$security_group_id" "$ports"
+            ;;
+    esac
+    
+    echo -e "${GREEN}✓ 已記錄 VPN 服務訪問: $service_name -> $security_group_id (端口: $ports)${NC}" >&2
+    log_message_core "VPN 安全群組訪問記錄: service=$service_name, sg=$security_group_id, ports=$ports"
+    
+    return 0
+}
+
+# 更新服務特定的安全群組追蹤
+# 參數: $1 = config_file, $2 = variable_name, $3 = security_group_id, $4 = ports
+update_service_specific_tracking() {
+    local config_file="$1"
+    local variable_name="$2"
+    local security_group_id="$3"
+    local ports="$4"
+    
+    local current_value
+    current_value=$(grep "^${variable_name}=" "$config_file" | cut -d'=' -f2 | tr -d '"' || echo "")
+    
+    local new_entry="${security_group_id}:${ports}"
+    
+    if [ -n "$current_value" ]; then
+        new_value="${current_value};${new_entry}"
+    else
+        new_value="$new_entry"
+    fi
+    
+    if command -v update_config_value >/dev/null 2>&1; then
+        update_config_value "$config_file" "$variable_name" "$new_value"
+    else
+        sed -i.bak "s/^${variable_name}=.*/${variable_name}=\"$new_value\"/" "$config_file"
+    fi
+}
+
+# 獲取所有已配置的 VPN 服務訪問安全群組
+# 參數: $1 = config_file_path
+get_vpn_configured_security_groups() {
+    local config_file="$1"
+    
+    if [ ! -f "$config_file" ]; then
+        echo -e "${RED}錯誤: 配置文件不存在: $config_file${NC}" >&2
+        return 1
+    fi
+    
+    # 讀取配置的安全群組
+    local configured_groups
+    configured_groups=$(grep "^VPN_CONFIGURED_SECURITY_GROUPS=" "$config_file" | cut -d'=' -f2 | tr -d '"' || echo "")
+    
+    if [ -z "$configured_groups" ]; then
+        echo -e "${YELLOW}ℹ️ 沒有記錄的 VPN 服務訪問配置${NC}" >&2
+        return 1
+    fi
+    
+    echo "$configured_groups"
+    return 0
+}
+
+# 清理所有已記錄的 VPN 服務訪問規則
+# 參數: $1 = config_file_path, $2 = client_vpn_sg_id, $3 = aws_region
+cleanup_vpn_service_access_rules() {
+    local config_file="$1"
+    local client_vpn_sg_id="$2"
+    local aws_region="$3"
+    
+    # 參數驗證
+    if [ -z "$config_file" ] || [ -z "$client_vpn_sg_id" ] || [ -z "$aws_region" ]; then
+        echo -e "${RED}錯誤: cleanup_vpn_service_access_rules 缺少必要參數${NC}" >&2
+        return 1
+    fi
+    
+    if [ ! -f "$config_file" ]; then
+        echo -e "${YELLOW}⚠️ 配置文件不存在，跳過 VPN 服務訪問清理${NC}" >&2
+        return 0
+    fi
+    
+    echo -e "\n${CYAN}=== 清理 VPN 服務訪問規則 ===${NC}" >&2
+    log_message_core "開始清理 VPN 服務訪問規則: config=$config_file, vpn_sg=$client_vpn_sg_id"
+    
+    # 獲取已配置的安全群組
+    local configured_groups
+    if ! configured_groups=$(get_vpn_configured_security_groups "$config_file"); then
+        echo -e "${BLUE}ℹ️ 沒有需要清理的 VPN 服務訪問規則${NC}" >&2
+        return 0
+    fi
+    
+    echo -e "${BLUE}正在清理以下 VPN 服務訪問規則:${NC}" >&2
+    
+    local cleanup_success_count=0
+    local cleanup_total_count=0
+    
+    # 解析並清理每個安全群組的規則
+    echo "$configured_groups" | tr ';' '\n' | while read -r group_entry; do
+        if [ -n "$group_entry" ]; then
+            # 解析格式: SERVICE_NAME:SECURITY_GROUP_ID:PORTS
+            local service_name=$(echo "$group_entry" | cut -d':' -f1)
+            local target_sg_id=$(echo "$group_entry" | cut -d':' -f2)
+            local ports=$(echo "$group_entry" | cut -d':' -f3)
+            
+            cleanup_total_count=$((cleanup_total_count + 1))
+            
+            echo -e "\n${YELLOW}清理服務: $service_name${NC}" >&2
+            echo -e "${YELLOW}目標安全群組: $target_sg_id${NC}" >&2
+            echo -e "${YELLOW}端口: $ports${NC}" >&2
+            
+            # 清理每個端口的規則
+            if [ -n "$ports" ]; then
+                IFS=',' read -ra port_array <<< "$ports"
+                for port in "${port_array[@]}"; do
+                    echo -e "  ${CYAN}清理端口 $port 的 VPN 訪問規則...${NC}" >&2
+                    
+                    if aws ec2 revoke-security-group-ingress \
+                        --group-id "$target_sg_id" \
+                        --protocol tcp \
+                        --port "$port" \
+                        --source-group "$client_vpn_sg_id" \
+                        --region "$aws_region" >/dev/null 2>&1; then
+                        echo -e "  ${GREEN}  ✓ 端口 $port VPN 訪問規則已移除${NC}" >&2
+                        log_message_core "VPN 訪問規則已移除: service=$service_name, target_sg=$target_sg_id, port=$port"
+                    else
+                        echo -e "  ${YELLOW}  ⚠️ 端口 $port VPN 訪問規則移除失敗（可能已不存在）${NC}" >&2
+                        log_message_core "警告: VPN 訪問規則移除失敗: service=$service_name, target_sg=$target_sg_id, port=$port"
+                    fi
+                done
+            fi
+            
+            cleanup_success_count=$((cleanup_success_count + 1))
+        fi
+    done
+    
+    echo -e "\n${GREEN}✅ VPN 服務訪問規則清理完成${NC}" >&2
+    echo -e "${BLUE}處理了 $cleanup_total_count 個服務的安全群組規則${NC}" >&2
+    
+    # 清空配置文件中的 VPN 服務訪問記錄
+    clear_vpn_service_access_tracking "$config_file"
+    
+    log_message_core "VPN 服務訪問規則清理完成: 處理了 $cleanup_total_count 個服務"
+    return 0
+}
+
+# 清空 VPN 服務訪問追蹤記錄
+# 參數: $1 = config_file_path
+clear_vpn_service_access_tracking() {
+    local config_file="$1"
+    
+    if [ ! -f "$config_file" ]; then
+        return 0
+    fi
+    
+    # 載入配置管理函式庫
+    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [ -f "$script_dir/endpoint_config.sh" ]; then
+        source "$script_dir/endpoint_config.sh"
+    fi
+    
+    # 清空所有 VPN 服務訪問相關配置
+    local vpn_access_vars=(
+        "VPN_CONFIGURED_SECURITY_GROUPS"
+        "VPN_MYSQL_RDS_GROUPS"
+        "VPN_REDIS_GROUPS"
+        "VPN_HBASE_GROUPS"
+        "VPN_EKS_GROUPS"
+        "VPN_WEB_GROUPS"
+        "VPN_OTHER_GROUPS"
+        "VPN_SERVICE_ACCESS_LAST_CONFIGURED"
+        "VPN_SERVICE_ACCESS_METHOD"
+    )
+    
+    for var_name in "${vpn_access_vars[@]}"; do
+        if command -v update_config_value >/dev/null 2>&1; then
+            update_config_value "$config_file" "$var_name" ""
+        else
+            sed -i.bak "s/^${var_name}=.*/${var_name}=\"\"/" "$config_file"
+        fi
+        log_message_core "已清空配置變數: $var_name"
+    done
+    
+    echo -e "${GREEN}✓ VPN 服務訪問追蹤記錄已清空${NC}" >&2
+    log_message_core "VPN 服務訪問追蹤記錄已清空"
+}
+

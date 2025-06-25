@@ -49,6 +49,57 @@ log_error() {
     log_message_core "ERROR: $*"
 }
 
+# Record configured VPN security groups to .conf file for cleanup tracking
+# Parameters: array of "service:security_group_id:port" entries
+record_vpn_configured_security_groups() {
+    local configured_rules=("$@")
+    
+    # Get current environment configuration file
+    local env_name
+    env_name=$(get_current_environment_name 2>/dev/null || echo "staging")
+    local config_file="$SCRIPT_DIR/../configs/${env_name}/vpn_endpoint.conf"
+    
+    if [ ! -f "$config_file" ]; then
+        log_warning "VPN endpoint config file not found: $config_file"
+        log_warning "Cannot record security group tracking for cleanup"
+        return 1
+    fi
+    
+    # Load security group tracking functions
+    if [ -f "$SCRIPT_DIR/../lib/security_group_operations.sh" ]; then
+        source "$SCRIPT_DIR/../lib/security_group_operations.sh"
+    else
+        log_warning "Security group operations library not found"
+        return 1
+    fi
+    
+    log_info "Recording configured security groups for cleanup tracking..."
+    
+    # Record each configured rule
+    for rule in "${configured_rules[@]}"; do
+        if [ -n "$rule" ]; then
+            # Parse: service:security_group_id:port
+            local service_name=$(echo "$rule" | cut -d':' -f1)
+            local security_group_id=$(echo "$rule" | cut -d':' -f2)
+            local port=$(echo "$rule" | cut -d':' -f3)
+            
+            if command -v record_vpn_security_group_access >/dev/null 2>&1; then
+                if record_vpn_security_group_access "$config_file" "$service_name" "$security_group_id" "$port"; then
+                    log_info "  ✓ Recorded: $service_name -> $security_group_id:$port"
+                else
+                    log_warning "  ⚠️ Failed to record: $service_name -> $security_group_id:$port"
+                fi
+            else
+                log_warning "record_vpn_security_group_access function not available"
+                break
+            fi
+        fi
+    done
+    
+    log_info "✅ Security group tracking recorded for cleanup"
+    return 0
+}
+
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -247,6 +298,7 @@ create_rules() {
     
     local success=0
     local total=0
+    local configured_rules=()
     
     while IFS=':' read -r service port target_sg; do
         ((total++))
@@ -266,13 +318,22 @@ create_rules() {
             --region "$AWS_REGION" 2>/dev/null; then
             echo "  ✅ Success"
             ((success++))
+            # Track successfully configured rules
+            configured_rules+=("$service:$target_sg:$port")
         else
             echo "  ⚠️  May already exist or failed"
+            # Still track for cleanup (might have been created before)
+            configured_rules+=("$service:$target_sg:$port")
         fi
     done < /tmp/discovered_services.txt
     
     echo
     log_info "Created $success/$total rules"
+    
+    # Record configured security groups in .conf file if not dry run
+    if [[ "$DRY_RUN" != "true" && ${#configured_rules[@]} -gt 0 ]]; then
+        record_vpn_configured_security_groups "${configured_rules[@]}"
+    fi
 }
 
 # FIXED: Comprehensive VPN access rules removal

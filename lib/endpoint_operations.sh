@@ -360,14 +360,41 @@ terminate_vpn_endpoint_lib() {
         echo -e "${GREEN}✓ 沒有證書需要刪除${NC}"
     fi
     
-    # 步驟 6: 刪除專用安全群組 (來自原始程式碼)
-    echo -e "\n${CYAN}步驟 6: 清理專用安全群組${NC}"
+    # 步驟 6: 清理 VPN 服務訪問規則 (新增)
+    echo -e "\n${CYAN}步驟 6: 清理 VPN 服務訪問規則${NC}"
     
     local client_vpn_sg_id=""
     if [ -n "$config_file" ] && [ -f "$config_file" ]; then
         # 從配置文件獲取安全群組 ID
         client_vpn_sg_id=$(grep -o 'CLIENT_VPN_SECURITY_GROUP_ID="[^"]*"' "$config_file" 2>/dev/null | cut -d'"' -f2)
+        
+        if [ -n "$client_vpn_sg_id" ]; then
+            echo -e "${BLUE}清理 VPN 服務訪問規則，Client VPN 安全群組: $client_vpn_sg_id${NC}"
+            
+            # 載入安全群組操作函式庫
+            local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+            if [ -f "$script_dir/security_group_operations.sh" ]; then
+                source "$script_dir/security_group_operations.sh"
+                
+                if command -v cleanup_vpn_service_access_rules >/dev/null 2>&1; then
+                    cleanup_vpn_service_access_rules "$config_file" "$client_vpn_sg_id" "$aws_region"
+                else
+                    echo -e "${YELLOW}⚠️ VPN 服務訪問清理函式不可用${NC}"
+                    log_message_core "警告: VPN 服務訪問清理函式不可用"
+                fi
+            else
+                echo -e "${YELLOW}⚠️ 安全群組操作函式庫不可用，跳過 VPN 服務訪問清理${NC}"
+                log_message_core "警告: 安全群組操作函式庫不可用，跳過 VPN 服務訪問清理"
+            fi
+        else
+            echo -e "${YELLOW}⚠️ 無法找到 Client VPN 安全群組 ID，跳過 VPN 服務訪問清理${NC}"
+        fi
+    else
+        echo -e "${YELLOW}⚠️ 配置文件不存在，跳過 VPN 服務訪問清理${NC}"
     fi
+    
+    # 步驟 7: 刪除專用安全群組 (來自原始程式碼)
+    echo -e "\n${CYAN}步驟 7: 清理專用安全群組${NC}"
     
     if [ -n "$client_vpn_sg_id" ]; then
         echo -e "${BLUE}發現專用安全群組: $client_vpn_sg_id${NC}"
@@ -389,8 +416,8 @@ terminate_vpn_endpoint_lib() {
         echo -e "${GREEN}✓ 沒有專用安全群組需要清理${NC}"
     fi
     
-    # 步驟 7: 清理配置文件
-    echo -e "\n${CYAN}步驟 7: 清理配置文件${NC}"
+    # 步驟 8: 清理配置文件
+    echo -e "\n${CYAN}步驟 8: 清理配置文件${NC}"
     
     if [ -n "$config_file" ] && [ -f "$config_file" ]; then
         echo -e "${BLUE}清理配置文件: $config_file${NC}"
@@ -401,7 +428,7 @@ terminate_vpn_endpoint_lib() {
             source "$script_dir/endpoint_config.sh"
             
             if command -v clear_config_values >/dev/null 2>&1; then
-                # 清空關鍵配置值
+                # 清空關鍵配置值 (包含 VPN 服務訪問追蹤變數)
                 clear_config_values "$config_file" \
                     "ENDPOINT_ID" \
                     "CLIENT_VPN_SECURITY_GROUP_ID" \
@@ -410,7 +437,16 @@ terminate_vpn_endpoint_lib() {
                     "CLIENT_CERT_ARN" \
                     "CLIENT_CERT_ARN_admin" \
                     "VPC_CIDR" \
-                    "SECURITY_GROUPS"
+                    "SECURITY_GROUPS" \
+                    "VPN_CONFIGURED_SECURITY_GROUPS" \
+                    "VPN_MYSQL_RDS_GROUPS" \
+                    "VPN_REDIS_GROUPS" \
+                    "VPN_HBASE_GROUPS" \
+                    "VPN_EKS_GROUPS" \
+                    "VPN_WEB_GROUPS" \
+                    "VPN_OTHER_GROUPS" \
+                    "VPN_SERVICE_ACCESS_LAST_CONFIGURED" \
+                    "VPN_SERVICE_ACCESS_METHOD"
                 echo -e "${GREEN}✓ 配置文件已清理${NC}"
             else
                 echo -e "${YELLOW}⚠️ 配置清理函式不可用${NC}"
