@@ -161,13 +161,17 @@ prompt_update_existing_security_groups() {
     
     # 步驟 1: 服務發現和預覽
     echo -e "\n${YELLOW}🔍 步驟 1: 發現當前環境中的服務...${NC}" >&2
-    log_message_core "執行服務發現: $vpn_service_script discover --region $aws_region"
+    log_message_core "執行服務發現: $vpn_service_script discover $client_vpn_sg_id --region $aws_region"
     
-    if ! "$vpn_service_script" discover --region "$aws_region"; then
+    # Execute discovery with VPN security group parameter and ensure results are saved
+    if ! "$vpn_service_script" discover "$client_vpn_sg_id" --region "$aws_region"; then
         log_message_core "警告: VPN 服務發現失敗，回退到手動配置"
         echo -e "${YELLOW}⚠️  服務發現失敗，建議稍後手動運行：${NC}" >&2
-        echo -e "${BLUE}$vpn_service_script discover --region $aws_region${NC}" >&2
+        echo -e "${BLUE}$vpn_service_script discover $client_vpn_sg_id --region $aws_region${NC}" >&2
         return 1
+    else
+        log_message_core "VPN 服務發現成功完成，結果已保存到配置文件"
+        echo -e "${GREEN}✅ 服務發現完成，結果已保存到配置文件${NC}" >&2
     fi
     
     # 步驟 2: 預覽即將創建的規則
