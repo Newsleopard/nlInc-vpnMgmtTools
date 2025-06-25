@@ -11,7 +11,7 @@ if [ -z "$LOG_FILE_CORE" ]; then
 fi
 
 # 創建 AWS Client VPN 端點
-# 參數: $1 = vpn_cidr, $2 = server_cert_arn, $3 = client_cert_arn, $4 = vpn_name, $5 = aws_region
+# 參數: $1 = vpn_cidr, $2 = server_cert_arn, $3 = client_cert_arn, $4 = vpn_name, $5 = aws_region, $6 = client_vpn_sg_id (optional), $7 = vpc_id (required when sg_id provided)
 # 返回: endpoint_id
 _create_aws_client_vpn_endpoint_ec() {
     local vpn_cidr="$1"
@@ -19,12 +19,27 @@ _create_aws_client_vpn_endpoint_ec() {
     local client_cert_arn="$3"
     local vpn_name="$4"
     local aws_region="$5"
+    local client_vpn_sg_id="$6"
+    local vpc_id="$7"
     
     # 參數驗證
     if [ -z "$vpn_cidr" ] || [ -z "$server_cert_arn" ] || [ -z "$client_cert_arn" ] || [ -z "$vpn_name" ] || [ -z "$aws_region" ]; then
         echo -e "${RED}錯誤: _create_aws_client_vpn_endpoint_ec 缺少必要參數${NC}" >&2
         log_message_core "錯誤: _create_aws_client_vpn_endpoint_ec 缺少必要參數"
         return 1
+    fi
+    
+    # 準備安全群組和 VPC 參數
+    local security_group_param=""
+    local vpc_param=""
+    if [ -n "$client_vpn_sg_id" ] && [ -n "$vpc_id" ]; then
+        security_group_param="--security-group-ids $client_vpn_sg_id"
+        vpc_param="--vpc-id $vpc_id"
+        echo -e "${BLUE}使用專用安全群組: $client_vpn_sg_id (VPC: $vpc_id)${NC}" >&2
+    elif [ -n "$client_vpn_sg_id" ] && [ -z "$vpc_id" ]; then
+        echo -e "${YELLOW}⚠️  提供了安全群組但未提供 VPC ID，將忽略安全群組設定${NC}" >&2
+    else
+        echo -e "${YELLOW}⚠️  未指定安全群組，將使用 VPC 預設安全群組${NC}" >&2
     fi
     
     log_message_core "開始創建 AWS Client VPN 端點 - CIDR: $vpn_cidr, 名稱: $vpn_name"
@@ -60,14 +75,27 @@ _create_aws_client_vpn_endpoint_ec() {
     
     # 執行 AWS CLI 創建端點命令
     local create_output
-    create_output=$(aws ec2 create-client-vpn-endpoint \
-        --client-cidr-block "$vpn_cidr" \
-        --server-certificate-arn "$server_cert_arn" \
-        --authentication-options Type=certificate-authentication,MutualAuthentication="{ClientRootCertificateChainArn=$client_cert_arn}" \
-        --connection-log-options "$connection_log_options" \
-        --description "Client VPN Endpoint - $vpn_name" \
-        --tag-specifications ResourceType=client-vpn-endpoint,Tags='[{Key=Name,Value='$vpn_name'},{Key=ManagedBy,Value=nlInc-vpnMgmtTools}]' \
-        --region "$aws_region" 2>&1)
+    if [ -n "$security_group_param" ] && [ -n "$vpc_param" ]; then
+        create_output=$(aws ec2 create-client-vpn-endpoint \
+            --client-cidr-block "$vpn_cidr" \
+            --server-certificate-arn "$server_cert_arn" \
+            --authentication-options Type=certificate-authentication,MutualAuthentication="{ClientRootCertificateChainArn=$client_cert_arn}" \
+            --connection-log-options "$connection_log_options" \
+            --description "Client VPN Endpoint - $vpn_name" \
+            --tag-specifications ResourceType=client-vpn-endpoint,Tags='[{Key=Name,Value='$vpn_name'},{Key=ManagedBy,Value=nlInc-vpnMgmtTools}]' \
+            $security_group_param \
+            $vpc_param \
+            --region "$aws_region" 2>&1)
+    else
+        create_output=$(aws ec2 create-client-vpn-endpoint \
+            --client-cidr-block "$vpn_cidr" \
+            --server-certificate-arn "$server_cert_arn" \
+            --authentication-options Type=certificate-authentication,MutualAuthentication="{ClientRootCertificateChainArn=$client_cert_arn}" \
+            --connection-log-options "$connection_log_options" \
+            --description "Client VPN Endpoint - $vpn_name" \
+            --tag-specifications ResourceType=client-vpn-endpoint,Tags='[{Key=Name,Value='$vpn_name'},{Key=ManagedBy,Value=nlInc-vpnMgmtTools}]' \
+            --region "$aws_region" 2>&1)
+    fi
     
     local create_status=$?
     

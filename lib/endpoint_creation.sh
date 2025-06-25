@@ -304,7 +304,7 @@ create_vpn_endpoint_lib() {
     local endpoint_creation_output
     
     # 捕獲函數返回值 (只捕獲 stdout，讓 stderr 正常顯示)
-    if endpoint_id=$(_create_aws_client_vpn_endpoint_ec "$vpn_cidr" "$arg_server_cert_arn" "$arg_client_cert_arn" "$vpn_name" "$aws_region"); then
+    if endpoint_id=$(_create_aws_client_vpn_endpoint_ec "$vpn_cidr" "$arg_server_cert_arn" "$arg_client_cert_arn" "$vpn_name" "$aws_region" "$client_vpn_sg_id" "$vpc_id"); then
         # 清理可能包含的多餘輸出，只保留端點 ID
         endpoint_id=$(echo "$endpoint_id" | grep -o 'cvpn-endpoint-[0-9a-f]\{17\}' | head -1)
         
