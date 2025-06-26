@@ -244,7 +244,6 @@ EOF
 discover_services_by_tags() {
     local vpc_id="$1"
     log_info "🏷️ Tag-based discovery for VPC: $vpc_id"
-    echo -e "🏷️ Analyzing service tags..." > /dev/tty 2>/dev/null || true
     
     local service_mappings=(
         "RDS:MySQL_RDS:3306"
@@ -303,7 +302,6 @@ discover_services_by_tags() {
 discover_services_by_resource_verification() {
     local vpc_id="$1"
     log_info "🔍 Enhanced Resource-to-SecurityGroup Mapping for VPC: $vpc_id"
-    echo -e "🔍 Analyzing AWS resources and their security groups..." > /dev/tty 2>/dev/null || true
     
     > /tmp/resource_verified_discoveries.txt
     > /tmp/resource_sg_mapping.json
@@ -606,7 +604,6 @@ validate_and_score_discoveries() {
 discover_services_by_actual_rules() {
     local vpc_id="$1"
     log_info "🔍 Actual Security Group Rules Analysis for VPC: $vpc_id"
-    echo -e "🔍 Analyzing actual security group rules..." > /dev/tty 2>/dev/null || true
     
     > /tmp/actual_rules_discoveries.txt
     > /tmp/port_rule_analysis.json
@@ -637,7 +634,6 @@ discover_services_by_actual_rules() {
         IFS=':' read -r port service_name <<< "$port_service"
         
         log_info "    Analyzing rules for port $port ($service_name)..."
-        echo -e "    Analyzing rules for port $port ($service_name)..." > /dev/tty 2>/dev/null || true
         
         # Find all security groups that have inbound rules for this port
         for sg_id in $all_sgs; do
@@ -671,7 +667,6 @@ discover_services_by_actual_rules() {
                 if [[ "$has_access_rules" == "true" ]]; then
                     echo "$service_name:$port:$sg_id:actual-rules" >> /tmp/actual_rules_discoveries.txt
                     log_info "      ✓ Found $sg_id with actual rules for port $port"
-                    echo -e "      ✓ Found $sg_id with actual rules for port $port" > /dev/tty 2>/dev/null || true
                 fi
             fi
         done
@@ -771,7 +766,6 @@ perform_fast_discovery() {
     # Execute core discovery methods
     for method in "${fast_methods[@]}"; do
         ((current_method++))
-        echo -e "Progress: [$current_method/$total_methods] $method discovery..." > /dev/tty 2>/dev/null || true
         
         case "$method" in
             "actual-rules")
@@ -782,7 +776,6 @@ perform_fast_discovery() {
                 ;;
         esac
         
-        echo -e "✓ Completed: $method discovery" > /dev/tty 2>/dev/null || true
     done
     
     # Process discoveries
@@ -806,7 +799,6 @@ perform_comprehensive_discovery() {
     # Execute all discovery methods in priority order
     for method in "${comprehensive_methods[@]}"; do
         ((current_method++))
-        echo -e "Progress: [$current_method/$total_methods] $method discovery..." > /dev/tty 2>/dev/null || true
         
         case "$method" in
             "tag-based")
@@ -826,7 +818,6 @@ perform_comprehensive_discovery() {
                 ;;
         esac
         
-        echo -e "✓ Completed: $method discovery" > /dev/tty 2>/dev/null || true
     done
     
     # Process discoveries
@@ -855,7 +846,6 @@ process_discovery_results() {
     cross_validate_discoveries_with_resources
     
     # Validate and score all discoveries (use validated discoveries if available)
-    echo -e "🔍 Validating and scoring discovered services..." > /dev/tty 2>/dev/null || true
     local discovery_input="/tmp/validated_discoveries.txt"
     if [[ ! -f "$discovery_input" ]]; then
         discovery_input="/tmp/unique_discoveries.txt"
@@ -887,8 +877,7 @@ process_discovery_results() {
     # Display summary
     local total_discoveries
     total_discoveries=$(wc -l < /tmp/final_discoveries.txt 2>/dev/null | xargs || echo "0")
-    log_info "📈 Discovery Summary: $total_discoveries services found meeting minimum confidence: $VPN_DISCOVERY_MIN_CONFIDENCE"
-    echo -e "✅ Discovery completed: $total_discoveries services found" > /dev/tty 2>/dev/null || true
+    log_info "✅ Discovery completed: $total_discoveries services found"
     
     return 0
 }
