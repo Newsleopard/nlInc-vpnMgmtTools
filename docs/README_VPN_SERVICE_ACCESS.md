@@ -26,12 +26,14 @@ After removing ALL redundant scripts, here is the **1 essential script** for VPN
 
 **Why this is ALL you need:**
 - ✅ **Discovery**: Finds all service security groups automatically
-- ✅ **Creation**: Creates VPN access rules dynamically
+- ✅ **Creation**: Creates VPN access rules dynamically  
 - ✅ **Removal**: Removes VPN access rules dynamically
+- ✅ **Tracking**: Persistent tracking of all modifications for precise cleanup
 - ✅ **Multi-Environment**: Works in staging AND production (any AWS account)
 - ✅ **No Hard-Coding**: Zero hard-coded security group IDs
 - ✅ **Safe Operations**: Dry-run support for everything
 - ✅ **Complete Coverage**: Handles all 8 services automatically
+- ✅ **Audit Trail**: Complete history of all VPN access modifications
 
 ---
 
@@ -103,22 +105,6 @@ The single script automatically handles these services:
 
 ---
 
-## 🧹 **ALL Redundant Scripts Removed**
-
-These scripts were eliminated for ultimate simplicity:
-- ❌ `find_service_security_groups.sh` ← **Just removed!**
-- ❌ `remove_vpn_sg_rules.sh`
-- ❌ `remove_vpn_security_group_rules.sh`
-- ❌ `remove_vpn_sg_rules_simple.sh`
-- ❌ `remove_vpn_sg_rules_auto.sh`
-- ❌ `remove_vpn_sg_rules_dynamic.sh`
-- ❌ `manage_vpn_service_access.sh`
-- ❌ `discover_service_security_groups.sh`
-
-**Result:** The ultimate minimal solution - just 1 script! 🎉
-
----
-
 ## 📊 **Example Output**
 
 ### Discovery:
@@ -150,6 +136,49 @@ export EKS_API_SG="sg-0d59c6a9f577eb225"  # Port 443
   ✅ Success
 [INFO] Removed 8/8 rules
 ```
+
+---
+
+## 🗂️ **安全群組追蹤系統**
+
+### **持久化追蹤功能**
+
+系統現在會自動追蹤所有 VPN 相關的安全群組修改：
+
+```bash
+# 追蹤檔案位置
+configs/{environment}/vpn_security_groups_tracking.conf
+
+# 範例：staging 環境
+configs/staging/vpn_security_groups_tracking.conf
+```
+
+### **追蹤的資訊**
+
+- **修改的安全群組**：哪些安全群組被修改了
+- **服務詳細資料**：服務名稱和端口  
+- **時間戳記**：修改時間
+- **操作日誌**：詳細的審計追蹤
+- **規則 ID**：AWS 安全群組規則 ID 用於精確移除
+
+### **精確清理的好處**
+
+```bash
+# 移除時會自動：
+# 1. 讀取追蹤檔案獲取修改過的安全群組清單
+# 2. 使用 AWS API 驗證當前狀態  
+# 3. 只移除實際由 VPN 系統添加的規則
+# 4. 清理追蹤檔案
+
+./manage_vpn_service_access.sh remove sg-your-vpn-client
+```
+
+**追蹤系統確保：**
+
+- ✅ **精確移除**：只移除 VPN 系統添加的規則
+- ✅ **審計追蹤**：完整的修改歷史記錄
+- ✅ **可靠性**：雙重驗證（追蹤 + AWS 發現）
+- ✅ **效能**：更快的移除過程，針對特定安全群組
 
 ---
 

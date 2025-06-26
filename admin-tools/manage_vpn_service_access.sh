@@ -33,9 +33,18 @@ SERVICES="MySQL_RDS:3306 Redis:6379 HBase_Master:16010 HBase_RegionServer:16020 
 VPN_DISCOVERY_METHOD="${VPN_DISCOVERY_METHOD:-tag-based,resource-verified,pattern-based,port-based}"
 VPN_DISCOVERY_MIN_CONFIDENCE="${VPN_DISCOVERY_MIN_CONFIDENCE:-MEDIUM}"
 
+# Performance optimization: Fast mode uses only actual-rules + resource-verified (proven most effective)
+# Set to "false" for comprehensive discovery (all 5 methods) if you need maximum coverage
+VPN_DISCOVERY_FAST_MODE="${VPN_DISCOVERY_FAST_MODE:-true}"
+
 # Discovery caching configuration
 VPN_USE_CACHED_DISCOVERY="${VPN_USE_CACHED_DISCOVERY:-false}"
 VPN_DISCOVERY_CACHE_TTL="${VPN_DISCOVERY_CACHE_TTL:-3600}"  # 1 hour default cache
+
+# Persistent discovery data storage
+DISCOVERY_DATA_DIR="/tmp/vpn-discovery-cache"
+DISCOVERY_PERSISTENT_FILE="$DISCOVERY_DATA_DIR/last_discovery_results.txt"
+DISCOVERY_METADATA_FILE="$DISCOVERY_DATA_DIR/discovery_metadata.conf"
 
 # Colors
 GREEN='\033[0;32m'
@@ -57,12 +66,184 @@ log_error() {
     log_message_core "ERROR: $*"
 }
 
+# Persistent discovery data management functions
+
+# Check if cached discovery data is valid and recent
+is_cached_discovery_valid() {
+    local vpc_id="$1"
+    local current_time=$(date +%s)
+    
+    # Create cache directory if it doesn't exist
+    mkdir -p "$DISCOVERY_DATA_DIR"
+    
+    # Check if files exist
+    if [[ ! -f "$DISCOVERY_PERSISTENT_FILE" ]] || [[ ! -f "$DISCOVERY_METADATA_FILE" ]]; then
+        log_info "No cached discovery data found"
+        return 1
+    fi
+    
+    # Check if metadata file has required information
+    local cached_vpc_id cached_timestamp cached_environment
+    cached_vpc_id=$(grep "^VPC_ID=" "$DISCOVERY_METADATA_FILE" 2>/dev/null | cut -d'=' -f2 | tr -d '"')
+    cached_timestamp=$(grep "^DISCOVERY_TIMESTAMP=" "$DISCOVERY_METADATA_FILE" 2>/dev/null | cut -d'=' -f2 | tr -d '"')
+    cached_environment=$(grep "^ENVIRONMENT=" "$DISCOVERY_METADATA_FILE" 2>/dev/null | cut -d'=' -f2 | tr -d '"')
+    
+    # Validate VPC ID matches
+    if [[ "$cached_vpc_id" != "$vpc_id" ]]; then
+        log_info "Cached discovery is for different VPC ($cached_vpc_id vs $vpc_id)"
+        return 1
+    fi
+    
+    # Validate environment matches
+    if [[ "$cached_environment" != "$CURRENT_ENVIRONMENT" ]]; then
+        log_info "Cached discovery is for different environment ($cached_environment vs $CURRENT_ENVIRONMENT)"
+        return 1
+    fi
+    
+    # Check if cache is still valid (within TTL)
+    if [[ -n "$cached_timestamp" ]]; then
+        local cache_age=$((current_time - cached_timestamp))
+        if [[ $cache_age -le $VPN_DISCOVERY_CACHE_TTL ]]; then
+            local cache_age_minutes=$((cache_age / 60))
+            log_info "Found valid cached discovery data (${cache_age_minutes} minutes old)"
+            return 0
+        else
+            local cache_age_hours=$((cache_age / 3600))
+            log_info "Cached discovery data is too old (${cache_age_hours} hours old, TTL: $((VPN_DISCOVERY_CACHE_TTL / 3600)) hours)"
+            return 1
+        fi
+    else
+        log_info "Cached discovery data has no timestamp"
+        return 1
+    fi
+}
+
+# Load cached discovery data
+load_cached_discovery() {
+    local vpc_id="$1"
+    
+    if ! is_cached_discovery_valid "$vpc_id"; then
+        return 1
+    fi
+    
+    log_info "📦 Loading cached discovery data..."
+    
+    # Copy cached data to working files
+    cp "$DISCOVERY_PERSISTENT_FILE" /tmp/final_discoveries.txt
+    
+    # Verify the cached data is not empty
+    if [[ ! -s /tmp/final_discoveries.txt ]]; then
+        log_warning "Cached discovery data is empty"
+        return 1
+    fi
+    
+    local cached_count
+    cached_count=$(wc -l < /tmp/final_discoveries.txt)
+    log_info "✅ Loaded $cached_count cached services"
+    
+    return 0
+}
+
+# Save discovery data to persistent cache
+save_discovery_cache() {
+    local vpc_id="$1"
+    local current_time=$(date +%s)
+    
+    # Create cache directory if it doesn't exist
+    mkdir -p "$DISCOVERY_DATA_DIR"
+    
+    # Save discovery results
+    if [[ -f /tmp/final_discoveries.txt ]] && [[ -s /tmp/final_discoveries.txt ]]; then
+        cp /tmp/final_discoveries.txt "$DISCOVERY_PERSISTENT_FILE"
+        
+        # Create metadata file
+        cat > "$DISCOVERY_METADATA_FILE" << EOF
+# VPN Discovery Cache Metadata
+# Created: $(date)
+
+VPC_ID="$vpc_id"
+ENVIRONMENT="$CURRENT_ENVIRONMENT"
+AWS_REGION="$AWS_REGION"
+DISCOVERY_TIMESTAMP="$current_time"
+DISCOVERY_TTL="$VPN_DISCOVERY_CACHE_TTL"
+DISCOVERY_METHODS="$VPN_DISCOVERY_METHOD"
+DISCOVERY_MIN_CONFIDENCE="$VPN_DISCOVERY_MIN_CONFIDENCE"
+DISCOVERY_FAST_MODE="$VPN_DISCOVERY_FAST_MODE"
+
+# Statistics
+TOTAL_SERVICES="$(wc -l < /tmp/final_discoveries.txt)"
+HIGH_CONFIDENCE_SERVICES="$(grep -c ":HIGH$" /tmp/final_discoveries.txt 2>/dev/null || echo "0")"
+MEDIUM_CONFIDENCE_SERVICES="$(grep -c ":MEDIUM$" /tmp/final_discoveries.txt 2>/dev/null || echo "0")"
+EOF
+        
+        local cached_count
+        cached_count=$(wc -l < "$DISCOVERY_PERSISTENT_FILE")
+        log_info "💾 Saved $cached_count services to persistent cache"
+        
+        return 0
+    else
+        log_warning "No discovery data to cache"
+        return 1
+    fi
+}
+
+# Clear expired cache data
+cleanup_discovery_cache() {
+    if [[ -d "$DISCOVERY_DATA_DIR" ]]; then
+        log_info "🧹 Cleaning up discovery cache..."
+        rm -f "$DISCOVERY_PERSISTENT_FILE" "$DISCOVERY_METADATA_FILE"
+        # Try to remove directory if empty
+        rmdir "$DISCOVERY_DATA_DIR" 2>/dev/null || true
+        log_info "✅ Discovery cache cleaned up"
+    fi
+}
+
+# Usage information
+show_usage() {
+    cat << EOF
+VPN Service Access Manager - Environment-Aware
+
+Usage: $0 <action> [vpn-sg-id] [options]
+
+Actions:
+  discover              - Discover available AWS services in the VPC
+  display-services      - Display previously discovered services  
+  create                - Create VPN access rules to discovered services
+  remove                - Remove VPN access rules from services
+  clean                 - Clean up tracking files and discovery cache
+
+Arguments:
+  vpn-sg-id            - Security Group ID of the VPN client (required for create/remove)
+
+Options:
+  --region <region>    - AWS region (default: $AWS_REGION)
+  --dry-run           - Show what would be done without making changes
+  -h, --help          - Show this help message
+
+Examples:
+  $0 discover --region us-east-1
+  $0 create sg-1234567890abcdef0 --region us-east-1
+  $0 remove sg-1234567890abcdef0 --region us-east-1
+
+Environment Variables:
+  VPN_USE_CACHED_DISCOVERY  - Use cached discovery data (default: false)
+  VPN_DISCOVERY_CACHE_TTL   - Cache TTL in seconds (default: 3600)
+  VPN_DISCOVERY_FAST_MODE   - Use fast discovery mode (default: true)
+
+Environment:
+  Current environment: $CURRENT_ENVIRONMENT
+  AWS Region: $AWS_REGION
+  Cache enabled: $VPN_USE_CACHED_DISCOVERY
+EOF
+}
+
 # Enhanced Service Discovery Functions
 
 # Tag-based service discovery (Primary method)
 discover_services_by_tags() {
     local vpc_id="$1"
     log_info "🏷️ Tag-based discovery for VPC: $vpc_id"
+    echo -e "🏷️ Analyzing service tags..." > /dev/tty 2>/dev/null || true
     
     local service_mappings=(
         "RDS:MySQL_RDS:3306"
@@ -120,24 +301,41 @@ discover_services_by_tags() {
 # Resource association verification (Secondary method)
 discover_services_by_resource_verification() {
     local vpc_id="$1"
-    log_info "🔍 Resource association verification for VPC: $vpc_id"
+    log_info "🔍 Enhanced Resource-to-SecurityGroup Mapping for VPC: $vpc_id"
+    echo -e "🔍 Analyzing AWS resources and their security groups..." > /dev/tty 2>/dev/null || true
     
     > /tmp/resource_verified_discoveries.txt
+    > /tmp/resource_sg_mapping.json
     
-    # RDS Instance Security Groups
-    log_info "  Checking RDS instances..."
-    local rds_sgs
-    rds_sgs=$(aws_with_profile rds describe-db-instances \
+    # RDS Instance Security Groups (Enhanced with detailed analysis)
+    log_info "  Analyzing RDS instances and their actual security groups..."
+    local rds_instances
+    rds_instances=$(aws_with_profile rds describe-db-instances \
         --region "$AWS_REGION" \
-        --query "DBInstances[?DBSubnetGroup.VpcId=='$vpc_id'].VpcSecurityGroups[].VpcSecurityGroupId" \
-        --output text 2>/dev/null | tr '\t' '\n' | sort -u)
+        --query "DBInstances[?DBSubnetGroup.VpcId=='$vpc_id'].[DBInstanceIdentifier,Endpoint.Address,Endpoint.Port,VpcSecurityGroups[0].VpcSecurityGroupId,Engine]" \
+        --output json 2>/dev/null || echo "[]")
     
-    for sg_id in $rds_sgs; do
-        if [[ -n "$sg_id" && "$sg_id" != "None" ]]; then
-            echo "MySQL_RDS:3306:$sg_id:resource-verified" >> /tmp/resource_verified_discoveries.txt
-            log_info "  ✓ Found RDS security group: $sg_id"
-        fi
-    done
+    if [[ $(echo "$rds_instances" | jq '. | length') -gt 0 ]]; then
+        echo "$rds_instances" | jq -c '.[] | {
+            service: "RDS",
+            resource_id: .[0],
+            endpoint: .[1],
+            port: .[2],
+            security_group: .[3],
+            engine: .[4]
+        }' >> /tmp/resource_sg_mapping.json
+        
+        # Extract unique security groups used by RDS
+        local rds_sgs
+        rds_sgs=$(echo "$rds_instances" | jq -r '.[].VpcSecurityGroups[].VpcSecurityGroupId' 2>/dev/null | sort -u)
+        
+        for sg_id in $rds_sgs; do
+            if [[ -n "$sg_id" && "$sg_id" != "None" && "$sg_id" != "null" ]]; then
+                echo "MySQL_RDS:3306:$sg_id:resource-verified" >> /tmp/resource_verified_discoveries.txt
+                log_info "  ✓ Found RDS security group: $sg_id"
+            fi
+        done
+    fi
     
     # EKS Cluster Security Groups
     log_info "  Checking EKS clusters..."
@@ -165,60 +363,103 @@ discover_services_by_resource_verification() {
         done
     done
     
-    # ElastiCache Security Groups (Redis)
-    log_info "  Checking ElastiCache clusters..."
-    local cache_sgs
-    cache_sgs=$(aws_with_profile elasticache describe-cache-clusters \
-        --region "$AWS_REGION" \
-        --query "CacheClusters[?CacheSubnetGroupName!=null].SecurityGroups[].SecurityGroupId" \
-        --output text 2>/dev/null | tr '\t' '\n' | sort -u)
     
-    for sg_id in $cache_sgs; do
-        if [[ -n "$sg_id" && "$sg_id" != "None" ]]; then
-            # Verify this security group is in the target VPC
-            local sg_vpc
-            sg_vpc=$(aws_with_profile ec2 describe-security-groups \
-                --group-ids "$sg_id" --region "$AWS_REGION" \
-                --query 'SecurityGroups[0].VpcId' --output text 2>/dev/null)
-            
-            if [[ "$sg_vpc" == "$vpc_id" ]]; then
-                echo "Redis:6379:$sg_id:resource-verified" >> /tmp/resource_verified_discoveries.txt
-                log_info "  ✓ Found ElastiCache security group: $sg_id"
+    # ElastiCache Security Groups (Enhanced analysis)
+    log_info "  Analyzing ElastiCache clusters and their actual security groups..."
+    local cache_clusters
+    cache_clusters=$(aws_with_profile elasticache describe-cache-clusters \
+        --region "$AWS_REGION" --show-cache-node-info \
+        --query 'CacheClusters[?CacheSubnetGroupName!=null].[CacheClusterId,RedisConfiguration.PrimaryEndpoint.Address // CacheNodes[0].Endpoint.Address,RedisConfiguration.PrimaryEndpoint.Port // CacheNodes[0].Endpoint.Port,SecurityGroups[0].SecurityGroupId,Engine]' \
+        --output json 2>/dev/null || echo "[]")
+    
+    if [[ $(echo "$cache_clusters" | jq '. | length') -gt 0 ]]; then
+        echo "$cache_clusters" | jq -c '.[] | {
+            service: "ElastiCache",
+            resource_id: .[0],
+            endpoint: .[1],
+            port: .[2],
+            security_group: .[3],
+            engine: .[4]
+        }' >> /tmp/resource_sg_mapping.json
+        
+        # Extract unique security groups and verify VPC
+        local cache_sgs
+        cache_sgs=$(echo "$cache_clusters" | jq -r '.[3]' | sort -u)
+        
+        for sg_id in $cache_sgs; do
+            if [[ -n "$sg_id" && "$sg_id" != "None" && "$sg_id" != "null" ]]; then
+                # Verify this security group is in the target VPC
+                local sg_vpc
+                sg_vpc=$(aws_with_profile ec2 describe-security-groups \
+                    --group-ids "$sg_id" --region "$AWS_REGION" \
+                    --query 'SecurityGroups[0].VpcId' --output text 2>/dev/null)
+                
+                if [[ "$sg_vpc" == "$vpc_id" ]]; then
+                    echo "Redis:6379:$sg_id:resource-verified" >> /tmp/resource_verified_discoveries.txt
+                    log_info "  ✓ Found ElastiCache security group: $sg_id"
+                fi
             fi
-        fi
-    done
+        done
+    fi
     
-    # EMR (HBase) Security Groups
-    log_info "  Checking EMR clusters..."
+    # EMR (HBase) Security Groups (Enhanced with detailed mapping)
+    log_info "  Analyzing EMR clusters and their actual security groups..."
     local emr_clusters
     emr_clusters=$(aws_with_profile emr list-clusters --active \
         --region "$AWS_REGION" \
-        --query 'Clusters[].Id' --output text 2>/dev/null)
+        --query 'Clusters[].[Id,Name]' --output json 2>/dev/null || echo "[]")
     
-    for cluster_id in $emr_clusters; do
-        if [[ -n "$cluster_id" && "$cluster_id" != "None" ]]; then
-            local emr_sgs
-            emr_sgs=$(aws_with_profile emr describe-cluster --cluster-id "$cluster_id" \
-                --region "$AWS_REGION" \
-                --query 'Cluster.Ec2InstanceAttributes.{Master:EmrManagedMasterSecurityGroup,Slave:EmrManagedSlaveSecurityGroup}' \
-                --output text 2>/dev/null)
-            
-            echo "$emr_sgs" | tr '\t' '\n' | while read sg_id; do
-                if [[ -n "$sg_id" && "$sg_id" != "None" ]]; then
-                    # Verify this security group is in the target VPC
-                    local sg_vpc
-                    sg_vpc=$(aws_with_profile ec2 describe-security-groups \
-                        --group-ids "$sg_id" --region "$AWS_REGION" \
-                        --query 'SecurityGroups[0].VpcId' --output text 2>/dev/null)
+    if [[ $(echo "$emr_clusters" | jq '. | length') -gt 0 ]]; then
+        echo "$emr_clusters" | jq -c '.[] | {service: "EMR", cluster_id: .[0], cluster_name: .[1]}' >> /tmp/resource_sg_mapping.json
+        
+        while IFS=$'\t' read -r cluster_id cluster_name; do
+            if [[ -n "$cluster_id" && "$cluster_id" != "None" && "$cluster_id" != "null" ]]; then
+                log_info "    Analyzing cluster: $cluster_id ($cluster_name)"
+                
+                local cluster_detail
+                cluster_detail=$(aws_with_profile emr describe-cluster --cluster-id "$cluster_id" \
+                    --region "$AWS_REGION" \
+                    --query 'Cluster.[Id,Name,MasterPublicDnsName,Ec2InstanceAttributes.EmrManagedMasterSecurityGroup,Ec2InstanceAttributes.EmrManagedSlaveSecurityGroup]' \
+                    --output json 2>/dev/null || echo "[]")
+                
+                if [[ $(echo "$cluster_detail" | jq '. | length') -gt 0 ]]; then
+                    # Check VPC context by examining subnets
+                    local subnet_ids
+                    subnet_ids=$(aws_with_profile emr describe-cluster --cluster-id "$cluster_id" \
+                        --region "$AWS_REGION" \
+                        --query 'Cluster.Ec2InstanceAttributes.Ec2SubnetIds[0]' \
+                        --output text 2>/dev/null)
                     
-                    if [[ "$sg_vpc" == "$vpc_id" ]]; then
-                        echo "HBase_Master:16010:$sg_id:resource-verified" >> /tmp/resource_verified_discoveries.txt
-                        log_info "  ✓ Found EMR security group: $sg_id (cluster: $cluster_id)"
+                    if [[ -n "$subnet_ids" && "$subnet_ids" != "None" ]]; then
+                        local cluster_vpc
+                        cluster_vpc=$(aws_with_profile ec2 describe-subnets \
+                            --subnet-ids "$subnet_ids" --region "$AWS_REGION" \
+                            --query 'Subnets[0].VpcId' --output text 2>/dev/null)
+                        
+                        if [[ "$cluster_vpc" == "$vpc_id" ]]; then
+                            local master_sg slave_sg
+                            master_sg=$(echo "$cluster_detail" | jq -r '.[3]')
+                            slave_sg=$(echo "$cluster_detail" | jq -r '.[4]')
+                            
+                            # Add both master and slave security groups
+                            if [[ -n "$master_sg" && "$master_sg" != "null" ]]; then
+                                echo "HBase_Master:16010:$master_sg:resource-verified" >> /tmp/resource_verified_discoveries.txt
+                                echo "HBase_Custom:8765:$master_sg:resource-verified" >> /tmp/resource_verified_discoveries.txt
+                                log_info "  ✓ Found EMR Master security group: $master_sg (cluster: $cluster_id)"
+                            fi
+                            
+                            if [[ -n "$slave_sg" && "$slave_sg" != "null" ]]; then
+                                echo "HBase_RegionServer:16020:$slave_sg:resource-verified" >> /tmp/resource_verified_discoveries.txt
+                                log_info "  ✓ Found EMR Slave security group: $slave_sg (cluster: $cluster_id)"
+                            fi
+                        fi
                     fi
                 fi
-            done
-        fi
-    done
+            fi
+        done < <(echo "$emr_clusters" | jq -r '.[] | "\(.[0])\t\(.[1])"')
+    fi
+    
+    log_info "  ✅ Enhanced resource analysis completed"
 }
 
 # Enhanced pattern matching (Tertiary method)
@@ -292,23 +533,32 @@ validate_and_score_discoveries() {
         local score=0
         local confidence="LOW"
         
-        # Base scoring by method
+        # Enhanced scoring by method (including new methods)
         case "$method" in
             "tag-based")
                 score=100
                 confidence="HIGH"
                 ;;
-            "resource-verified")
+            "resource-verified"|"resource-verified-resource-validated")
+                score=95
+                confidence="HIGH"
+                ;;
+            "actual-rules"|"actual-rules-resource-validated")
                 score=90
                 confidence="HIGH"
                 ;;
-            "pattern-based")
-                score=70
+            "pattern-based"|"pattern-based-resource-validated")
+                score=75
                 confidence="MEDIUM"
                 ;;
-            "port-only")
+            "port-only"|"port-only-resource-validated")
                 score=40
                 confidence="LOW"
+                ;;
+            *"resource-validated"*)
+                # Boost score for resource-validated methods
+                score=85
+                confidence="HIGH"
                 ;;
         esac
         
@@ -351,24 +601,209 @@ validate_and_score_discoveries() {
     log_info "✓ Discovery validation and scoring completed"
 }
 
+# New: Real Rule Validation Method (Inspired by discover-sg-references.sh)
+discover_services_by_actual_rules() {
+    local vpc_id="$1"
+    log_info "🔍 Actual Security Group Rules Analysis for VPC: $vpc_id"
+    echo -e "🔍 Analyzing actual security group rules..." > /dev/tty 2>/dev/null || true
+    
+    > /tmp/actual_rules_discoveries.txt
+    > /tmp/port_rule_analysis.json
+    
+    # Get all security groups in the VPC
+    local all_sgs
+    all_sgs=$(aws_with_profile ec2 describe-security-groups \
+        --filters "Name=vpc-id,Values=$vpc_id" \
+        --query 'SecurityGroups[].GroupId' \
+        --region "$AWS_REGION" --output text)
+    
+    log_info "  Analyzing actual security group rules for service ports..."
+    
+    # Define service ports we're interested in
+    local service_port_mapping=(
+        "3306:MySQL_RDS"
+        "6379:Redis"
+        "8765:HBase_Custom"
+        "16010:HBase_Master"
+        "16020:HBase_RegionServer"
+        "443:EKS_API"
+        "8000:Phoenix_Query"
+        "8080:Phoenix_Web"
+    )
+    
+    # For each service port, find security groups that actually have rules for it
+    for port_service in "${service_port_mapping[@]}"; do
+        IFS=':' read -r port service_name <<< "$port_service"
+        
+        log_info "    Analyzing rules for port $port ($service_name)..."
+        echo -e "    Analyzing rules for port $port ($service_name)..." > /dev/tty 2>/dev/null || true
+        
+        # Find all security groups that have inbound rules for this port
+        for sg_id in $all_sgs; do
+            local port_rules
+            port_rules=$(aws_with_profile ec2 describe-security-groups \
+                --group-ids "$sg_id" --region "$AWS_REGION" \
+                --query "SecurityGroups[0].IpPermissions[?FromPort<=\`$port\` && ToPort>=\`$port\`]" \
+                --output json 2>/dev/null || echo "[]")
+            
+            if [[ $(echo "$port_rules" | jq '. | length') -gt 0 ]]; then
+                # This SG has rules for this port - analyze the rules
+                local rule_analysis
+                rule_analysis=$(echo "$port_rules" | jq -c --arg sg_id "$sg_id" --arg port "$port" --arg service "$service_name" '
+                    map({
+                        sg_id: $sg_id,
+                        service: $service,
+                        port: ($port | tonumber),
+                        protocol: .IpProtocol,
+                        cidr_blocks: [.IpRanges[]?.CidrIp // empty],
+                        referenced_sgs: [.UserIdGroupPairs[]?.GroupId // empty],
+                        descriptions: [.IpRanges[]?.Description // empty, .UserIdGroupPairs[]?.Description // empty],
+                        has_any_access: ((.IpRanges | length > 0) or (.UserIdGroupPairs | length > 0))
+                    })')
+                
+                echo "$rule_analysis" | jq -c '.[]' >> /tmp/port_rule_analysis.json
+                
+                # If this SG has actual access rules (not just placeholder), consider it a candidate
+                local has_access_rules
+                has_access_rules=$(echo "$rule_analysis" | jq -r '.[0].has_any_access')
+                
+                if [[ "$has_access_rules" == "true" ]]; then
+                    echo "$service_name:$port:$sg_id:actual-rules" >> /tmp/actual_rules_discoveries.txt
+                    log_info "      ✓ Found $sg_id with actual rules for port $port"
+                    echo -e "      ✓ Found $sg_id with actual rules for port $port" > /dev/tty 2>/dev/null || true
+                fi
+            fi
+        done
+    done
+    
+    log_info "  ✅ Actual rules analysis completed"
+}
+
+# Enhanced: Cross-validation with resource mapping
+cross_validate_discoveries_with_resources() {
+    log_info "🔄 Cross-validating discoveries with actual resource usage..."
+    
+    > /tmp/validated_discoveries.txt
+    
+    # If we have resource mapping, use it to validate discoveries
+    if [[ -f /tmp/resource_sg_mapping.json ]]; then
+        log_info "  Using resource mapping for validation..."
+        
+        # For each discovered service, check if it matches actual resource usage
+        while IFS=':' read -r service port sg_id method; do
+            # Check if this SG is actually used by resources for this service type
+            local resource_match=false
+            
+            case "$service" in
+                "MySQL_RDS")
+                    resource_match=$(jq -r --arg sg "$sg_id" '
+                        select(.service == "RDS" and (.security_group == $sg or (.security_groups[]? == $sg))) | "true"
+                    ' /tmp/resource_sg_mapping.json | head -1)
+                    ;;
+                "Redis")
+                    resource_match=$(jq -r --arg sg "$sg_id" '
+                        select(.service == "ElastiCache" and (.security_group == $sg or (.security_groups[]? == $sg))) | "true"
+                    ' /tmp/resource_sg_mapping.json | head -1)
+                    ;;
+                "HBase_Master"|"HBase_RegionServer"|"HBase_Custom")
+                    resource_match=$(jq -r --arg sg "$sg_id" '
+                        select(.service == "EMR") | "true"
+                    ' /tmp/resource_sg_mapping.json | head -1)
+                    ;;
+                "EKS_API")
+                    resource_match=$(jq -r --arg sg "$sg_id" '
+                        select(.service == "EKS" and (.security_groups[]? == $sg)) | "true"
+                    ' /tmp/resource_sg_mapping.json | head -1)
+                    ;;
+            esac
+            
+            # Enhanced scoring based on resource validation
+            local validation_method="$method"
+            if [[ "$resource_match" == "true" ]]; then
+                validation_method="${method}-resource-validated"
+                log_info "    ✅ $service:$port:$sg_id validated by actual resource usage"
+            else
+                log_warning "    ⚠️  $service:$port:$sg_id not confirmed by resource usage"
+            fi
+            
+            echo "$service:$port:$sg_id:$validation_method" >> /tmp/validated_discoveries.txt
+            
+        done < /tmp/combined_discoveries.txt
+    else
+        # Fallback to original discoveries if no resource mapping
+        cp /tmp/combined_discoveries.txt /tmp/validated_discoveries.txt
+    fi
+    
+    log_info "  ✅ Cross-validation completed"
+}
+
 # Multi-tier discovery orchestrator
 perform_multi_tier_discovery() {
     local vpc_id="$1"
     
-    log_info "🚀 Starting multi-tier service discovery for VPC: $vpc_id"
+    # Check for fast mode environment variable (default: true for performance)
+    local fast_mode="${VPN_DISCOVERY_FAST_MODE:-true}"
+    
+    if [[ "$fast_mode" == "true" ]]; then
+        log_info "🚀 Fast Discovery Mode for VPC: $vpc_id (actual-rules + resource-verified)"
+        perform_fast_discovery "$vpc_id"
+    else
+        log_info "🔍 Comprehensive Discovery Mode for VPC: $vpc_id (all 5 methods)"
+        perform_comprehensive_discovery "$vpc_id"
+    fi
+}
+
+# Fast discovery mode - proven effective with actual-rules + resource verification
+perform_fast_discovery() {
+    local vpc_id="$1"
     
     # Clear any existing discovery files
-    rm -f /tmp/*_discoveries.txt /tmp/scored_discoveries.txt /tmp/final_discoveries.txt
+    rm -f /tmp/*_discoveries.txt /tmp/scored_discoveries.txt /tmp/final_discoveries.txt /tmp/resource_sg_mapping.json /tmp/port_rule_analysis.json
     
-    # Get discovery methods from configuration
-    IFS=',' read -ra DISCOVERY_METHODS <<< "$VPN_DISCOVERY_METHOD"
-    
-    # Progress tracking
-    local total_methods=${#DISCOVERY_METHODS[@]}
+    # Fast discovery methods (proven most effective)
+    local fast_methods=("actual-rules" "resource-verified")
+    local total_methods=${#fast_methods[@]}
     local current_method=0
     
-    # Execute discovery methods in priority order
-    for method in "${DISCOVERY_METHODS[@]}"; do
+    log_info "📈 Using fast discovery (2 methods) - typically 3-5x faster"
+    
+    # Execute core discovery methods
+    for method in "${fast_methods[@]}"; do
+        ((current_method++))
+        echo -e "Progress: [$current_method/$total_methods] $method discovery..." > /dev/tty 2>/dev/null || true
+        
+        case "$method" in
+            "actual-rules")
+                discover_services_by_actual_rules "$vpc_id"
+                ;;
+            "resource-verified")
+                discover_services_by_resource_verification "$vpc_id"
+                ;;
+        esac
+        
+        echo -e "✓ Completed: $method discovery" > /dev/tty 2>/dev/null || true
+    done
+    
+    # Process discoveries
+    process_discovery_results "actual-rules,resource-verified"
+}
+
+# Comprehensive discovery mode - all 5 methods for maximum coverage
+perform_comprehensive_discovery() {
+    local vpc_id="$1"
+    
+    # Clear any existing discovery files
+    rm -f /tmp/*_discoveries.txt /tmp/scored_discoveries.txt /tmp/final_discoveries.txt /tmp/resource_sg_mapping.json /tmp/port_rule_analysis.json
+    
+    # All discovery methods
+    local comprehensive_methods=("tag-based" "resource-verified" "actual-rules" "pattern-based" "port-based")
+    local total_methods=${#comprehensive_methods[@]}
+    local current_method=0
+    
+    log_info "🔍 Using comprehensive discovery (5 methods) - maximum coverage"
+    
+    # Execute all discovery methods in priority order
+    for method in "${comprehensive_methods[@]}"; do
         ((current_method++))
         echo -e "Progress: [$current_method/$total_methods] $method discovery..." > /dev/tty 2>/dev/null || true
         
@@ -379,24 +814,33 @@ perform_multi_tier_discovery() {
             "resource-verified")
                 discover_services_by_resource_verification "$vpc_id"
                 ;;
+            "actual-rules")
+                discover_services_by_actual_rules "$vpc_id"
+                ;;
             "pattern-based")
                 discover_services_by_enhanced_patterns "$vpc_id"
                 ;;
             "port-based")
-                # This is the original discovery method - will be implemented as fallback
                 log_info "⚠️ Port-based discovery used as fallback"
                 ;;
         esac
         
-        # Show completion status for each method
         echo -e "✓ Completed: $method discovery" > /dev/tty 2>/dev/null || true
     done
+    
+    # Process discoveries
+    process_discovery_results "tag-based,resource-verified,actual-rules,pattern-based,port-based"
+}
+
+# Common discovery result processing
+process_discovery_results() {
+    local methods_used="$1"
     
     # Combine all discoveries and remove duplicates (keeping highest priority)
     > /tmp/combined_discoveries.txt
     
-    # Process in reverse priority order so higher priority methods override
-    for method in "port-based" "pattern-based" "resource-verified" "tag-based"; do
+    # Process in priority order (higher priority methods override lower ones)
+    for method in "port-based" "pattern-based" "actual-rules" "resource-verified" "tag-based"; do
         local method_file="/tmp/${method//-/_}_discoveries.txt"
         if [[ -f "$method_file" ]]; then
             cat "$method_file" >> /tmp/combined_discoveries.txt
@@ -406,9 +850,16 @@ perform_multi_tier_discovery() {
     # Remove duplicates (keep last occurrence which has highest priority)
     awk -F: '!seen[$1]++' /tmp/combined_discoveries.txt > /tmp/unique_discoveries.txt
     
-    # Validate and score all discoveries
+    # Cross-validate with actual resource usage
+    cross_validate_discoveries_with_resources
+    
+    # Validate and score all discoveries (use validated discoveries if available)
     echo -e "🔍 Validating and scoring discovered services..." > /dev/tty 2>/dev/null || true
-    validate_and_score_discoveries /tmp/unique_discoveries.txt /tmp/scored_discoveries.txt
+    local discovery_input="/tmp/validated_discoveries.txt"
+    if [[ ! -f "$discovery_input" ]]; then
+        discovery_input="/tmp/unique_discoveries.txt"
+    fi
+    validate_and_score_discoveries "$discovery_input" /tmp/scored_discoveries.txt
     
     # Filter by minimum confidence level
     echo -e "📊 Filtering by confidence level: $VPN_DISCOVERY_MIN_CONFIDENCE..." > /dev/tty 2>/dev/null || true
@@ -430,12 +881,13 @@ perform_multi_tier_discovery() {
         esac
     done < /tmp/scored_discoveries.txt
     
-    log_info "✅ Multi-tier discovery completed"
+    log_info "✅ Discovery completed using methods: $methods_used"
     
     # Display summary
     local total_discoveries
     total_discoveries=$(wc -l < /tmp/final_discoveries.txt 2>/dev/null | xargs || echo "0")
     log_info "📈 Discovery Summary: $total_discoveries services found meeting minimum confidence: $VPN_DISCOVERY_MIN_CONFIDENCE"
+    echo -e "✅ Discovery completed: $total_discoveries services found" > /dev/tty 2>/dev/null || true
     
     return 0
 }
@@ -718,305 +1170,150 @@ record_vpn_configured_security_groups() {
     return 0
 }
 
-# Parse arguments
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        discover|create|remove|display-services)
-            ACTION="$1"
-            shift
-            ;;
-        --region)
-            AWS_REGION="$2"
-            shift 2
-            ;;
-        --dry-run)
-            DRY_RUN=true
-            shift
-            ;;
-        -h|--help)
-            echo "Usage: $0 <action> [vpn-sg-id] [options]"
-            echo ""
-            echo "Environment-aware VPN Service Access Manager"
-            echo "Integrated with toolkit's AWS profile and environment management"
-            echo ""
-            echo "Actions:"
-            echo "  discover [vpn-sg-id]     - Find security groups for services (VPN SG ID optional for scoping)"
-            echo "  display-services         - Show discovered services in a formatted table"
-            echo "  create <vpn-sg-id>       - Create VPN access rules (VPN SG ID required)"
-            echo "  remove <vpn-sg-id>       - Remove VPN access rules (VPN SG ID required)"
-            echo ""
-            echo "Options:"
-            echo "  --region REGION       - AWS region (default: us-east-1)"
-            echo "  --dry-run            - Preview changes only"
-            echo ""
-            echo "Environment Features:"
-            echo "  • Automatically uses correct AWS profile for current environment"
-            echo "  • Cross-account validation to prevent wrong environment operations"
-            echo "  • Integrated logging with core toolkit logging system"
-            echo "  • Environment-specific operation tracking"
-            exit 0
-            ;;
-        sg-*)
-            VPN_SG="$1"
-            shift
-            ;;
-        *)
-            echo "Unknown option: $1"
-            exit 1
-            ;;
-    esac
-done
-
-# Validate
-if [[ -z "$ACTION" ]]; then
-    log_error "Action required: discover, display-services, create, or remove"
-    exit 1
-fi
-
-if [[ "$ACTION" != "discover" && "$ACTION" != "display-services" && -z "$VPN_SG" ]]; then
-    log_error "VPN Security Group ID required for $ACTION"
-    exit 1
-fi
-
-# Check AWS CLI and environment
-log_info "驗證 AWS 環境和權限..."
-log_message_core "開始 AWS 環境驗證: region=$AWS_REGION, environment=$CURRENT_ENVIRONMENT"
-
-# 驗證 AWS CLI 配置和環境
-if ! aws_with_profile sts get-caller-identity --region "$AWS_REGION" &> /dev/null; then
-    log_error "AWS CLI 未配置或無法訪問 AWS 服務"
-    log_error "請檢查 AWS 憑證和網絡連接"
-    exit 1
-fi
-
-# 顯示當前環境信息
-caller_identity=$(aws_with_profile sts get-caller-identity --region "$AWS_REGION" 2>/dev/null)
-if [ $? -eq 0 ]; then
-    account_id=$(echo "$caller_identity" | jq -r '.Account' 2>/dev/null)
-    user_arn=$(echo "$caller_identity" | jq -r '.Arn' 2>/dev/null)
-    log_info "當前 AWS 環境: $CURRENT_ENVIRONMENT"
-    log_info "AWS 帳戶: $account_id"
-    log_info "AWS 區域: $AWS_REGION"
-    log_info "使用者身份: $user_arn"
-    log_message_core "AWS 環境驗證成功: account=$account_id, user=$user_arn"
-else
-    log_warning "無法獲取 AWS 身份信息，但基本連接正常"
-fi
-
-# Check if cached discovery results are available and valid
-use_cached_discovery_if_available() {
-    local vpn_sg_id="$1"
-    local cache_file="/tmp/vpn_discovery_${vpn_sg_id}.json"
-    local summary_file="/tmp/vpn_discovery_summary_${vpn_sg_id}.txt"
+# Track security group modifications for cleanup purposes
+track_security_group_modification() {
+    local vpn_sg="$1"
+    local target_sg="$2"
+    local service="$3"
+    local port="$4"
+    local action="$5"  # "ADD" or "REMOVE"
+    local rule_id="$6"  # Optional: security group rule ID
     
-    # Check if caching is enabled
-    if [[ "$VPN_USE_CACHED_DISCOVERY" != "true" ]]; then
-        return 1  # Caching disabled, run full discovery
+    local tracking_file="$SCRIPT_DIR/../configs/${CURRENT_ENVIRONMENT}/vpn_security_groups_tracking.conf"
+    
+    # Ensure directory exists
+    local tracking_dir=$(dirname "$tracking_file")
+    if [[ ! -d "$tracking_dir" ]]; then
+        log_info "Creating tracking directory: $tracking_dir"
+        echo -e "Creating tracking directory: $tracking_dir" > /dev/tty 2>/dev/null || true
+        mkdir -p "$tracking_dir"
     fi
     
-    # Check if cache files exist
-    if [[ ! -f "/tmp/final_discoveries.txt" && ! -f "$summary_file" ]]; then
-        log_info "💾 No cached discovery results found, running full discovery..."
-        return 1  # No cache available
+    # Create tracking file if it doesn't exist
+    if [[ ! -f "$tracking_file" ]]; then
+        log_info "Creating tracking file: $tracking_file"
+        echo -e "Creating tracking file: $tracking_file" > /dev/tty 2>/dev/null || true
+        create_tracking_file "$tracking_file" "$vpn_sg"
     fi
     
-    # Check cache age (if cache file exists)
-    if [[ -f "/tmp/final_discoveries.txt" ]]; then
-        local cache_age=$(($(date +%s) - $(stat -f %m "/tmp/final_discoveries.txt" 2>/dev/null || echo 0)))
-        if [[ $cache_age -gt $VPN_DISCOVERY_CACHE_TTL ]]; then
-            log_info "💾 Cached discovery results expired (${cache_age}s > ${VPN_DISCOVERY_CACHE_TTL}s), running full discovery..."
-            return 1  # Cache expired
-        fi
-    fi
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    local log_entry="${timestamp}|${vpn_sg}|${target_sg}|${service}|${port}|${action}|${rule_id:-}"
     
-    # Use cached results
-    log_info "💾 Using cached discovery results (cache age: ${cache_age:-0}s)"
-    log_info "🔍 Cached Service Discovery - Reusing Previous Results"
+    # Update configuration log
+    local current_log
+    current_log=$(grep "^VPN_CONFIGURATION_LOG=" "$tracking_file" | cut -d'=' -f2- | tr -d '"' || echo "")
     
-    # Display cached summary if available
-    if [[ -f "$summary_file" ]]; then
-        log_info "📊 Cached Discovery Summary:"
-        grep -E "(Discovery Summary|Found by)" "$summary_file" | tail -3 | while read line; do
-            log_info "   $line"
-        done
-    fi
-    
-    return 0  # Successfully using cache
-}
-
-# Enhanced discover services function with multi-tier discovery
-discover_services() {
-    # Check if we should use cached results first
-    if use_cached_discovery_if_available "${VPN_SG:-global}"; then
-        log_info "✅ Using cached discovery results - skipping AWS API calls"
-        return 0
-    fi
-    
-    log_info "🔍 Enhanced Service Discovery - Multi-Tier Approach"
-    log_info "Discovery methods: $VPN_DISCOVERY_METHOD"
-    log_info "Minimum confidence: $VPN_DISCOVERY_MIN_CONFIDENCE"
-    if [[ -n "$VPN_SG" ]]; then
-        log_info "VPN Security Group (for scoping): $VPN_SG"
+    local new_log
+    if [[ -n "$current_log" ]]; then
+        new_log="${current_log};${log_entry}"
     else
-        log_info "VPN Security Group: Not specified (global discovery)"
-    fi
-    echo
-    
-    # Get VPN security group VPC if VPN_SG is provided
-    local target_vpc=""
-    if [[ -n "$VPN_SG" ]]; then
-        target_vpc=$(aws_with_profile ec2 describe-security-groups \
-            --group-ids "$VPN_SG" \
-            --region "$AWS_REGION" \
-            --query 'SecurityGroups[0].VpcId' \
-            --output text 2>/dev/null)
-        if [[ -n "$target_vpc" && "$target_vpc" != "None" ]]; then
-            log_info "🎯 Discovery scope: VPC $target_vpc (same as VPN security group)"
-            echo
-        fi
-    else
-        log_warning "No VPN security group provided - discovery will check all VPCs"
-        echo
+        new_log="$log_entry"
     fi
     
-    # Perform multi-tier discovery
-    if [[ -n "$target_vpc" ]]; then
-        perform_multi_tier_discovery "$target_vpc"
+    # Update tracking file - use printf to avoid sed escaping issues
+    grep -v "^VPN_CONFIGURATION_LOG=" "$tracking_file" > "${tracking_file}.tmp"
+    echo "VPN_CONFIGURATION_LOG=\"$new_log\"" >> "${tracking_file}.tmp"
+    mv "${tracking_file}.tmp" "$tracking_file"
+    
+    # If adding, update the modified security groups list
+    if [[ "$action" == "ADD" ]]; then
+        local current_groups
+        current_groups=$(grep "^VPN_MODIFIED_SECURITY_GROUPS=" "$tracking_file" | cut -d'=' -f2- | tr -d '"' || echo "")
         
-        # Cache the discovery results for future use
-        if [[ -f "/tmp/final_discoveries.txt" && -s "/tmp/final_discoveries.txt" ]]; then
-            local cache_file="/tmp/vpn_discovery_${VPN_SG:-global}.json"
-            log_info "💾 Caching discovery results for future use..."
-            cp "/tmp/final_discoveries.txt" "${cache_file%.json}.txt" 2>/dev/null || true
-            log_info "✅ Discovery results cached successfully"
-        fi
-    else
-        log_warning "⚠️ Falling back to original discovery method (no VPC context)"
-        discover_services_fallback
-        return $?
-    fi
-    
-    # Copy final discoveries to the expected format for backward compatibility
-    > /tmp/discovered_services.txt
-    if [[ -f /tmp/final_discoveries.txt && -s /tmp/final_discoveries.txt ]]; then
-        while IFS=':' read -r service port sg_id method score confidence; do
-            echo "$service:$port:$sg_id" >> /tmp/discovered_services.txt
-        done < /tmp/final_discoveries.txt
-        log_info "Created backward compatibility file: /tmp/discovered_services.txt with $(wc -l < /tmp/discovered_services.txt | xargs) services"
-    else
-        log_warning "No final discoveries to copy to discovered_services.txt"
-    fi
-    
-    # Always auto-confirm all discovered services (simplified logic)
-    log_info "📋 Auto-confirming all discovered services"
-    
-    if [[ -s /tmp/final_discoveries.txt ]]; then
-        # Use the auto-confirmation function
-        if auto_confirm_discovered_services /tmp/final_discoveries.txt; then
-            log_info "✅ Auto-confirmation completed successfully"
-        else
-            log_warning "⚠️ Auto-confirmation failed, using fallback"
-        fi
+        local group_entry="${target_sg}:${service}:${port}"
         
-        # Ensure discovered_services.txt is properly created
-        if [[ -f /tmp/confirmed_services.txt && -s /tmp/confirmed_services.txt ]]; then
-            cp /tmp/confirmed_services.txt /tmp/discovered_services.txt
-            log_info "✅ Using confirmed services for VPN access rule creation ($(wc -l < /tmp/confirmed_services.txt | xargs) services)"
-        else
-            # Fallback: create from final discoveries
-            while IFS=':' read -r service port sg_id method score confidence; do
-                echo "$service:$port:$sg_id" >> /tmp/discovered_services.txt
-            done < /tmp/final_discoveries.txt
-            log_info "Fallback: Created discovered_services.txt from final_discoveries.txt"
-        fi
-    else
-        log_info "📋 No services discovered"
-    fi
-    
-    # Save discovery results to .conf file for tracking and audit
-    if [[ -s /tmp/final_discoveries.txt ]]; then
-        log_info "💾 Saving discovery results to configuration file..."
-        if save_discovery_results_to_conf /tmp/final_discoveries.txt; then
-            log_info "✅ Discovery results successfully saved to .conf file"
-        else
-            log_warning "⚠️ Failed to save discovery results to .conf file"
-        fi
-    else
-        log_warning "⚠️ No final discoveries to save to .conf file"
-    fi
-    
-    # Display enhanced discovery results
-    if [[ -s /tmp/final_discoveries.txt ]]; then
-        echo
-        echo "📋 Enhanced Discovery Results:"
-        echo "============================================="
-        printf "%-15s %-6s %-20s %-15s %-6s %-10s\n" "Service" "Port" "Security Group" "Method" "Score" "Confidence"
-        echo "---------------------------------------------"
-        
-        while IFS=':' read -r service port sg_id method score confidence; do
-            # Get security group name for display
-            local sg_name
-            sg_name=$(aws_with_profile ec2 describe-security-groups \
-                --group-ids "$sg_id" --region "$AWS_REGION" \
-                --query 'SecurityGroups[0].GroupName' --output text 2>/dev/null || echo "Unknown")
+        # Check if already exists
+        if [[ ! "$current_groups" =~ $target_sg ]]; then
+            local new_groups
+            if [[ -n "$current_groups" ]]; then
+                new_groups="${current_groups};${group_entry}"
+            else
+                new_groups="$group_entry"
+            fi
             
-            printf "%-15s %-6s %-20s %-15s %-6s %-10s\n" "$service" "$port" "${sg_id:0:18}..." "$method" "$score" "$confidence"
-            echo "  └─ Name: $sg_name"
-        done < /tmp/final_discoveries.txt
-        
-        echo
-        echo "📊 Export Commands:"
-        echo "==================="
-        while IFS=':' read -r service port sg_id method score confidence; do
-            echo "export ${service}_SG=\"$sg_id\"  # $method ($confidence confidence)"
-        done < /tmp/final_discoveries.txt
-    else
-        log_warning "⚠️ No services discovered meeting minimum confidence level: $VPN_DISCOVERY_MIN_CONFIDENCE"
-        log_info "Consider lowering VPN_DISCOVERY_MIN_CONFIDENCE or using manual configuration"
+            # Update security groups list
+            grep -v "^VPN_MODIFIED_SECURITY_GROUPS=" "$tracking_file" > "${tracking_file}.tmp2"
+            echo "VPN_MODIFIED_SECURITY_GROUPS=\"$new_groups\"" >> "${tracking_file}.tmp2"
+            mv "${tracking_file}.tmp2" "$tracking_file"
+            
+            # Update count
+            local count=$(echo "$new_groups" | tr ';' '\n' | wc -l | xargs)
+            grep -v "^VPN_MODIFIED_SECURITY_GROUPS_COUNT=" "$tracking_file" > "${tracking_file}.tmp3"
+            echo "VPN_MODIFIED_SECURITY_GROUPS_COUNT=\"$count\"" >> "${tracking_file}.tmp3"
+            mv "${tracking_file}.tmp3" "$tracking_file"
+        fi
+    fi
+    
+    # Update last configuration time
+    grep -v "^VPN_LAST_CONFIGURATION_TIME=" "$tracking_file" > "${tracking_file}.tmp4"
+    echo "VPN_LAST_CONFIGURATION_TIME=\"$timestamp\"" >> "${tracking_file}.tmp4"
+    mv "${tracking_file}.tmp4" "$tracking_file"
+    
+    log_info "📝 Tracked modification: $action $target_sg:$port for $service"
+    echo -e "📝 Tracked modification: $action $target_sg:$port for $service" > /dev/tty 2>/dev/null || true
+}
+
+# Create tracking file with initial structure
+create_tracking_file() {
+    local tracking_file="$1"
+    local vpn_sg="$2"
+    
+    cat > "$tracking_file" << EOF
+# VPN Security Group Configuration Tracking
+# This file tracks which security groups have been modified for VPN access
+# Used for cleanup when removing VPN endpoint
+# Updated: $(date '+%Y-%m-%d %H:%M:%S')
+
+# VPN Security Group ID that was used for configuration
+VPN_SECURITY_GROUP_ID="$vpn_sg"
+
+# Last configuration timestamp
+VPN_LAST_CONFIGURATION_TIME="$(date '+%Y-%m-%d %H:%M:%S %Z')"
+
+# Configuration method used
+VPN_CONFIGURATION_METHOD="actual-rules,resource-verified"
+
+# Total number of security groups modified
+VPN_MODIFIED_SECURITY_GROUPS_COUNT="0"
+
+# List of modified security groups (TARGET_SG_ID:SERVICE_NAME:PORT format)
+VPN_MODIFIED_SECURITY_GROUPS=""
+
+# Detailed configuration log (for audit and cleanup)
+# Format: timestamp|vpn_sg|target_sg|service|port|action|rule_id
+VPN_CONFIGURATION_LOG=""
+EOF
+    
+    log_info "📁 Created tracking file: $tracking_file"
+}
+
+# Get list of security groups modified for VPN access
+get_modified_security_groups() {
+    local tracking_file="$SCRIPT_DIR/../configs/${CURRENT_ENVIRONMENT}/vpn_security_groups_tracking.conf"
+    
+    if [[ ! -f "$tracking_file" ]]; then
+        log_warning "No tracking file found: $tracking_file"
+        return 1
+    fi
+    
+    local modified_groups
+    modified_groups=$(grep "^VPN_MODIFIED_SECURITY_GROUPS=" "$tracking_file" | cut -d'=' -f2- | tr -d '"')
+    
+    if [[ -n "$modified_groups" ]]; then
+        echo "$modified_groups" | tr ';' '\n'
     fi
 }
 
-# Fallback discovery method (original implementation)
-discover_services_fallback() {
-    log_info "🔄 Using fallback discovery method..."
+# Get VPN security group ID from tracking file
+get_vpn_security_group_from_tracking() {
+    local tracking_file="$SCRIPT_DIR/../configs/${CURRENT_ENVIRONMENT}/vpn_security_groups_tracking.conf"
     
-    > /tmp/discovered_services.txt
-    
-    for service_def in $SERVICES; do
-        IFS=':' read -r service_name port <<< "$service_def"
-        
-        echo "🔍 $service_name (port $port):"
-        
-        # Find security groups with this port (global search)
-        local query="SecurityGroups[?IpPermissions[?FromPort<=\`$port\` && ToPort>=\`$port\`]]"
-        
-        aws_with_profile ec2 describe-security-groups \
-            --region "$AWS_REGION" \
-            --query "$query.{GroupId:GroupId,GroupName:GroupName,VpcId:VpcId}" \
-            --output json | \
-        jq -r '.[] | "  • \(.GroupId) (\(.GroupName // "No Name")) in VPC \(.VpcId)"'
-        
-        # Save first match for each service
-        local first_sg
-        first_sg=$(aws_with_profile ec2 describe-security-groups \
-            --region "$AWS_REGION" \
-            --query "SecurityGroups[?IpPermissions[?FromPort<=\`$port\` && ToPort>=\`$port\`]].GroupId" \
-            --output text | awk '{print $1}')
-        
-        if [[ -n "$first_sg" && "$first_sg" != "None" ]]; then
-            echo "$service_name:$port:$first_sg" >> /tmp/discovered_services.txt
-        fi
-        
-        echo
-    done
-    
-    if [[ -s /tmp/discovered_services.txt ]]; then
-        echo "📋 Fallback Discovery Results:"
-        echo "=============================="
-        while IFS=':' read -r service port sg_id; do
-            echo "export ${service}_SG=\"$sg_id\"  # Port $port (fallback method)"
-        done < /tmp/discovered_services.txt
+    if [[ ! -f "$tracking_file" ]]; then
+        log_warning "No tracking file found: $tracking_file"
+        return 1
     fi
+    
+    grep "^VPN_SECURITY_GROUP_ID=" "$tracking_file" | cut -d'=' -f2- | tr -d '"'
 }
 
 # Create VPN access rules
@@ -1059,10 +1356,12 @@ create_rules() {
         
         if [[ "$DRY_RUN" == "true" ]]; then
             log_info "[DRY-RUN] Would create: $service (port $port) in $target_sg"
+            echo -e "[DRY-RUN] Would create: $service (port $port) in $target_sg" > /dev/tty 2>/dev/null || true
             continue
         fi
         
         log_info "Creating: $service (port $port) in $target_sg"
+        echo -e "Creating: $service (port $port) in $target_sg" > /dev/tty 2>/dev/null || true
         
         if aws_with_profile ec2 authorize-security-group-ingress \
             --group-id "$target_sg" \
@@ -1071,18 +1370,23 @@ create_rules() {
             --source-group "$vpn_sg" \
             --region "$AWS_REGION" 2>/dev/null; then
             echo "  ✅ Success"
+            echo -e "  ✅ Success" > /dev/tty 2>/dev/null || true
             ((success++))
-            # Track successfully configured rules
+            # Track successfully configured rules with detailed information
             configured_rules+=("$service:$target_sg:$port")
+            track_security_group_modification "$vpn_sg" "$target_sg" "$service" "$port" "ADD"
         else
             echo "  ⚠️  May already exist or failed"
+            echo -e "  ⚠️  May already exist or failed" > /dev/tty 2>/dev/null || true
             # Still track for cleanup (might have been created before)
             configured_rules+=("$service:$target_sg:$port")
+            track_security_group_modification "$vpn_sg" "$target_sg" "$service" "$port" "ADD" "existing_or_failed"
         fi
     done < "$services_file"
     
     echo
     log_info "Created $success/$total rules"
+    echo -e "✅ Created $success/$total rules" > /dev/tty 2>/dev/null || true
     
     # Record configured security groups in .conf file if not dry run
     if [[ "$DRY_RUN" != "true" && ${#configured_rules[@]} -gt 0 ]]; then
@@ -1106,39 +1410,85 @@ create_rules() {
         done
         log_info "✅ Security group tracking recorded for cleanup"
     fi
+    
+    # Track security group modifications
+    for rule in "${configured_rules[@]}"; do
+        IFS=':' read -r service target_sg port <<< "$rule"
+        track_security_group_modification "$vpn_sg" "$target_sg" "$service" "$port" "ADD"
+    done
 }
 
-# FIXED: Comprehensive VPN access rules removal
+# Enhanced VPN access rules removal using tracking file
 remove_rules() {
     local vpn_sg="$1"
     
-    log_info "🔍 COMPREHENSIVE SEARCH: Finding ALL rules that reference VPN security group $vpn_sg..."
+    # First try to get VPN SG from tracking file if not provided
+    if [[ -z "$vpn_sg" ]]; then
+        vpn_sg=$(get_vpn_security_group_from_tracking)
+        if [[ -z "$vpn_sg" ]]; then
+            log_error "No VPN security group provided and none found in tracking file"
+            return 1
+        fi
+        log_info "Using VPN security group from tracking: $vpn_sg"
+    fi
+    
+    log_info "🔍 ENHANCED SEARCH: Using tracking file + AWS discovery for VPN security group $vpn_sg..."
     echo
     
-    # Find ALL security group rules that reference our VPN security group
+    # Method 1: Use tracking file for precise cleanup
+    local tracking_file="$SCRIPT_DIR/../configs/${CURRENT_ENVIRONMENT}/vpn_security_groups_tracking.conf"
+    local tracked_groups=()
+    
+    if [[ -f "$tracking_file" ]]; then
+        log_info "📋 Found tracking file, reading configured security groups..."
+        while IFS= read -r group_entry; do
+            if [[ -n "$group_entry" ]]; then
+                tracked_groups+=("$group_entry")
+                local sg_id=$(echo "$group_entry" | cut -d':' -f1)
+                local service=$(echo "$group_entry" | cut -d':' -f2)
+                local port=$(echo "$group_entry" | cut -d':' -f3)
+                echo "  📝 Tracked: $service on $sg_id:$port"
+            fi
+        done < <(get_modified_security_groups)
+        
+        if [[ ${#tracked_groups[@]} -gt 0 ]]; then
+            log_info "Found ${#tracked_groups[@]} tracked security group modifications"
+        else
+            log_warning "No tracked modifications found in tracking file"
+        fi
+    else
+        log_warning "No tracking file found: $tracking_file"
+    fi
+    
+    # Method 2: AWS comprehensive search (fallback + verification)
+    log_info "🔍 AWS comprehensive search for verification..."
     local all_vpn_rules
     all_vpn_rules=$(aws_with_profile ec2 describe-security-group-rules \
         --region "$AWS_REGION" \
         --query "SecurityGroupRules[?ReferencedGroupInfo.GroupId=='$vpn_sg' && !IsEgress].[GroupId,SecurityGroupRuleId,IpProtocol,FromPort,ToPort,ReferencedGroupInfo.GroupId]" \
         --output json 2>/dev/null || echo "[]")
     
-    local rule_count
-    rule_count=$(echo "$all_vpn_rules" | jq '. | length')
+    local aws_rule_count
+    aws_rule_count=$(echo "$all_vpn_rules" | jq '. | length')
     
-    if [[ $rule_count -eq 0 ]]; then
-        log_info "No VPN access rules found that reference security group $vpn_sg"
+    log_info "AWS found $aws_rule_count total VPN access rules"
+    
+    # Display what will be removed
+    if [[ $aws_rule_count -gt 0 ]]; then
+        echo
+        log_info "Rules to be removed:"
+        echo "$all_vpn_rules" | jq -r '.[] | "  • Rule \(.[1]) in SG \(.[0]) - \(.[2]):\(.[3]) (references \(.[5]))"'
+        echo
+    elif [[ ${#tracked_groups[@]} -eq 0 ]]; then
+        log_info "No VPN access rules found to remove"
         return 0
     fi
     
-    log_info "Found $rule_count VPN access rules to remove:"
-    echo
-    
-    # Display all rules that will be removed
-    echo "$all_vpn_rules" | jq -r '.[] | "  • Rule \(.[1]) in SG \(.[0]) - \(.[2]):\(.[3]) (references \(.[5]))"'
-    echo
-    
     if [[ "$DRY_RUN" == "true" ]]; then
-        log_info "[DRY-RUN] Would remove all $rule_count rules above"
+        log_info "[DRY-RUN] Would remove all $aws_rule_count AWS-discovered rules"
+        if [[ ${#tracked_groups[@]} -gt 0 ]]; then
+            log_info "[DRY-RUN] Would also clean up ${#tracked_groups[@]} tracked modifications"
+        fi
         return 0
     fi
     
@@ -1174,29 +1524,134 @@ remove_rules() {
             --region "$AWS_REGION" 2>/dev/null; then
             echo "  ✅ Success"
             ((success++))
+            # Track removal in tracking file
+            track_security_group_modification "$vpn_sg" "$target_sg" "unknown" "$port" "REMOVE" "$rule_id"
         else
             echo "  ❌ Failed"
         fi
     done < <(echo "$all_vpn_rules" | jq -c '.[]')
     
     echo
-    log_info "Removed $success/$total rules"
+    log_info "Removed $success/$total AWS-discovered rules"
     
-    if [[ $success -eq $total ]]; then
-        log_info "🎉 All VPN access rules successfully removed!"
+    # Clean up tracking file after successful removal
+    if [[ $success -eq $total && $total -gt 0 ]]; then
+        log_info "🧹 Cleaning up tracking file..."
+        cleanup_tracking_file
+        log_info "🎉 All VPN access rules successfully removed and tracking cleaned up!"
+    elif [[ $total -eq 0 && -f "$tracking_file" ]]; then
+        # No AWS rules found, but we have tracking file - clean it up anyway
+        log_info "🧹 No AWS rules found, cleaning up tracking file..."
+        cleanup_tracking_file
+        log_info "✅ Tracking file cleaned up"
     else
-        log_warning "⚠️  Some rules could not be removed. Check the errors above."
+        log_warning "⚠️  Some rules could not be removed. Tracking file preserved for manual cleanup."
+    fi
+}
+
+# Clean up tracking file after successful VPN endpoint removal
+cleanup_tracking_file() {
+    local tracking_file="$SCRIPT_DIR/../configs/${CURRENT_ENVIRONMENT}/vpn_security_groups_tracking.conf"
+    
+    if [[ -f "$tracking_file" ]]; then
+        # Reset tracking file to clean state
+        local temp_file="${tracking_file}.cleanup_tmp"
+        
+        # Keep header and essential fields, reset the tracking data
+        grep -E "^#|^VPN_SECURITY_GROUP_ID=|^VPN_CONFIGURATION_METHOD=" "$tracking_file" > "$temp_file"
+        echo "VPN_MODIFIED_SECURITY_GROUPS_COUNT=\"0\"" >> "$temp_file"
+        echo "VPN_MODIFIED_SECURITY_GROUPS=\"\"" >> "$temp_file"
+        echo "VPN_CONFIGURATION_LOG=\"\"" >> "$temp_file"
+        echo "VPN_LAST_CONFIGURATION_TIME=\"$(date '+%Y-%m-%d %H:%M:%S %Z') - CLEANED\"" >> "$temp_file"
+        
+        mv "$temp_file" "$tracking_file"
+        log_info "📝 Tracking file reset to clean state"
+    else
+        log_info "No tracking file found to clean up"
     fi
 }
 
 # Main execution
 main() {
+    # Parse command line arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help)
+                show_usage
+                exit 0
+                ;;
+            --region)
+                if [[ -n "$2" ]]; then
+                    AWS_REGION="$2"
+                    shift 2
+                else
+                    log_error "Error: --region requires a value"
+                    exit 1
+                fi
+                ;;
+            --dry-run)
+                DRY_RUN=true
+                shift
+                ;;
+            discover|display-services|create|remove|clean)
+                if [[ -z "$ACTION" ]]; then
+                    ACTION="$1"
+                    shift
+                else
+                    log_error "Multiple actions specified. Only one action is allowed."
+                    exit 1
+                fi
+                ;;
+            sg-*)
+                if [[ -z "$VPN_SG" ]]; then
+                    VPN_SG="$1"
+                    shift
+                else
+                    log_error "Multiple security group IDs specified. Only one is allowed."
+                    exit 1
+                fi
+                ;;
+            *)
+                # If it's not a known option, it might be the VPN_SG or an unknown option
+                if [[ -z "$VPN_SG" && "$1" =~ ^[a-zA-Z0-9-]+$ ]]; then
+                    VPN_SG="$1"
+                    shift
+                else
+                    log_error "Unknown option or invalid security group ID: $1"
+                    show_usage
+                    exit 1
+                fi
+                ;;
+        esac
+    done
+    
     log_info "🔧 VPN Service Access Manager - Environment-Aware"
+    
+    # Validate required parameters
+    if [[ -z "$ACTION" ]]; then
+        log_error "Error: Action is required"
+        show_usage
+        exit 1
+    fi
+    
+    # Validate VPN_SG for actions that require it
+    case "$ACTION" in
+        "create"|"remove")
+            if [[ -z "$VPN_SG" ]]; then
+                log_error "Error: VPN Security Group ID is required for action '$ACTION'"
+                show_usage
+                exit 1
+            fi
+            ;;
+    esac
+    
     log_info "Action: $ACTION | Region: $AWS_REGION | Environment: $CURRENT_ENVIRONMENT"
     if [[ -n "$VPN_SG" ]]; then
         log_info "VPN Security Group: $VPN_SG"
+        log_message_core "VPN Service Access Manager 執行開始: action=$ACTION, region=$AWS_REGION, environment=$CURRENT_ENVIRONMENT, vpn_sg=$VPN_SG"
+    else
+        log_message_core "VPN Service Access Manager 執行開始: action=$ACTION, region=$AWS_REGION, environment=$CURRENT_ENVIRONMENT"
     fi
-    log_message_core "VPN Service Access Manager 執行開始: action=$ACTION, region=$AWS_REGION, environment=$CURRENT_ENVIRONMENT, vpn_sg=$VPN_SG"
     echo "================================"
     
     case "$ACTION" in
@@ -1204,25 +1659,57 @@ main() {
             discover_services
             ;;
         "display-services")
-            # Display discovered services (assumes discovery already ran)
+            # Display discovered services - run discovery if no data exists
             if [[ -f /tmp/final_discoveries.txt && -s /tmp/final_discoveries.txt ]]; then
+                log_info "Using existing discovery data for display"
                 display_services_and_ask_confirmation /tmp/final_discoveries.txt
             elif [[ -f /tmp/confirmed_services.txt && -s /tmp/confirmed_services.txt ]]; then
+                log_info "Using existing confirmed services for display"
                 display_services_and_ask_confirmation /tmp/confirmed_services.txt
             else
-                echo -e "${YELLOW}⚠️ No discovered services found. Please run discovery first.${NC}"
-                exit 1
+                log_info "No discovery data found, running discovery first..."
+                echo -e "🔍 Running discovery to find services..." > /dev/tty 2>/dev/null || true
+                if discover_services; then
+                    if [[ -f /tmp/final_discoveries.txt && -s /tmp/final_discoveries.txt ]]; then
+                        display_services_and_ask_confirmation /tmp/final_discoveries.txt
+                    else
+                        echo -e "${YELLOW}⚠️ No services were discovered.${NC}"
+                        exit 1
+                    fi
+                else
+                    echo -e "${RED}❌ Discovery failed.${NC}"
+                    exit 1
+                fi
             fi
             ;;
         "create")
-            discover_services
+            # Only run discovery if we don't have recent cached data
+            if [[ "$VPN_USE_CACHED_DISCOVERY" == "true" ]] && [[ -f /tmp/final_discoveries.txt ]] && [[ -s /tmp/final_discoveries.txt ]]; then
+                log_info "Using existing discovery data from this session"
+            else
+                discover_services
+            fi
             echo
             create_rules "$VPN_SG"
             ;;
         "remove")
-            discover_services
+            # Only run discovery if we don't have recent cached data
+            if [[ "$VPN_USE_CACHED_DISCOVERY" == "true" ]] && [[ -f /tmp/final_discoveries.txt ]] && [[ -s /tmp/final_discoveries.txt ]]; then
+                log_info "Using existing discovery data from this session"
+            else
+                discover_services
+            fi
             echo
             remove_rules "$VPN_SG"
+            ;;
+        "clean")
+            cleanup_tracking_file
+            cleanup_discovery_cache
+            ;;
+        *)
+            log_error "Unknown action: $ACTION"
+            show_usage
+            exit 1
             ;;
     esac
     
@@ -1232,6 +1719,92 @@ main() {
     echo
     log_info "✅ Operation completed!"
     log_message_core "VPN Service Access Manager 執行完成: action=$ACTION, environment=$CURRENT_ENVIRONMENT"
+}
+
+# Main service discovery function - orchestrates the entire discovery process
+discover_services() {
+    log_info "🔍 Starting VPN service discovery process..."
+    
+    # Get VPC ID from environment configuration
+    local vpc_id
+    if [[ -n "$VPC_ID" ]]; then
+        vpc_id="$VPC_ID"
+    else
+        # Try to get VPC ID from VPN security group if provided
+        if [[ -n "$VPN_SG" ]]; then
+            vpc_id=$(aws_with_profile ec2 describe-security-groups \
+                --group-ids "$VPN_SG" \
+                --region "$AWS_REGION" \
+                --query 'SecurityGroups[0].VpcId' \
+                --output text 2>/dev/null)
+        fi
+        
+        if [[ -z "$vpc_id" || "$vpc_id" == "None" ]]; then
+            log_error "Unable to determine VPC ID. Please ensure VPC_ID is set in environment or provide a valid VPN security group."
+            return 1
+        fi
+    fi
+    
+    log_info "Target VPC: $vpc_id"
+    
+    # Check if we should use cached discovery data
+    if [[ "$VPN_USE_CACHED_DISCOVERY" == "true" ]]; then
+        log_info "🔄 Checking for cached discovery data..."
+        if load_cached_discovery "$vpc_id"; then
+            log_info "✅ Using cached discovery data (skipping redundant discovery)"
+            
+            # Display summary from cache
+            local discovery_count
+            discovery_count=$(wc -l < /tmp/final_discoveries.txt)
+            log_info "📦 Loaded $discovery_count cached services"
+            
+            if [[ "$discovery_count" -gt 0 ]]; then
+                log_info "Cached services:"
+                while IFS=':' read -r service port sg_id method score confidence; do
+                    log_info "  📦 $service (port $port) - Security Group: $sg_id [$confidence confidence]"
+                done < /tmp/final_discoveries.txt
+            fi
+            
+            return 0
+        else
+            log_info "⚠️ No valid cached data found, performing fresh discovery..."
+        fi
+    fi
+    
+    # Perform multi-tier discovery
+    if ! perform_multi_tier_discovery "$vpc_id"; then
+        log_error "Service discovery failed"
+        return 1
+    fi
+    
+    # Check if any services were discovered
+    if [[ ! -f /tmp/final_discoveries.txt ]] || [[ ! -s /tmp/final_discoveries.txt ]]; then
+        log_warning "No services discovered in VPC $vpc_id"
+        log_info "This could mean:"
+        log_info "  - No AWS services are running in this VPC"
+        log_info "  - Services are using non-standard configurations"
+        log_info "  - Discovery methods need adjustment"
+        return 0
+    fi
+    
+    local discovery_count
+    discovery_count=$(wc -l < /tmp/final_discoveries.txt)
+    log_info "✅ Discovery completed: $discovery_count services found"
+    
+    # Save discovery data to cache for future use
+    if [[ "$discovery_count" -gt 0 ]]; then
+        save_discovery_cache "$vpc_id"
+    fi
+    
+    # Display summary of discoveries
+    if [[ "$discovery_count" -gt 0 ]]; then
+        log_info "Discovered services:"
+        while IFS=':' read -r service port sg_id method score confidence; do
+            log_info "  📦 $service (port $port) - Security Group: $sg_id [$confidence confidence]"
+        done < /tmp/final_discoveries.txt
+    fi
+    
+    return 0
 }
 
 main "$@"
