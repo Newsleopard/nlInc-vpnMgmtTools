@@ -401,6 +401,97 @@ aws ec2 describe-security-groups \
 
 這種專用安全群組架構不僅符合 AWS 的安全最佳實踐，也為企業提供了一個可靠、可擴展且易於管理的 VPN 存取控制解決方案。
 
+### 🔧 新 AWS 服務 VPN 存取管理
+
+當企業新增 AWS 服務並使用新的安全群組時，本工具套件提供多種方式來自動授予 VPN 存取權限：
+
+#### 🚀 選項 1：自動發現和配置（建議）
+
+工具套件的智慧發現系統能夠自動偵測新服務：
+
+```bash
+# 重新執行發現以尋找新服務
+./admin-tools/manage_vpn_service_access.sh discover sg-0b324ca8f7b16f95c
+
+# 然後為新發現的服務配置存取權限
+./admin-tools/manage_vpn_service_access.sh create sg-0b324ca8f7b16f95c
+```
+
+#### 🎯 選項 2：手動安全群組存取
+
+如果您知道新服務的安全群組 ID：
+
+```bash
+# 為特定安全群組授予 VPN 存取權限
+aws ec2 authorize-security-group-ingress \
+    --group-id <NEW_SERVICE_SECURITY_GROUP_ID> \
+    --source-group sg-0b324ca8f7b16f95c \
+    --protocol tcp \
+    --port <SERVICE_PORT>
+```
+
+#### 🔍 選項 3：新增服務到發現配置
+
+為了永久包含新服務，可以將其新增到發現系統中（編輯 `manage_vpn_service_access.sh` 第 30 行）：
+
+```bash
+SERVICES="MySQL_RDS:3306 Redis:6379 HBase_Master:16010 HBase_RegionServer:16020 HBase_Custom:8765 Phoenix_Query:8000 Phoenix_Web:8080 EKS_API:443 NEW_SERVICE:PORT"
+```
+
+#### 🔄 可用的發現方法
+
+系統使用多種發現方法，通常能自動找到新服務：
+
+1. **實際規則分析** - 掃描現有安全群組規則
+2. **資源驗證發現** - 將實際 AWS 資源對應到安全群組
+3. **標籤基礎發現** - 透過 AWS 標籤尋找服務
+4. **模式基礎發現** - 透過命名模式識別服務
+
+#### 📋 新服務的建議工作流程
+
+```bash
+# 1. 執行發現檢查是否偵測到新服務
+./admin-tools/manage_vpn_service_access.sh discover sg-0b324ca8f7b16f95c
+
+# 2. 檢查發現了什麼
+./admin-tools/manage_vpn_service_access.sh report --summary
+
+# 3. 如果新服務出現，配置存取權限
+./admin-tools/manage_vpn_service_access.sh create sg-0b324ca8f7b16f95c
+
+# 4. 如果未被發現，手動新增規則
+aws ec2 authorize-security-group-ingress \
+    --group-id <NEW_SERVICE_SG> \
+    --source-group sg-0b324ca8f7b16f95c \
+    --protocol tcp \
+    --port <PORT>
+```
+
+#### 📊 VPN 存取追蹤和報告
+
+使用整合的報告系統檢視和管理 VPN 存取規則：
+
+```bash
+# 檢視 VPN 存取規則摘要
+./admin-tools/manage_vpn_service_access.sh report --summary
+
+# 檢視詳細報告
+./admin-tools/manage_vpn_service_access.sh report
+
+# 包含移除指令
+./admin-tools/manage_vpn_service_access.sh report --commands
+
+# 檢視報告說明
+./admin-tools/manage_vpn_service_access.sh report --help
+```
+
+#### 💡 最佳實踐建議
+
+- **定期執行發現**: 發現系統相當全面，應該能自動偵測大多數新服務
+- **使用追蹤系統**: 所有 VPN 存取修改都會記錄在 `vpn_security_groups_tracking.conf` 中
+- **檢查報告**: 定期檢視 VPN 存取報告以確保適當的存取控制
+- **環境隔離**: 新服務存取規則會自動按環境（Staging/Production）分離管理
+
 ---
 
 ## 🔐 安全 CSR 工作流程
