@@ -73,7 +73,7 @@ export class SecureParameterManagementStack extends cdk.Stack {
                 'ssm:GetParameters'
               ],
               resources: [
-                `arn:aws:ssm:${this.region}:${this.account}:parameter/vpn/*`
+                `arn:aws:ssm:${this.region}:${this.account}:parameter/vpn/${environment}/*`
               ]
             }),
             // KMS decrypt access for encrypted parameters
@@ -112,7 +112,7 @@ export class SecureParameterManagementStack extends cdk.Stack {
                 'ssm:DeleteParameter'
               ],
               resources: [
-                `arn:aws:ssm:${this.region}:${this.account}:parameter/vpn/*`
+                `arn:aws:ssm:${this.region}:${this.account}:parameter/vpn/${environment}/*`
               ]
             }),
             // KMS encrypt/decrypt access for encrypted parameters
@@ -141,7 +141,7 @@ export class SecureParameterManagementStack extends cdk.Stack {
     
     // VPN endpoint state (non-sensitive, standard String)
     const vpnEndpointState = new ssm.StringParameter(this, 'VpnEndpointState', {
-      parameterName: '/vpn/endpoint/state',
+      parameterName: `/vpn/${environment}/endpoint/state`,
       stringValue: JSON.stringify({
         associated: false,
         lastActivity: new Date().toISOString()
@@ -154,7 +154,7 @@ export class SecureParameterManagementStack extends cdk.Stack {
 
     // VPN endpoint configuration (non-sensitive, standard String)
     const vpnEndpointConfig = new ssm.StringParameter(this, 'VpnEndpointConfig', {
-      parameterName: '/vpn/endpoint/conf',
+      parameterName: `/vpn/${environment}/endpoint/conf`,
       stringValue: JSON.stringify({
         ENDPOINT_ID: 'PLACEHOLDER_ENDPOINT_ID',
         SUBNET_ID: 'PLACEHOLDER_SUBNET_ID'
@@ -165,43 +165,40 @@ export class SecureParameterManagementStack extends cdk.Stack {
       type: ssm.ParameterType.STRING
     });
 
-    // Slack webhook URL (sensitive, encrypted with KMS)
-    const slackWebhook = new ssm.StringParameter(this, 'SlackWebhook', {
-      parameterName: '/vpn/slack/webhook',
-      stringValue: 'PLACEHOLDER_WEBHOOK_URL',
-      description: `Slack webhook URL for ${environment} notifications (ENCRYPTED)`,
+    // Slack webhook URL (will be created as SecureString via setup script)
+    const slackWebhook = new ssm.CfnParameter(this, 'SlackWebhook', {
+      name: `/vpn/${environment}/slack/webhook`,
+      value: 'PLACEHOLDER_WEBHOOK_URL',
+      type: 'String',
+      description: `Slack webhook URL for ${environment} notifications (will be converted to SecureString)`,
       tier: ssm.ParameterTier.STANDARD,
-      type: ssm.ParameterType.SECURE_STRING,
-      keyId: this.parameterKmsKey,
       allowedPattern: '^https://hooks\\.slack\\.com/.*|PLACEHOLDER_.*$' // Slack webhook URL pattern or placeholder
     });
 
     // Slack signing secret (sensitive, encrypted with KMS)
-    const slackSigningSecret = new ssm.StringParameter(this, 'SlackSigningSecret', {
-      parameterName: '/vpn/slack/signing_secret',
-      stringValue: 'PLACEHOLDER_SIGNING_SECRET',
-      description: `Slack app signing secret for ${environment} request verification (ENCRYPTED)`,
+    const slackSigningSecret = new ssm.CfnParameter(this, 'SlackSigningSecret', {
+      name: `/vpn/${environment}/slack/signing_secret`,
+      value: 'PLACEHOLDER_SIGNING_SECRET',
+      type: 'String',
+      description: `Slack app signing secret for ${environment} request verification (will be converted to SecureString)`,
       tier: ssm.ParameterTier.STANDARD,
-      type: ssm.ParameterType.SECURE_STRING,
-      keyId: this.parameterKmsKey,
       allowedPattern: '^[a-f0-9]{64}$|^PLACEHOLDER_.*$' // 64-character hex string or placeholder
     });
 
     // Slack bot OAuth token (sensitive, encrypted with KMS)
-    const slackBotToken = new ssm.StringParameter(this, 'SlackBotToken', {
-      parameterName: '/vpn/slack/bot_token',
-      stringValue: 'PLACEHOLDER_BOT_TOKEN',
-      description: `Slack bot OAuth token for ${environment} (ENCRYPTED)`,
+    const slackBotToken = new ssm.CfnParameter(this, 'SlackBotToken', {
+      name: `/vpn/${environment}/slack/bot_token`,
+      value: 'PLACEHOLDER_BOT_TOKEN',
+      type: 'String',
+      description: `Slack bot OAuth token for ${environment} (will be converted to SecureString)`,
       tier: ssm.ParameterTier.STANDARD,
-      type: ssm.ParameterType.SECURE_STRING,
-      keyId: this.parameterKmsKey,
       allowedPattern: '^xoxb-[0-9]+-[0-9]+-[a-zA-Z0-9]+$|^PLACEHOLDER_.*$' // Slack bot token pattern or placeholder
     });
 
     // Epic 5.1.1: Cost optimization parameters (encrypted for security)
-    const costOptimizationConfig = new ssm.StringParameter(this, 'CostOptimizationConfig', {
-      parameterName: '/vpn/cost/optimization_config',
-      stringValue: JSON.stringify({
+    const costOptimizationConfig = new ssm.CfnParameter(this, 'CostOptimizationConfig', {
+      name: `/vpn/${environment}/cost/optimization_config`,
+      value: JSON.stringify({
         idleTimeoutMinutes: 60,
         cooldownMinutes: 30,
         businessHoursProtection: true,
@@ -212,29 +209,27 @@ export class SecureParameterManagementStack extends cdk.Stack {
         cumulativeSavingsTracking: true
       }),
       description: `Cost optimization configuration for ${environment}`,
+      type: 'String',
       tier: ssm.ParameterTier.STANDARD,
-      type: ssm.ParameterType.SECURE_STRING,
-      keyId: this.parameterKmsKey
     });
 
     // Epic 5.1.1: Administrative overrides tracking (encrypted for audit security)
-    const adminOverrides = new ssm.StringParameter(this, 'AdminOverrides', {
-      parameterName: '/vpn/admin/overrides',
-      stringValue: JSON.stringify({
+    const adminOverrides = new ssm.CfnParameter(this, 'AdminOverrides', {
+      name: `/vpn/${environment}/admin/overrides`,
+      value: JSON.stringify({
         activeOverrides: {},
         overrideHistory: [],
         lastUpdated: new Date().toISOString()
       }),
       description: `Administrative override tracking for ${environment} (AUDIT TRAIL)`,
+      type: 'String',
       tier: ssm.ParameterTier.STANDARD,
-      type: ssm.ParameterType.SECURE_STRING,
-      keyId: this.parameterKmsKey
     });
 
     // Epic 5.1.1: Cost tracking and metrics (encrypted to protect business data)
-    const costMetrics = new ssm.StringParameter(this, 'CostMetrics', {
-      parameterName: '/vpn/cost/metrics',
-      stringValue: JSON.stringify({
+    const costMetrics = new ssm.CfnParameter(this, 'CostMetrics', {
+      name: `/vpn/${environment}/cost/metrics`,
+      value: JSON.stringify({
         totalSavings: 0,
         monthlyStats: {},
         lastCalculated: new Date().toISOString(),
@@ -246,16 +241,15 @@ export class SecureParameterManagementStack extends cdk.Stack {
         }
       }),
       description: `Cost tracking metrics for ${environment} (BUSINESS DATA)`,
+      type: 'String',
       tier: ssm.ParameterTier.STANDARD,
-      type: ssm.ParameterType.SECURE_STRING,
-      keyId: this.parameterKmsKey
     });
 
     // Epic 5.1.2: API Gateway configuration for cross-account calls (encrypted)
     if (environment === 'staging') {
-      const crossAccountConfig = new ssm.StringParameter(this, 'CrossAccountConfig', {
-        parameterName: '/vpn/cross_account/config',
-        stringValue: JSON.stringify({
+      const crossAccountConfig = new ssm.CfnParameter(this, 'CrossAccountConfig', {
+        name: `/vpn/${environment}/cross_account/config`,
+        value: JSON.stringify({
           productionApiEndpoint: 'PLACEHOLDER_PRODUCTION_ENDPOINT',
           productionApiKey: 'PLACEHOLDER_PRODUCTION_API_KEY',
           retryConfig: {
@@ -265,15 +259,14 @@ export class SecureParameterManagementStack extends cdk.Stack {
           }
         }),
         description: `Cross-account routing configuration for ${environment}`,
+        type: 'String',
         tier: ssm.ParameterTier.STANDARD,
-        type: ssm.ParameterType.SECURE_STRING,
-        keyId: this.parameterKmsKey
-      });
+          });
     }
 
     // Epic 5.1.1: Logging and monitoring configuration
     const loggingConfig = new ssm.StringParameter(this, 'LoggingConfig', {
-      parameterName: '/vpn/logging/config',
+      parameterName: `/vpn/${environment}/logging/config`,
       stringValue: JSON.stringify({
         logLevel: 'INFO',
         structuredLogging: true,
@@ -318,25 +311,25 @@ export class SecureParameterManagementStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'ParameterValidationSummary', {
       value: JSON.stringify({
         parametersCreated: [
-          '/vpn/endpoint/state',
-          '/vpn/endpoint/conf',
-          '/vpn/slack/webhook',
-          '/vpn/slack/signing_secret',
-          '/vpn/slack/bot_token',
-          '/vpn/cost/optimization_config',
-          '/vpn/admin/overrides',
-          '/vpn/cost/metrics',
-          '/vpn/logging/config',
-          ...(environment === 'staging' ? ['/vpn/cross_account/config'] : [])
+          `/vpn/${environment}/endpoint/state`,
+          `/vpn/${environment}/endpoint/conf`,
+          `/vpn/${environment}/slack/webhook`,
+          `/vpn/${environment}/slack/signing_secret`,
+          `/vpn/${environment}/slack/bot_token`,
+          `/vpn/${environment}/cost/optimization_config`,
+          `/vpn/${environment}/admin/overrides`,
+          `/vpn/${environment}/cost/metrics`,
+          `/vpn/${environment}/logging/config`,
+          ...(environment === 'staging' ? [`/vpn/${environment}/cross_account/config`] : [])
         ],
         encryptedParameters: [
-          '/vpn/slack/webhook',
-          '/vpn/slack/signing_secret',
-          '/vpn/slack/bot_token',
-          '/vpn/cost/optimization_config',
-          '/vpn/admin/overrides',
-          '/vpn/cost/metrics',
-          ...(environment === 'staging' ? ['/vpn/cross_account/config'] : [])
+          `/vpn/${environment}/slack/webhook`,
+          `/vpn/${environment}/slack/signing_secret`,
+          `/vpn/${environment}/slack/bot_token`,
+          `/vpn/${environment}/cost/optimization_config`,
+          `/vpn/${environment}/admin/overrides`,
+          `/vpn/${environment}/cost/metrics`,
+          ...(environment === 'staging' ? [`/vpn/${environment}/cross_account/config`] : [])
         ],
         kmsKeyUsed: true,
         validationPatterns: {

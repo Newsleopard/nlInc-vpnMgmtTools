@@ -36,6 +36,7 @@ const secureParamStack = new SecureParameterManagementStack(app, `VpnSecureParam
 // Epic 5.1.2: Deploy main VPN automation stack with dependency on parameters
 const vpnStack = new VpnAutomationStack(app, `VpnAutomation-${environment}`, {
   environment,
+  secureParameterStack: secureParamStack,
   env: {
     account: process.env.CDK_DEFAULT_ACCOUNT,
     region: process.env.CDK_DEFAULT_REGION,
@@ -52,9 +53,8 @@ const vpnStack = new VpnAutomationStack(app, `VpnAutomation-${environment}`, {
 // Epic 5.1.1: Create dependency to ensure parameters are created first
 vpnStack.addDependency(secureParamStack);
 
-// Epic 5.1.2: Pass KMS key information to main stack
-vpnStack.addEnvironment('VPN_PARAMETER_KMS_KEY_ID', secureParamStack.parameterKmsKey.keyId);
-vpnStack.addEnvironment('VPN_PARAMETER_KMS_KEY_ARN', secureParamStack.parameterKmsKey.keyArn);
+// Epic 5.1.2: KMS key information is passed through commonEnvironment in VpnAutomationStack
+// The KMS key ID is already available in the commonEnvironment via the secureParameterStack prop
 
 // Add cross-stack outputs for integration
 new cdk.CfnOutput(secureParamStack, 'IntegrationInfo', {
@@ -70,7 +70,7 @@ new cdk.CfnOutput(secureParamStack, 'IntegrationInfo', {
 });
 
 // Epic 5.1.2: Output deployment summary
-new cdk.CfnOutput(app.node, 'DeploymentSummary', {
+new cdk.CfnOutput(vpnStack, 'DeploymentSummary', {
   value: JSON.stringify({
     epic: '5.1-Secure-Parameter-Management',
     environment: environment,

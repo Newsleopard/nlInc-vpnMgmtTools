@@ -1,3 +1,7 @@
+# ====================================================================
+# VPN MANAGEMENT TOOL - SENSITIVE FILES
+# ====================================================================
+
 # 敏感配置文件
 .vpn_config
 .user_vpn_config
@@ -26,39 +30,88 @@ revocation-logs/
 # AWS 配置文件 (如果意外複製到專案目錄)
 .aws/
 
-# macOS 系統文件
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-
-# 臨時文件
-*.tmp
-*.temp
-*.swp
-*.swo
-*~
-
-# 編輯器文件
-.vscode/
-.idea/
-*.sublime-*
-
 # 執行時生成的文件
 pki/
 *.ovpn
-
 .current_env
 certs/
 .claude/settings.local.json
 configs/staging/*.env.backup.*
+*chatlog.json
+configs/**/vpn_endpoints.json
+configs_backup*/
+configs/**/vpn_endpoint.conf.backup*
+configs/staging/vpn_endpoint.conf.bak
+security_group_commands_*.sh
+.production-url
 
-# Lambda/Node.js 專案忽略規則
+# ====================================================================
+# CDK (AWS CLOUD DEVELOPMENT KIT) SPECIFIC
+# ====================================================================
+
+# CDK build outputs
+cdklib/cdk.out/
+cdklib/dist/
+cdklib/build/
+cdklib/lib/**/*.js
+cdklib/lib/**/*.js.map
+cdklib/lib/**/*.d.ts
+cdklib/bin/**/*.js
+cdklib/bin/**/*.js.map
+cdklib/bin/**/*.d.ts
+
+# CDK dependencies
+cdklib/node_modules/
+cdklib/package-lock.json
+
+# CDK context and cache
+cdklib/cdk.context.json
+cdklib/.cdk.staging/
+
+# CDK deployment artifacts
+cdklib/asset.*/
+cdklib/cdk-outputs.json
+cdklib/cdk-exports.json
+
+# CDK bootstrap information
+cdklib/bootstrap-template.yaml
+cdklib/cdk-toolkit-stack.yaml
+
+# CDK debugging and logs
+cdklib/cdk.log
+cdklib/debug.log
+cdklib/npm-debug.log*
+cdklib/yarn-debug.log*
+cdklib/yarn-error.log*
+
+# CDK temporary files
+cdklib/.tmp/
+cdklib/tmp/
+cdklib/*.tmp
+cdklib/*.temp
+
+# CDK test coverage
+cdklib/coverage/
+cdklib/.nyc_output/
+cdklib/test-results.xml
+cdklib/jest-report.html
+
+# CDK environment files
+cdklib/.env
+cdklib/.env.local
+cdklib/.env.*.local
+
+# ====================================================================
+# LAMBDA/NODE.JS PROJECT SPECIFIC
+# ====================================================================
+
+# Lambda dependencies
 lambda/node_modules/
 lambda/*/node_modules/
+lambda/package-lock.json
+lambda/*/package-lock.json
+
+# Lambda build outputs
 lambda/dist/
 lambda/*/dist/
 lambda/build/
@@ -97,8 +150,6 @@ lambda/*/.env.local
 lambda/.env.*.local
 lambda/*/.env.*.local
 
-
-
 # AWS 相關
 lambda/.aws/
 lambda/*/.aws/
@@ -115,9 +166,55 @@ lambda/**/npm-debug.log*
 lambda/**/yarn-debug.log*
 lambda/**/yarn-error.log*
 lambda/**/lerna-debug.log*
-*chatlog.json
-configs/**/vpn_endpoints.json
-configs_backup*/
-configs/**/vpn_endpoint.conf.backup*
-configs/staging/vpn_endpoint.conf.bak
-security_group_commands_*.sh
+
+# ====================================================================
+# SYSTEM AND EDITOR FILES
+# ====================================================================
+
+# macOS 系統文件
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# 臨時文件
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# 編輯器文件
+.vscode/
+.idea/
+*.sublime-*
+
+# ====================================================================
+# ADDITIONAL CDK BEST PRACTICES
+# ====================================================================
+
+# CDK version lock files (optional - some teams prefer to commit these)
+# Uncomment if you want to ignore version locks
+# cdklib/cdk.json.lock
+# lambda/package-lock.json
+
+# CDK diff outputs
+cdklib/cdk.diff
+cdklib/*.diff
+
+# CDK synth outputs (if not using cdk.out)
+cdklib/synth/
+cdklib/synthesized/
+
+# CDK asset staging
+cdklib/asset.*/
+cdklib/cdk.staging/
+
+# CDK metadata
+cdklib/cdk.metadata.json
+
+# CDK hotswap cache
+cdklib/.cdk-hotswap-cache/

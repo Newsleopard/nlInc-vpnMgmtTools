@@ -1,0 +1,11 @@
+{
+  "name": "slack-webhook",
+  "version": "1.0.0",
+  "main": "index.js",
+  "dependencies": {
+    "@types/aws-lambda": "^8.10.119"
+  },
+  "scripts": {
+    "build": "tsc index.ts --outDir dist --target es2020 --module commonjs --esModuleInterop"
+  }
+}

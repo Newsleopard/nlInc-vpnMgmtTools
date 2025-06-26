@@ -12,8 +12,9 @@
 6. [🛡️ AWS Client VPN 安全群組最佳實踐](#🛡️-aws-client-vpn-安全群組最佳實踐)
 7. [🔐 安全 CSR 工作流程](#🔐-安全-csr-工作流程)
 8. [快速使用指南](#快速使用指南)
-9. [💰 成本試算與注意事項](#💰-成本試算與注意事項)
-10. [詳細文檔](#詳細文檔)
+9. [🚀 首次部署建議流程](#🚀-首次部署建議流程)
+10. [💰 成本試算與注意事項](#💰-成本試算與注意事項)
+11. [詳細文檔](#詳細文檔)
 
 ---
 
@@ -742,6 +743,214 @@ aws ec2 authorize-security-group-ingress \
 # 使用環境變數
 VPN_ENV=production ./admin-tools/run-vpn-analysis.sh
 ```
+
+---
+
+## 🚀 首次部署建議流程
+
+### **完整部署序列 (推薦)**
+
+本節提供首次部署 VPN Cost Automation 系統的完整步驟指南，確保順利建立雙環境架構。
+
+#### **步驟 1: 部署前準備**
+
+**1.1 配置 AWS Profiles**
+```bash
+# 配置 Production 環境 AWS Profile
+aws configure --profile production
+# 輸入: Access Key ID, Secret Access Key, Region (建議: us-east-1), Output format (json)
+
+# 配置 Staging 環境 AWS Profile  
+aws configure --profile staging
+# 輸入: Access Key ID, Secret Access Key, Region (建議: us-east-1), Output format (json)
+```
+
+**1.2 驗證 AWS Profiles 運作正常**
+```bash
+# 驗證 Production Profile
+aws sts get-caller-identity --profile production
+
+# 驗證 Staging Profile
+aws sts get-caller-identity --profile staging
+
+# 確認兩個 Profile 都能正常回傳 Account ID 和 User ARN
+```
+
+**1.3 確認必要權限**
+確保兩個 AWS 帳戶都具備以下權限：
+- CloudFormation 完整權限
+- Lambda 服務權限
+- API Gateway 權限
+- Systems Manager Parameter Store 權限
+- KMS 金鑰管理權限
+- IAM 角色建立權限
+
+#### **步驟 2: 部署基礎設施**
+
+**2.1 執行雙環境部署**
+```bash
+# 部署 Production 和 Staging 環境（含安全參數管理）
+./scripts/deploy.sh both --secure-parameters
+```
+
+**部署過程說明：**
+- ✅ **先部署 Production 環境**：建立主要基礎設施和 API Gateway
+- ✅ **再部署 Staging 環境**：建立測試環境並配置跨帳戶路由
+- ✅ **自動建立 KMS 金鑰**：用於加密敏感參數
+- ✅ **建立 Lambda 函數**：包含 Slack 整合和 VPN 控制邏輯
+- ⚠️ **參數為預設值**：需要後續手動配置實際數值
+
+**預期部署時間：** 15-20 分鐘
+
+#### **步驟 3: 配置系統參數**
+
+**3.1 準備 Slack 整合資訊**
+在執行參數配置前，請先準備：
+- **Slack Webhook URL**: `https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK`
+- **Slack Signing Secret**: 從 Slack App 設定中取得
+- **Slack Bot Token**: `xoxb-` 開頭的 Bot User OAuth Token
+
+**3.2 配置所有環境參數**
+```bash
+# 一次配置兩個環境的參數（推薦做法）
+./scripts/setup-parameters.sh --all --auto-read --secure \
+  --slack-webhook 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK' \
+  --slack-secret 'your-slack-signing-secret' \
+  --slack-bot-token 'xoxb-your-slack-bot-token'
+```
+
+**參數配置說明：**
+- `--all`: 同時配置 staging 和 production 環境
+- `--auto-read`: 自動從配置檔案讀取 VPN endpoint 和 subnet 資訊
+- `--secure`: 使用 KMS 加密敏感參數（Slack 相關資訊）
+
+#### **步驟 4: 驗證部署結果**
+
+**4.1 檢查部署狀態**
+```bash
+# 檢查兩個環境的部署狀態
+./scripts/deploy.sh status
+```
+
+**預期輸出：**
+```
+✅ Production environment is deployed
+   Production API: https://xxxxxxxxxx.execute-api.us-east-1.amazonaws.com/prod/
+✅ Staging environment is deployed  
+   Staging API: https://yyyyyyyyyy.execute-api.us-east-1.amazonaws.com/prod/
+```
+
+**4.2 驗證跨帳戶路由**
+```bash
+# 驗證 Staging 到 Production 的跨帳戶路由配置
+./scripts/deploy.sh validate-routing
+```
+
+**4.3 測試 VPN 分析功能**
+```bash
+# 測試 Staging 環境
+./admin-tools/run-vpn-analysis.sh staging
+
+# 測試 Production 環境  
+./admin-tools/run-vpn-analysis.sh production
+```
+
+#### **步驟 5: Slack 整合設定**
+
+**5.1 配置 Slack App**
+1. 在 Slack App 設定中，將 **Request URL** 設定為：
+   - Staging: `https://yyyyyyyyyy.execute-api.us-east-1.amazonaws.com/prod/slack`
+   - Production: `https://xxxxxxxxxx.execute-api.us-east-1.amazonaws.com/prod/slack`
+
+2. 確認 Slash Command 設定：
+   - Command: `/vpn`
+   - Request URL: 使用上述對應環境的 URL
+
+**5.2 測試 Slack 整合**
+```bash
+# 在 Slack 中測試指令
+/vpn check staging
+/vpn check production
+```
+
+#### **步驟 6: 系統驗證與測試**
+
+**6.1 環境狀態檢查**
+```bash
+# 檢查當前環境狀態
+./vpn_env.sh status
+
+# 切換環境測試
+./vpn_env.sh switch staging
+./vpn_env.sh switch production
+```
+
+**6.2 完整功能測試**
+```bash
+# 測試 VPN 管理功能
+./admin-tools/aws_vpn_admin.sh
+
+# 測試團隊成員設定流程
+./team_member_setup.sh
+```
+
+### **部署後檢查清單**
+
+- [ ] **AWS Profiles 配置正確**：兩個環境都能正常存取
+- [ ] **基礎設施部署成功**：CloudFormation stacks 建立完成
+- [ ] **參數配置完成**：Slack 整合資訊已正確設定
+- [ ] **KMS 金鑰運作正常**：敏感參數已加密儲存
+- [ ] **API Gateway 端點可存取**：兩個環境的 API 都能回應
+- [ ] **跨帳戶路由正常**：Staging 能正確路由到 Production
+- [ ] **Slack 整合測試通過**：指令能正常執行並回應
+- [ ] **VPN 分析功能正常**：能產生環境分析報告
+
+### **常見問題排除**
+
+#### **部署失敗**
+```bash
+# 檢查 CDK bootstrap 狀態
+aws cloudformation describe-stacks --stack-name CDKToolkit --profile production
+aws cloudformation describe-stacks --stack-name CDKToolkit --profile staging
+
+# 如果未 bootstrap，手動執行
+cd cdklib
+AWS_PROFILE=production cdk bootstrap
+AWS_PROFILE=staging cdk bootstrap
+```
+
+#### **參數配置失敗**
+```bash
+# 檢查 KMS 金鑰狀態
+aws kms describe-key --key-id alias/vpn-parameter-store-production --profile production
+aws kms describe-key --key-id alias/vpn-parameter-store-staging --profile staging
+
+# 檢查參數是否存在
+aws ssm get-parameter --name "/vpn/slack/webhook" --profile production
+```
+
+#### **Slack 整合問題**
+```bash
+# 檢查 API Gateway 端點狀態
+curl -X POST https://your-api-gateway-url/slack \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "token=test&command=/vpn&text=check"
+```
+
+### **安全注意事項**
+
+- 🔐 **敏感資訊保護**：所有 Slack 相關參數都使用 KMS 加密
+- 🛡️ **最小權限原則**：IAM 角色僅授予必要權限
+- 📋 **審計追蹤**：所有操作都記錄在 CloudWatch Logs
+- 🔄 **環境隔離**：Staging 和 Production 完全分離
+- 🚨 **監控告警**：重要錯誤會觸發 CloudWatch 告警
+
+### **效能最佳化建議**
+
+- ⚡ **區域選擇**：建議使用 `us-east-1` 以獲得最佳效能
+- 📊 **監控設定**：啟用 CloudWatch 詳細監控
+- 🔧 **定期維護**：定期檢查和更新 Lambda 函數
+- 💾 **日誌管理**：設定適當的日誌保留期限
 
 ---
 

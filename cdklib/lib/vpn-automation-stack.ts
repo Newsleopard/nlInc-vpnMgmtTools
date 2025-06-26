@@ -30,7 +30,7 @@ export class VpnAutomationStack extends cdk.Stack {
 
     // Create shared Lambda layer
     const sharedLayer = new lambda.LayerVersion(this, 'VpnSharedLayer', {
-      code: lambda.Code.fromAsset('../../lambda/shared'),
+      code: lambda.Code.fromAsset(path.resolve(__dirname, '../../lambda/shared')),
       compatibleRuntimes: [lambda.Runtime.NODEJS_18_X],
       description: 'Shared utilities for VPN Cost Automation',
       layerVersionName: `vpn-shared-layer-${environment}`
@@ -51,7 +51,7 @@ export class VpnAutomationStack extends cdk.Stack {
                 'ssm:GetParameter'
               ],
               resources: [
-                `arn:aws:ssm:${region}:${account}:parameter/vpn/slack/*`
+                `arn:aws:ssm:${region}:${account}:parameter/vpn/${environment}/slack/*`
               ]
             })
           ]
@@ -120,7 +120,7 @@ export class VpnAutomationStack extends cdk.Stack {
                 'ssm:PutParameter'
               ],
               resources: [
-                `arn:aws:ssm:${region}:${account}:parameter/vpn/*`
+                `arn:aws:ssm:${region}:${account}:parameter/vpn/${environment}/*`
               ]
             }),
             new iam.PolicyStatement({
@@ -148,10 +148,10 @@ export class VpnAutomationStack extends cdk.Stack {
     const commonEnvironment = {
       IDLE_MINUTES: '60',
       ENVIRONMENT: environment,
-      VPN_STATE_PREFIX: '/vpn/',
-      SIGNING_SECRET_PARAM: '/vpn/slack/signing_secret',
-      WEBHOOK_PARAM: '/vpn/slack/webhook',
-      BOT_TOKEN_PARAM: '/vpn/slack/bot_token',
+      VPN_STATE_PREFIX: `/vpn/${environment}/`,
+      SIGNING_SECRET_PARAM: `/vpn/${environment}/slack/signing_secret`,
+      WEBHOOK_PARAM: `/vpn/${environment}/slack/webhook`,
+      BOT_TOKEN_PARAM: `/vpn/${environment}/slack/bot_token`,
       
       // Epic 5.1: Secure parameter management configuration
       SECURE_PARAMETER_ENABLED: 'true',
@@ -191,7 +191,7 @@ export class VpnAutomationStack extends cdk.Stack {
     const slackHandler = new lambda.Function(this, 'SlackHandler', {
       runtime: lambda.Runtime.NODEJS_18_X,
       handler: 'index.handler',
-      code: lambda.Code.fromAsset('../../lambda/slack-handler'),
+      code: lambda.Code.fromAsset(path.resolve(__dirname, '../../lambda/slack-handler')),
       layers: [sharedLayer],
       role: slackHandlerRole,
       timeout: cdk.Duration.seconds(3),
@@ -210,7 +210,7 @@ export class VpnAutomationStack extends cdk.Stack {
     const vpnControl = new lambda.Function(this, 'VpnControl', {
       runtime: lambda.Runtime.NODEJS_18_X,
       handler: 'index.handler',
-      code: lambda.Code.fromAsset('../../lambda/vpn-control'),
+      code: lambda.Code.fromAsset(path.resolve(__dirname, '../../lambda/vpn-control')),
       layers: [sharedLayer],
       role: vpnControlRole,
       timeout: cdk.Duration.seconds(30),
@@ -222,7 +222,7 @@ export class VpnAutomationStack extends cdk.Stack {
     const vpnMonitor = new lambda.Function(this, 'VpnMonitor', {
       runtime: lambda.Runtime.NODEJS_18_X,
       handler: 'index.handler',
-      code: lambda.Code.fromAsset('../../lambda/vpn-monitor'),
+      code: lambda.Code.fromAsset(path.resolve(__dirname, '../../lambda/vpn-monitor')),
       layers: [sharedLayer],
       role: vpnControlRole, // Same role as vpn-control
       timeout: cdk.Duration.seconds(60),
@@ -565,49 +565,8 @@ export class VpnAutomationStack extends cdk.Stack {
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING
     });
 
-    // Create SSM parameters for initial setup (if they don't exist)
-    new ssm.StringParameter(this, 'VpnEndpointState', {
-      parameterName: '/vpn/endpoint/state',
-      stringValue: JSON.stringify({
-        associated: false,
-        lastActivity: new Date().toISOString()
-      }),
-      description: 'VPN endpoint state (associated status and last activity)',
-      tier: ssm.ParameterTier.STANDARD
-    });
-
-    // Create placeholder config parameter (needs to be updated with actual values)
-    new ssm.StringParameter(this, 'VpnEndpointConfig', {
-      parameterName: '/vpn/endpoint/conf',
-      stringValue: JSON.stringify({
-        ENDPOINT_ID: 'PLACEHOLDER_ENDPOINT_ID',
-        SUBNET_ID: 'PLACEHOLDER_SUBNET_ID'
-      }),
-      description: 'VPN endpoint configuration (endpoint ID and subnet ID)',
-      tier: ssm.ParameterTier.STANDARD
-    });
-
-    // Create placeholder parameters for Slack integration (to be updated manually)
-    new ssm.StringParameter(this, 'SlackWebhookPlaceholder', {
-      parameterName: '/vpn/slack/webhook',
-      stringValue: 'PLACEHOLDER_WEBHOOK_URL',
-      description: 'Slack webhook URL for notifications (SecureString recommended)',
-      tier: ssm.ParameterTier.STANDARD
-    });
-
-    new ssm.StringParameter(this, 'SlackSigningSecretPlaceholder', {
-      parameterName: '/vpn/slack/signing_secret',
-      stringValue: 'PLACEHOLDER_SIGNING_SECRET',
-      description: 'Slack app signing secret for request verification (SecureString recommended)',
-      tier: ssm.ParameterTier.STANDARD
-    });
-
-    new ssm.StringParameter(this, 'SlackBotTokenPlaceholder', {
-      parameterName: '/vpn/slack/bot_token',
-      stringValue: 'PLACEHOLDER_BOT_TOKEN',
-      description: 'Slack bot OAuth token for posting messages (SecureString recommended)',
-      tier: ssm.ParameterTier.STANDARD
-    });
+    // Note: All SSM parameters are now created by the VpnSecureParameters stack
+    // to avoid duplication and enable Epic 5.1 secure parameter management
 
     // Outputs
     this.apiGatewayUrl = new cdk.CfnOutput(this, 'ApiGatewayUrl', {

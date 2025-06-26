@@ -94,7 +94,8 @@ setup_lambda_dependencies() {
     
     print_status "Building Lambda functions..."
     if [ -f "package.json" ] && grep -q '"build"' package.json; then
-        npm run build
+        print_status "Skipping npm build - CDK will handle Lambda compilation"
+        # npm run build
     else
         print_status "No build script found in Lambda package.json, skipping build step"
     fi
@@ -158,12 +159,52 @@ validate_aws_profile() {
     fi
 }
 
+# Add validation function after print functions
+validate_deployment_environment() {
+    local environment=$1
+    local profile=$2
+    
+    print_status "驗證部署環境: $environment"
+    
+    # Validate AWS environment variables
+    if [ -z "$CDK_DEFAULT_ACCOUNT" ] || [ -z "$CDK_DEFAULT_REGION" ]; then
+        print_error "CDK 環境變數未設置"
+        print_error "請設置 CDK_DEFAULT_ACCOUNT 和 CDK_DEFAULT_REGION"
+        return 1
+    fi
+    
+    print_status "CDK Account: $CDK_DEFAULT_ACCOUNT"
+    print_status "CDK Region: $CDK_DEFAULT_REGION"
+    
+    # Validate AWS profile has necessary permissions
+    if ! aws iam get-user --profile "$profile" &> /dev/null; then
+        print_warning "無法驗證 profile 的 IAM 權限: $profile"
+        print_warning "請確保 AWS profile 已正確配置"
+    else
+        print_success "AWS profile 驗證成功: $profile"
+    fi
+    
+    # Validate CDK is properly installed
+    if ! command -v cdk &> /dev/null; then
+        print_error "CDK 未安裝或不在 PATH 中"
+        return 1
+    fi
+    
+    return 0
+}
+
 # Function to deploy production environment
 deploy_production() {
-    print_status "🚀 Deploying production environment..."
+    print_status "🚀 部署到生產環境"
     
-    local profile=${PRODUCTION_PROFILE:-"production"}
+    local profile=${PRODUCTION_PROFILE:-"prod"}
     local use_secure_params=${USE_SECURE_PARAMETERS:-false}
+    
+    # Validate environment before deployment
+    if ! validate_deployment_environment "production" "$profile"; then
+        print_error "生產環境驗證失敗"
+        return 1
+    fi
     
     validate_aws_profile "$profile" "production"
     
@@ -222,7 +263,13 @@ deploy_production() {
 
 # Function to deploy staging environment
 deploy_staging() {
-    print_status "🚀 Deploying staging environment..."
+    print_status "🚀 部署到測試環境"
+    
+    # Add environment validation
+    if ! validate_deployment_environment "staging" "$STAGING_PROFILE"; then
+        print_error "測試環境驗證失敗"
+        return 1
+    fi
     
     local profile=${STAGING_PROFILE:-"staging"}
     local use_secure_params=${USE_SECURE_PARAMETERS:-false}
@@ -375,14 +422,15 @@ show_usage() {
     echo "  • Parameter validation and configuration management"
     echo ""
     echo "First-time setup:"
-    echo "  1. Configure AWS profiles: aws configure --profile production"
-    echo "  2. Deploy production: $0 production --secure-parameters"
-    echo "  3. Configure parameters: scripts/setup-parameters.sh production --secure"
-    echo "  4. Deploy staging: $0 staging --secure-parameters"
-    echo "  5. Configure staging: scripts/setup-parameters.sh staging --secure"
+    echo "  1. Configure AWS profiles: aws configure --profile production && aws configure --profile staging"
+    echo "  2. Deploy both environments: $0 both --secure-parameters"
+    echo "  3. Configure all parameters: scripts/setup-parameters.sh --all --auto-read --secure \\"
+    echo "       --slack-webhook URL --slack-secret SECRET --slack-bot-token TOKEN"
     echo ""
     echo "⚠️  Important: After deployment, parameters contain placeholder values."
-    echo "    You MUST run setup-parameters.sh to configure real values."
+    echo "    You MUST run setup-parameters.sh with --all to configure real values."
+    echo ""
+    echo "💡 Tip: Slack parameters are shared across environments - configure once for both!"
 }
 
 # Function to show diff
@@ -557,18 +605,18 @@ deploy_with_secure_parameters() {
             PRODUCTION_API_KEY="$PRODUCTION_API_KEY" \
             ENVIRONMENT="$environment" \
             AWS_PROFILE="$profile" \
-            cdk deploy --app "npx ts-node bin/vpn-secure-automation.ts" \
+            cdk deploy --all --app "npx ts-node bin/vpn-secure-automation.ts" \
             --require-approval never \
             --context environment="$environment"
         else
             ENVIRONMENT="$environment" AWS_PROFILE="$profile" \
-            cdk deploy --app "npx ts-node bin/vpn-secure-automation.ts" \
+            cdk deploy --all --app "npx ts-node bin/vpn-secure-automation.ts" \
             --require-approval never \
             --context environment="$environment"
         fi
     else
         ENVIRONMENT="$environment" AWS_PROFILE="$profile" \
-        cdk deploy --app "npx ts-node bin/vpn-secure-automation.ts" \
+        cdk deploy --all --app "npx ts-node bin/vpn-secure-automation.ts" \
         --require-approval never \
         --context environment="$environment"
     fi
@@ -799,6 +847,31 @@ main() {
             exit 1
             ;;
     esac
+}
+
+# Update usage message - around line 620
+usage() {
+    echo "使用方式: $0 {production|staging|both} [--secure-parameters]"
+    echo ""
+    echo "選項:"
+    echo "  production        僅部署到生產環境"
+    echo "  staging           僅部署到測試環境"
+    echo "  both              部署到兩個環境"
+    echo "  --secure-parameters 部署安全參數堆疊"
+    echo ""
+    echo "部署前準備步驟:"
+    echo "  1. 安裝依賴: npm install"
+    echo "  2. 設置 AWS profiles: 'production' 和 'staging'"
+    echo "  3. 設置環境變數:"
+    echo "     export CDK_DEFAULT_ACCOUNT=your-account-id"
+    echo "     export CDK_DEFAULT_REGION=your-region"
+    echo "  4. 配置參數 (部署後): scripts/setup-parameters.sh --all --auto-read --secure \\"
+    echo "       --slack-webhook 'https://hooks.slack.com/services/...' \\"
+    echo "       --slack-secret 'your-signing-secret' \\"
+    echo "       --slack-bot-token 'xoxb-your-bot-token'"
+    echo ""
+    echo "範例:"
+    echo "  $0 both --secure-parameters"
 }
 
 # Run main function with all arguments
