@@ -48,6 +48,7 @@ show_usage() {
     echo "  --subnet-id ID       Subnet ID (如果未提供，將從配置檔案讀取)"
     echo "  --slack-webhook URL  Slack webhook URL (必須提供)"
     echo "  --slack-secret SEC   Slack signing secret (必須提供)"
+    echo "  --slack-bot-token TK Slack bot OAuth token (必須提供)"
     echo "  --secure             使用加密參數 (encrypted)"
     echo "  --auto-read          自動從配置檔案讀取所有可用參數"
     echo ""
@@ -55,13 +56,15 @@ show_usage() {
     echo "  # 使用配置檔案中的 endpoint-id 和 subnet-id"
     echo "  $0 --auto-read \\"
     echo "    --slack-webhook https://hooks.slack.com/services/... \\"
-    echo "    --slack-secret your-slack-signing-secret"
+    echo "    --slack-secret your-slack-signing-secret \\"
+    echo "    --slack-bot-token xoxb-your-bot-token"
     echo ""
     echo "  # 手動指定參數"
     echo "  $0 --endpoint-id cvpn-endpoint-0123456789abcdef \\"
     echo "    --subnet-id subnet-0123456789abcdef \\"
     echo "    --slack-webhook https://hooks.slack.com/services/... \\"
-    echo "    --slack-secret your-slack-signing-secret"
+    echo "    --slack-secret your-slack-signing-secret \\"
+    echo "    --slack-bot-token xoxb-your-bot-token"
     echo ""
     echo "注意："
     echo "  - 此腳本會自動使用當前環境的 AWS profile"
@@ -74,6 +77,7 @@ ENDPOINT_ID=""
 SUBNET_ID=""
 SLACK_WEBHOOK=""
 SLACK_SECRET=""
+SLACK_BOT_TOKEN=""
 USE_SECURE_PARAMETERS=false
 AUTO_READ_CONFIG=false
 
@@ -93,6 +97,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --slack-secret)
             SLACK_SECRET="$2"
+            shift 2
+            ;;
+        --slack-bot-token)
+            SLACK_BOT_TOKEN="$2"
             shift 2
             ;;
         --secure)
@@ -195,8 +203,8 @@ if ! read_config_values; then
 fi
 
 # Validate required arguments
-if [ -z "$SLACK_WEBHOOK" ] || [ -z "$SLACK_SECRET" ]; then
-    print_error "必須提供 Slack 參數: --slack-webhook, --slack-secret"
+if [ -z "$SLACK_WEBHOOK" ] || [ -z "$SLACK_SECRET" ] || [ -z "$SLACK_BOT_TOKEN" ]; then
+    print_error "必須提供 Slack 參數: --slack-webhook, --slack-secret, --slack-bot-token"
     show_usage
     exit 1
 fi
@@ -415,6 +423,13 @@ set_parameter \
     "SecureString" \
     "Slack signing secret for request verification ($CURRENT_ENVIRONMENT environment)"
 
+# Slack bot token (encrypted)
+set_parameter \
+    "/vpn/slack/bot_token" \
+    "$SLACK_BOT_TOKEN" \
+    "SecureString" \
+    "Slack bot OAuth token for posting messages ($CURRENT_ENVIRONMENT environment)"
+
 log_env_action "PARAM_SETUP_COMPLETE" "Parameter Store 參數設定完成"
 print_success "🎉 所有參數已成功設定於 ${ENV_ICON} $ENV_DISPLAY_NAME 環境！"
 
@@ -428,6 +443,7 @@ echo "   VPN 端點: $ENDPOINT_ID"
 echo "   子網路: $SUBNET_ID"
 echo "   Slack webhook: ***已配置***"
 echo "   Slack secret: ***已配置***"
+echo "   Slack bot token: ***已配置***"
 echo "   配置檔案: $CONFIG_FILE"
 echo ""
 
