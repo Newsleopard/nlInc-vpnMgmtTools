@@ -211,6 +211,7 @@ Actions:
   create                - Create VPN access rules to discovered services
   remove                - Remove VPN access rules from services
   clean                 - Clean up tracking files and discovery cache
+  report                - Generate human-readable VPN tracking report
 
 Arguments:
   vpn-sg-id            - Security Group ID of the VPN client (required for create/remove)
@@ -1593,7 +1594,7 @@ main() {
                 DRY_RUN=true
                 shift
                 ;;
-            discover|display-services|create|remove|clean)
+            discover|display-services|create|remove|clean|report)
                 if [[ -z "$ACTION" ]]; then
                     ACTION="$1"
                     shift
@@ -1642,6 +1643,10 @@ main() {
                 show_usage
                 exit 1
             fi
+            ;;
+        "report")
+            # For report action, VPN_SG might contain report arguments, clear it
+            VPN_SG=""
             ;;
     esac
     
@@ -1705,6 +1710,26 @@ main() {
         "clean")
             cleanup_tracking_file
             cleanup_discovery_cache
+            ;;
+        "report")
+            # Generate human-readable tracking report
+            local report_script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/vpn_tracking_report.sh"
+            if [[ -f "$report_script_path" ]]; then
+                # Extract report-specific arguments
+                local report_args=()
+                for arg in "$@"; do
+                    case "$arg" in
+                        --summary|-s|--commands|-c|--help|-h)
+                            report_args+=("$arg")
+                            ;;
+                    esac
+                done
+                exec "$report_script_path" "${report_args[@]}"
+            else
+                echo -e "${RED}❌ VPN tracking report script not found${NC}"
+                echo -e "${YELLOW}Expected location: $report_script_path${NC}"
+                exit 1
+            fi
             ;;
         *)
             log_error "Unknown action: $ACTION"
