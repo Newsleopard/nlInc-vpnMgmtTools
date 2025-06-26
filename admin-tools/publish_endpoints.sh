@@ -8,6 +8,38 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PARENT_DIR="$(dirname "$SCRIPT_DIR")"
 
+# Check for help first before environment initialization
+for arg in "$@"; do
+    if [[ "$arg" == "-h" || "$arg" == "--help" ]]; then
+        cat << 'EOF'
+用法: $0 [選項]
+
+選項:
+  -b, --bucket-name NAME     S3 存儲桶名稱 (預設: vpn-csr-exchange)
+  -e, --environment ENV      環境名稱 (需對應 configs/ENV/ENV.env 配置文件)
+  -p, --profile PROFILE      AWS CLI profile
+  --ca-only                  只發布 CA 證書
+  --endpoints-only           只發布端點資訊
+  --force                    強制覆蓋現有文件
+  -v, --verbose              顯示詳細輸出
+  -h, --help                顯示此幫助訊息
+
+功能說明:
+  此工具將 CA 證書和 VPN 端點資訊發布到 S3 存儲桶的 public/ 前綴
+  供團隊成員自動下載使用，實現零接觸 VPN 設置流程
+
+範例:
+  $0                                     # 發布當前環境的資產
+  $0 -e production                      # 發布 production 環境
+  $0 -e dev                             # 發布 dev 環境
+  $0 --endpoints-only -e staging        # 只發布 staging 端點資訊
+
+注意: 執行前請確保已正確設定環境和 AWS 憑證
+EOF
+        exit 0
+    fi
+done
+
 # 載入環境管理器 (必須第一個載入)
 source "$PARENT_DIR/lib/env_manager.sh"
 

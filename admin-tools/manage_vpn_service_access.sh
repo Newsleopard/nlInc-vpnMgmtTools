@@ -11,6 +11,47 @@ set -e
 # 獲取腳本目錄
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Check for help first before environment initialization
+for arg in "$@"; do
+    if [[ "$arg" == "-h" || "$arg" == "--help" ]]; then
+        # Show basic help without environment initialization
+        cat << EOF
+VPN Service Access Manager - Environment-Aware
+
+Usage: $0 <action> [vpn-sg-id] [options]
+
+Actions:
+  discover              - Discover available AWS services in the VPC
+  display-services      - Display previously discovered services  
+  create                - Create VPN access rules to discovered services
+  remove                - Remove VPN access rules from services
+  clean                 - Clean up tracking files and discovery cache
+  report                - Generate human-readable VPN tracking report
+
+Arguments:
+  vpn-sg-id            - Security Group ID of the VPN client (required for create/remove)
+
+Options:
+  --region <region>    - AWS region (default: us-east-1)
+  --dry-run           - Show what would be done without making changes
+  -h, --help          - Show this help message
+
+Examples:
+  $0 discover --region us-east-1
+  $0 create sg-1234567890abcdef0 --region us-east-1
+  $0 remove sg-1234567890abcdef0 --region us-east-1
+
+Environment Variables:
+  VPN_USE_CACHED_DISCOVERY  - Use cached discovery data (default: false)
+  VPN_DISCOVERY_CACHE_TTL   - Cache TTL in seconds (default: 3600)
+  VPN_DISCOVERY_FAST_MODE   - Use fast discovery mode (default: true)
+
+Note: Run without --help to see current environment details.
+EOF
+        exit 0
+    fi
+done
+
 # 載入環境管理器 (必須第一個載入)
 source "$SCRIPT_DIR/../lib/env_manager.sh"
 

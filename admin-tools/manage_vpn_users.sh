@@ -8,6 +8,43 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PARENT_DIR="$(dirname "$SCRIPT_DIR")"
 
+# Check for help first before environment initialization
+for arg in "$@"; do
+    if [[ "$arg" == "-h" || "$arg" == "--help" ]]; then
+        cat << 'EOF'
+用法: $0 [選項] [動作]
+
+動作:
+  add USERNAME              添加新用戶並分配 VPN 權限
+  remove USERNAME           移除用戶的 VPN 權限
+  list                      列出所有有 VPN 權限的用戶
+  status USERNAME           查看用戶權限狀態
+  batch-add FILE            從文件批量添加用戶
+  check-permissions USER    檢查用戶的 S3 權限
+
+選項:
+  -e, --environment ENV     目標環境 (staging/production)
+  -p, --profile PROFILE     AWS CLI profile
+  -b, --bucket-name NAME    S3 存儲桶名稱 (預設: vpn-csr-exchange)
+  --create-user             如果用戶不存在則自動創建
+  --dry-run                 顯示將要執行的操作但不實際執行
+  -v, --verbose             顯示詳細輸出
+  -h, --help               顯示此幫助訊息
+
+範例:
+  $0 add john                     # 添加用戶 john
+  $0 add jane --create-user       # 添加用戶 jane，如不存在則創建
+  $0 remove old-employee          # 移除用戶權限
+  $0 list                         # 列出所有用戶
+  $0 status john                  # 查看用戶狀態
+  $0 check-permissions john       # 檢查用戶權限
+
+注意: 執行前請確保已正確設定環境和 AWS 憑證
+EOF
+        exit 0
+    fi
+done
+
 # 載入環境管理器 (必須第一個載入)
 source "$PARENT_DIR/lib/env_manager.sh"
 

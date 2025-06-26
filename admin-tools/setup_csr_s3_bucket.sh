@@ -8,6 +8,43 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PARENT_DIR="$(dirname "$SCRIPT_DIR")"
 
+# Check for help first before environment initialization
+for arg in "$@"; do
+    if [[ "$arg" == "-h" || "$arg" == "--help" ]]; then
+        cat << 'EOF'
+用法: $0 [選項]
+
+選項:
+  -b, --bucket-name NAME     S3 存儲桶名稱 (預設: vpn-csr-exchange)
+  -r, --region REGION        AWS 區域 (預設: us-east-1)
+  -p, --profile PROFILE      AWS CLI profile (預設: 目前活躍的 profile)
+  -e, --environment ENV      目標環境 (staging/production)
+  --create-policies         創建 IAM 政策（不包含用戶管理）
+  --list-policies           列出創建的 IAM 政策狀態
+  --publish-assets          自動發布初始公用資產 (CA 證書和端點配置)
+  --cleanup                 清理存儲桶和相關資源
+  -v, --verbose             顯示詳細輸出
+  -h, --help               顯示此幫助訊息
+
+功能說明:
+  此工具將創建一個 S3 存儲桶用於安全的 CSR 交換，包括：
+  • 設置適當的存儲桶政策和權限
+  • 創建用於 CSR 上傳和證書下載的前綴結構
+  • 配置生命週期政策自動清理舊文件
+  • 創建必要的 IAM 政策（用戶分配請使用 manage_vpn_users.sh）
+
+範例:
+  $0                                     # 使用預設設置創建存儲桶和政策
+  $0 -b my-vpn-csr-bucket               # 使用自定義存儲桶名稱
+  $0 -e production -p prod               # 為 production 環境設置
+  $0 --create-policies                  # 只創建 IAM 政策
+
+注意: 執行前請確保已正確設定環境和 AWS 憑證
+EOF
+        exit 0
+    fi
+done
+
 # 載入環境管理器 (必須第一個載入)
 source "$PARENT_DIR/lib/env_manager.sh"
 

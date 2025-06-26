@@ -8,6 +8,38 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PARENT_DIR="$(dirname "$SCRIPT_DIR")"
 
+# Check for help first before environment initialization
+for arg in "$@"; do
+    if [[ "$arg" == "-h" || "$arg" == "--help" ]]; then
+        cat << 'EOF'
+用法: $0 [選項] <csr-file> [days-valid] [output-dir]
+
+參數:
+  csr-file      要簽署的 CSR 文件路徑或檔名
+                (使用 --upload-s3 時，可自動從 S3 下載 CSR)
+  days-valid    證書有效天數 (預設: 365)
+  output-dir    輸出目錄 (預設: CSR 文件所在目錄)
+
+選項:
+  -e, --environment ENV  指定環境 (staging/production)
+  -b, --bucket NAME      S3 存儲桶名稱 (預設: vpn-csr-exchange)
+  -p, --profile PROFILE  AWS CLI profile
+  --upload-s3           簽署後自動上傳證書到 S3
+  --no-s3               停用 S3 功能
+  -v, --verbose         顯示詳細輸出
+  -h, --help           顯示此幫助訊息
+
+範例:
+  $0 user.csr                           # 簽署 CSR，預設 365 天
+  $0 user.csr 180                      # 簽署 CSR，180 天有效期
+  $0 user.csr 365 /output/path         # 指定輸出目錄
+
+注意: 執行前請確保已正確設定環境和 AWS 憑證
+EOF
+        exit 0
+    fi
+done
+
 # 載入環境管理器 (必須第一個載入)
 source "$PARENT_DIR/lib/env_manager.sh"
 
