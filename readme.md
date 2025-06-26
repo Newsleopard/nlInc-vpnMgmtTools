@@ -172,6 +172,7 @@ AWS_REGION=ap-northeast-1
 7.  **`sign_csr.sh`** - CSR 簽署工具。管理員專用，用於安全地簽署團隊成員的證書請求，保持 CA 私鑰隔離。
 8.  **`setup_csr_s3_bucket.sh`** - S3 CSR 交換桶設置工具。創建和配置用於安全 CSR 交換的 S3 存儲桶，包括 IAM 政策生成。
 9.  **`process_csr_batch.sh`** - CSR 批次處理工具。支援批次下載、簽署和上傳 CSR，以及監控模式自動處理。
+10. **`run-vpn-analysis.sh`** - 多合一 VPN 分析工具。提供環境感知的全面 VPN 配置分析、連通性測試和詳細報告生成。
 
 ### 🔧 診斷和修復工具 (admin-tools/tools/)
 
@@ -182,6 +183,106 @@ AWS_REGION=ap-northeast-1
 14. **`complete_vpn_setup.sh`** - 完整 VPN 設置工具。從 "pending-associate" 狀態繼續完成 VPN 端點設置流程。
 15. **`validate_config.sh`** - 配置驗證工具。驗證所有環境的配置正確性並自動修復簡單的配置問題。
 16. **`verify_config_update_fix.sh`** - 配置更新修復驗證工具。驗證配置文件更新修復是否正確工作。
+
+### 📚 核心庫文件 (lib/)
+
+### 📊 VPN 分析和報告工具
+
+**`run-vpn-analysis.sh`** 是一個環境感知的多合一 VPN 分析工具，提供全面的配置分析、連通性測試和詳細報告生成功能。
+
+#### 🎯 主要功能
+
+1. **環境感知分析**: 自動檢測並分析 Staging 或 Production 環境的 VPN 配置
+2. **全面連通性測試**: 驗證 VPN 端點對各種 AWS 服務的存取權限
+3. **智能報告生成**: 生成 Markdown 和 JSON 格式的詳細分析報告
+4. **先決條件檢查**: 自動驗證運行環境和 AWS 認證設置
+5. **服務覆蓋分析**: 深度分析 RDS、Redis、HBase、EKS 等服務的存取狀況
+
+#### 🚀 使用方法
+
+```bash
+# 分析 staging 環境（預設）
+./admin-tools/run-vpn-analysis.sh
+
+# 分析 production 環境
+./admin-tools/run-vpn-analysis.sh production
+
+# 使用環境參數
+./admin-tools/run-vpn-analysis.sh --env=staging
+
+# 使用環境變數
+VPN_ENV=production ./admin-tools/run-vpn-analysis.sh
+```
+
+#### 📋 分析項目
+
+**1. VPN 端點配置檢查**
+- 端點狀態和可用性驗證
+- 客戶端 CIDR 和安全群組配置
+- VPC 整合和路由配置分析
+
+**2. 安全群組關聯分析**
+- 發現引用 VPN 安全群組的所有安全群組
+- 計算總體服務覆蓋範圍
+- 驗證安全群組最佳實踐
+
+**3. 資料來源存取測試**
+- **RDS/MySQL** (Port 3306): 資料庫存取測試
+- **Redis/ElastiCache** (Port 6379): 快取服務存取測試  
+- **HBase** (Port 8765): 大數據平台存取測試
+- **HBase 擴展端口** (16010, 16020, 8080, 8000): 管理介面存取
+- **EKS/Kubernetes** (Port 443): 容器平台 API 存取測試
+
+**4. 綜合狀態評估**
+- 計算總體配置品質評分
+- 識別潛在的存取問題
+- 提供改善建議和最佳實踐指南
+
+#### 📊 報告輸出
+
+**Markdown 報告** (`vpn-analysis-report-{environment}.md`)
+- 可讀的詳細分析報告
+- 包含配置狀態、服務存取矩陣、改善建議
+- 支援直接在瀏覽器中查看或列印
+
+**JSON 數據** (`vpn-analysis-report-{environment}.json`)
+- 結構化數據格式，便於程式化處理
+- 包含完整的配置詳情和測試結果
+- 支援與其他工具和監控系統整合
+
+#### 🔧 先決條件檢查
+
+工具會自動檢查並驗證：
+- **Bash 版本**: 需要 4.0+ 以支援關聯陣列
+- **AWS CLI**: 檢查安裝狀態和認證配置
+- **jq**: JSON 處理工具可用性
+- **AWS 服務連通性**: EC2、VPC、Client VPN 服務存取測試
+- **環境配置**: 驗證環境設定檔的正確性
+
+#### 🎯 使用場景
+
+1. **部署後驗證**: 確認 VPN 端點正確配置並可存取所需服務
+2. **定期健康檢查**: 監控 VPN 配置的持續正確性
+3. **故障排除**: 快速識別 VPN 存取問題的根本原因
+4. **合規審計**: 生成詳細報告以滿足安全和合規要求
+5. **環境比較**: 比較不同環境間的 VPN 配置差異
+
+#### 💡 高級功能
+
+**環境自動檢測**
+- 智能環境檢測和配置載入
+- 支援多種環境指定方式
+- 自動配置文件創建和模板生成
+
+**互動式結果展示**
+- 彩色終端輸出增強可讀性
+- 互動式報告查看選項
+- 支援多種報告格式和查看器
+
+**錯誤處理和恢復**
+- 詳細的錯誤訊息和故障排除指南
+- 自動環境修復建議
+- 優雅的錯誤處理和狀態回報
 
 ### 📚 核心庫文件 (lib/)
 
@@ -199,7 +300,7 @@ AWS_REGION=ap-northeast-1
 
 ### 完整工具清單
 
-總共包含 **16個主要腳本** 和 **7個核心庫文件**，提供從環境管理、VPN 端點創建、安全 CSR 管理、團隊管理到故障診斷的完整解決方案。所有工具都支援雙環境（Staging/Production）架構，並提供自動備份和錯誤恢復功能。
+總共包含 **17個主要腳本** 和 **7個核心庫文件**，提供從環境管理、VPN 端點創建、安全 CSR 管理、團隊管理、全面分析報告到故障診斷的完整解決方案。所有工具都支援雙環境（Staging/Production）架構，並提供自動備份和錯誤恢復功能。
 
 詳細的診斷和修復工具說明請參考: [`admin-tools/tools/README.md`](admin-tools/tools/README.md)
 
@@ -618,6 +719,21 @@ aws ec2 authorize-security-group-ingress \
 
 # 驗證配置正確性
 ./admin-tools/tools/validate_config.sh
+```
+
+#### 📊 VPN 分析和報告操作
+```bash
+# 全面 VPN 配置分析（staging 環境）
+./admin-tools/run-vpn-analysis.sh
+
+# 分析 production 環境
+./admin-tools/run-vpn-analysis.sh production
+
+# 使用環境參數
+./admin-tools/run-vpn-analysis.sh --env=staging
+
+# 使用環境變數
+VPN_ENV=production ./admin-tools/run-vpn-analysis.sh
 ```
 
 ---
