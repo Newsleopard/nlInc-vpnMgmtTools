@@ -63,7 +63,43 @@ check_prerequisites() {
         exit 1
     fi
     
+    # Check if npx is available
+    if ! command -v npx &> /dev/null; then
+        print_error "npx is not available. Please install Node.js properly."
+        exit 1
+    fi
+    
+    # Check if TypeScript compilation tools are available
+    cd "$CDK_DIR"
+    if ! npx ts-node --version &> /dev/null; then
+        print_error "TypeScript compilation tools not available. Run 'npm install' in cdklib directory."
+        exit 1
+    fi
+    
     print_success "Prerequisites check passed"
+}
+
+# Function to setup Lambda dependencies
+setup_lambda_dependencies() {
+    print_status "Setting up Lambda dependencies..."
+    
+    cd "$PROJECT_ROOT/lambda"
+    
+    if [ ! -f "package-lock.json" ]; then
+        print_status "Installing Lambda dependencies..."
+        npm install
+    else
+        print_status "Lambda dependencies already installed"
+    fi
+    
+    print_status "Building Lambda functions..."
+    if [ -f "package.json" ] && grep -q '"build"' package.json; then
+        npm run build
+    else
+        print_status "No build script found in Lambda package.json, skipping build step"
+    fi
+    
+    print_success "Lambda setup completed"
 }
 
 # Function to setup CDK dependencies
@@ -137,14 +173,14 @@ deploy_production() {
         deploy_with_secure_parameters "production" "$profile"
     else
         print_status "Deploying production stack..."
-        ENVIRONMENT=production AWS_PROFILE="$profile" cdk deploy --require-approval never
+        ENVIRONMENT=production AWS_PROFILE="$profile" cdk deploy --app "npx ts-node bin/vpn-automation.ts" --require-approval never --context environment="production"
     fi
     
     print_success "✅ Production deployment completed!"
     
     # Get production API Gateway URL
     PRODUCTION_URL=$(aws cloudformation describe-stacks \
-        --stack-name VpnAutomationStack-production \
+        --stack-name VpnAutomation-production \
         --query 'Stacks[0].Outputs[?OutputKey==`ApiGatewayUrl`].OutputValue' \
         --output text \
         --profile "$profile" 2>/dev/null || echo "")
@@ -155,7 +191,7 @@ deploy_production() {
         
         # Get API key if it exists
         API_KEY_ID=$(aws cloudformation describe-stacks \
-            --stack-name VpnAutomationStack-production \
+            --stack-name VpnAutomation-production \
             --query 'Stacks[0].Outputs[?OutputKey==`ApiKeyId`].OutputValue' \
             --output text \
             --profile "$profile" 2>/dev/null || echo "")
@@ -198,7 +234,7 @@ deploy_staging() {
     # Try to get production URL from CloudFormation
     local production_profile=${PRODUCTION_PROFILE:-"production"}
     PRODUCTION_URL=$(aws cloudformation describe-stacks \
-        --stack-name VpnAutomationStack-production \
+        --stack-name VpnAutomation-production \
         --query 'Stacks[0].Outputs[?OutputKey==`ApiGatewayUrl`].OutputValue' \
         --output text \
         --profile "$production_profile" 2>/dev/null || echo "")
@@ -244,7 +280,7 @@ deploy_staging() {
             print_warning "⚠️  Deploying without production API key - cross-account calls will fail"
         fi
         
-        cdk deploy --require-approval never
+        cdk deploy --app "npx ts-node bin/vpn-automation.ts" --require-approval never --context environment="staging"
     fi
     
     print_success "✅ Staging deployment completed!"
@@ -279,7 +315,7 @@ destroy_environment() {
     fi
     
     print_warning "⚠️  Destroying $environment environment..."
-    print_warning "This will delete all resources in the VpnAutomationStack-$environment stack"
+    print_warning "This will delete all resources in the VpnAutomation-$environment stack"
     
     read -p "Are you sure you want to continue? (y/N): " -n 1 -r
     echo
@@ -293,7 +329,7 @@ destroy_environment() {
     cd "$CDK_DIR"
     
     print_status "Destroying $environment stack..."
-    ENVIRONMENT="$environment" AWS_PROFILE="$profile" cdk destroy --force
+    ENVIRONMENT="$environment" AWS_PROFILE="$profile" cdk destroy --app "npx ts-node bin/vpn-automation.ts" --context environment="$environment" --force
     
     print_success "✅ $environment environment destroyed"
 }
@@ -341,8 +377,12 @@ show_usage() {
     echo "First-time setup:"
     echo "  1. Configure AWS profiles: aws configure --profile production"
     echo "  2. Deploy production: $0 production --secure-parameters"
-    echo "  3. Set up parameters: scripts/setup-parameters.sh production --secure"
+    echo "  3. Configure parameters: scripts/setup-parameters.sh production --secure"
     echo "  4. Deploy staging: $0 staging --secure-parameters"
+    echo "  5. Configure staging: scripts/setup-parameters.sh staging --secure"
+    echo ""
+    echo "⚠️  Important: After deployment, parameters contain placeholder values."
+    echo "    You MUST run setup-parameters.sh to configure real values."
 }
 
 # Function to show diff
@@ -366,7 +406,7 @@ show_diff() {
         # For staging, we need production URL
         local production_profile=${PRODUCTION_PROFILE:-"production"}
         PRODUCTION_URL=$(aws cloudformation describe-stacks \
-            --stack-name VpnAutomationStack-production \
+            --stack-name VpnAutomation-production \
             --query 'Stacks[0].Outputs[?OutputKey==`ApiGatewayUrl`].OutputValue' \
             --output text \
             --profile "$production_profile" 2>/dev/null || echo "")
@@ -375,13 +415,13 @@ show_diff() {
             PRODUCTION_API_ENDPOINT="${PRODUCTION_URL}vpn" \
             ENVIRONMENT="$environment" \
             AWS_PROFILE="$profile" \
-            cdk diff
+            cdk diff --app "npx ts-node bin/vpn-automation.ts" --context environment="$environment"
         else
             print_warning "Production environment not found, showing diff without production URL"
-            ENVIRONMENT="$environment" AWS_PROFILE="$profile" cdk diff
+            ENVIRONMENT="$environment" AWS_PROFILE="$profile" cdk diff --app "npx ts-node bin/vpn-automation.ts" --context environment="$environment"
         fi
     else
-        ENVIRONMENT="$environment" AWS_PROFILE="$profile" cdk diff
+        ENVIRONMENT="$environment" AWS_PROFILE="$profile" cdk diff --app "npx ts-node bin/vpn-automation.ts" --context environment="$environment"
     fi
 }
 
@@ -393,19 +433,19 @@ validate_cross_account_routing() {
     local production_profile=${PRODUCTION_PROFILE:-"production"}
     
     # Check if both environments are deployed
-    if ! aws cloudformation describe-stacks --stack-name VpnAutomationStack-production --profile "$production_profile" &> /dev/null; then
+    if ! aws cloudformation describe-stacks --stack-name VpnAutomation-production --profile "$production_profile" &> /dev/null; then
         print_error "Production environment not deployed - cross-account routing will fail"
         return 1
     fi
     
-    if ! aws cloudformation describe-stacks --stack-name VpnAutomationStack-staging --profile "$staging_profile" &> /dev/null; then
+    if ! aws cloudformation describe-stacks --stack-name VpnAutomation-staging --profile "$staging_profile" &> /dev/null; then
         print_error "Staging environment not deployed - cross-account routing not applicable"
         return 1
     fi
     
     # Get production API URL
     PRODUCTION_URL=$(aws cloudformation describe-stacks \
-        --stack-name VpnAutomationStack-production \
+        --stack-name VpnAutomation-production \
         --query 'Stacks[0].Outputs[?OutputKey==`ApiGatewayUrl`].OutputValue' \
         --output text \
         --profile "$production_profile" 2>/dev/null)
@@ -417,7 +457,7 @@ validate_cross_account_routing() {
     
     # Check if API key exists
     API_KEY_ID=$(aws cloudformation describe-stacks \
-        --stack-name VpnAutomationStack-production \
+        --stack-name VpnAutomation-production \
         --query 'Stacks[0].Outputs[?OutputKey==`ApiKeyId`].OutputValue' \
         --output text \
         --profile "$production_profile" 2>/dev/null || echo "")
@@ -465,10 +505,10 @@ show_status() {
     local production_profile=${PRODUCTION_PROFILE:-"production"}
     
     # Check production
-    if aws cloudformation describe-stacks --stack-name VpnAutomationStack-production --profile "$production_profile" &> /dev/null; then
+    if aws cloudformation describe-stacks --stack-name VpnAutomation-production --profile "$production_profile" &> /dev/null; then
         print_success "✅ Production environment is deployed"
         PRODUCTION_URL=$(aws cloudformation describe-stacks \
-            --stack-name VpnAutomationStack-production \
+            --stack-name VpnAutomation-production \
             --query 'Stacks[0].Outputs[?OutputKey==`ApiGatewayUrl`].OutputValue' \
             --output text \
             --profile "$production_profile" 2>/dev/null)
@@ -480,10 +520,10 @@ show_status() {
     fi
     
     # Check staging
-    if aws cloudformation describe-stacks --stack-name VpnAutomationStack-staging --profile "$staging_profile" &> /dev/null; then
+    if aws cloudformation describe-stacks --stack-name VpnAutomation-staging --profile "$staging_profile" &> /dev/null; then
         print_success "✅ Staging environment is deployed"
         STAGING_URL=$(aws cloudformation describe-stacks \
-            --stack-name VpnAutomationStack-staging \
+            --stack-name VpnAutomation-staging \
             --query 'Stacks[0].Outputs[?OutputKey==`ApiGatewayUrl`].OutputValue' \
             --output text \
             --profile "$staging_profile" 2>/dev/null)
@@ -504,12 +544,12 @@ deploy_with_secure_parameters() {
     
     cd "$CDK_DIR"
     
-    # First, deploy the secure parameter management stack
-    print_status "Deploying secure parameter management stack..."
-    ENVIRONMENT="$environment" AWS_PROFILE="$profile" cdk deploy VpnSecureParameterStack-"$environment" --require-approval never
+    # Deploy both stacks with correct app entry point and context
+    print_status "Deploying secure VPN automation with parameter management..."
     
-    # Then deploy the main VPN automation stack with secure parameter integration
-    print_status "Deploying VPN automation stack with secure parameter integration..."
+    # Set CDK context for environment
+    export CDK_CONTEXT_ENVIRONMENT="$environment"
+    
     if [ "$environment" = "staging" ]; then
         # For staging, include production URL if available
         if [ -n "$PRODUCTION_API_ENDPOINT" ]; then
@@ -517,19 +557,47 @@ deploy_with_secure_parameters() {
             PRODUCTION_API_KEY="$PRODUCTION_API_KEY" \
             ENVIRONMENT="$environment" \
             AWS_PROFILE="$profile" \
-            cdk deploy VpnAutomationStack-"$environment" --require-approval never
+            cdk deploy --app "npx ts-node bin/vpn-secure-automation.ts" \
+            --require-approval never \
+            --context environment="$environment"
         else
-            ENVIRONMENT="$environment" AWS_PROFILE="$profile" cdk deploy VpnAutomationStack-"$environment" --require-approval never
+            ENVIRONMENT="$environment" AWS_PROFILE="$profile" \
+            cdk deploy --app "npx ts-node bin/vpn-secure-automation.ts" \
+            --require-approval never \
+            --context environment="$environment"
         fi
     else
-        ENVIRONMENT="$environment" AWS_PROFILE="$profile" cdk deploy VpnAutomationStack-"$environment" --require-approval never
+        ENVIRONMENT="$environment" AWS_PROFILE="$profile" \
+        cdk deploy --app "npx ts-node bin/vpn-secure-automation.ts" \
+        --require-approval never \
+        --context environment="$environment"
     fi
     
     print_success "✅ Secure parameter management deployment completed!"
     
     # Validate configuration
     print_status "🔍 Running post-deployment validation..."
-    validate_secure_parameters "$environment" "$profile"
+    if validate_secure_parameters "$environment" "$profile"; then
+        # Check if this was a first-time deployment with placeholder values
+        local has_placeholders=false
+        local test_param_value
+        test_param_value=$(aws ssm get-parameter --name "/vpn/slack/webhook" --profile "$profile" --query 'Parameter.Value' --output text 2>/dev/null || echo "")
+        
+        if [[ "$test_param_value" == PLACEHOLDER_* ]]; then
+            has_placeholders=true
+        fi
+        
+        if [ "$has_placeholders" = "true" ]; then
+            echo ""
+            print_warning "🔧 First-time deployment detected!"
+            print_status "Infrastructure is deployed, but parameters need configuration."
+            print_status "Run: scripts/setup-parameters.sh $environment --secure"
+        else
+            print_success "✅ System is fully configured and ready to use!"
+        fi
+    else
+        print_error "❌ Post-deployment validation failed. Check the errors above."
+    fi
 }
 
 # Function to validate secure parameters (Epic 5.1)
@@ -548,31 +616,71 @@ validate_secure_parameters() {
         return 1
     fi
     
-    # Check required parameters
+    # Phase 1: Check parameter structure exists (corrected paths)
     local required_params=(
         "/vpn/slack/webhook"
         "/vpn/slack/signing_secret"
         "/vpn/slack/bot_token"
-        "/vpn/config/endpoint_id/$environment"
-        "/vpn/config/subnet_id/$environment"
+        "/vpn/endpoint/conf"
+        "/vpn/endpoint/state"
+        "/vpn/cost/optimization_config"
+        "/vpn/admin/overrides"
+        "/vpn/cost/metrics"
+        "/vpn/logging/config"
     )
     
+    # Add environment-specific parameters
+    if [ "$environment" = "staging" ]; then
+        required_params+=(
+            "/vpn/cross_account/config"
+        )
+    fi
+    
     local missing_params=()
+    local placeholder_params=()
+    
     for param in "${required_params[@]}"; do
         if ! aws ssm get-parameter --name "$param" --profile "$profile" &> /dev/null; then
             missing_params+=("$param")
+        else
+            # Check for placeholder values
+            local param_value
+            param_value=$(aws ssm get-parameter --name "$param" --profile "$profile" --query 'Parameter.Value' --output text 2>/dev/null || echo "")
+            
+            if [[ "$param_value" == PLACEHOLDER_* ]]; then
+                placeholder_params+=("$param")
+            fi
         fi
     done
     
-    if [ ${#missing_params[@]} -eq 0 ]; then
-        print_success "✅ All required parameters exist"
-    else
-        print_warning "⚠️  Missing parameters that need to be set manually:"
+    # Report missing parameters (structure not created)
+    if [ ${#missing_params[@]} -gt 0 ]; then
+        print_error "❌ Missing parameters (infrastructure issue):"
         for param in "${missing_params[@]}"; do
             echo "   - $param"
         done
-        print_status "Use 'scripts/setup-parameters.sh $environment --secure' to configure these"
+        print_error "This indicates a deployment problem. Parameters should be created by CDK."
+        return 1
     fi
+    
+    # Report placeholder values (need configuration)
+    if [ ${#placeholder_params[@]} -gt 0 ]; then
+        print_warning "⚠️  Parameters exist but contain placeholder values:"
+        for param in "${placeholder_params[@]}"; do
+            echo "   - $param"
+        done
+        echo ""
+        print_status "📋 Next steps for first-time setup:"
+        print_status "1. Configure parameters: scripts/setup-parameters.sh $environment --secure"
+        print_status "2. Update Slack app configuration with API Gateway URL"
+        print_status "3. Test integration: Use /vpn check $environment in Slack"
+        echo ""
+        print_warning "💡 System is deployed but not yet functional until parameters are configured."
+        return 0  # This is expected for first-time deployment
+    fi
+    
+    print_success "✅ All required parameters exist and are configured"
+    return 0
 }
 
 # Function to show deployment status with secure parameters
@@ -585,11 +693,11 @@ show_deployment_status() {
     
     # Check production environment
     print_status "Production Environment:"
-    if aws cloudformation describe-stacks --stack-name VpnAutomationStack-production --profile "$production_profile" &> /dev/null; then
+    if aws cloudformation describe-stacks --stack-name VpnAutomation-production --profile "$production_profile" &> /dev/null; then
         print_success "  ✅ VPN Automation Stack: Deployed"
         
         # Check secure parameter stack
-        if aws cloudformation describe-stacks --stack-name VpnSecureParameterStack-production --profile "$production_profile" &> /dev/null; then
+        if aws cloudformation describe-stacks --stack-name VpnSecureParameters-production --profile "$production_profile" &> /dev/null; then
             print_success "  ✅ Secure Parameter Stack: Deployed (Epic 5.1)"
         else
             print_warning "  ⚠️  Secure Parameter Stack: Not deployed (can be added with --secure-parameters)"
@@ -602,11 +710,11 @@ show_deployment_status() {
     
     # Check staging environment
     print_status "Staging Environment:"
-    if aws cloudformation describe-stacks --stack-name VpnAutomationStack-staging --profile "$staging_profile" &> /dev/null; then
+    if aws cloudformation describe-stacks --stack-name VpnAutomation-staging --profile "$staging_profile" &> /dev/null; then
         print_success "  ✅ VPN Automation Stack: Deployed"
         
         # Check secure parameter stack
-        if aws cloudformation describe-stacks --stack-name VpnSecureParameterStack-staging --profile "$staging_profile" &> /dev/null; then
+        if aws cloudformation describe-stacks --stack-name VpnSecureParameters-staging --profile "$staging_profile" &> /dev/null; then
             print_success "  ✅ Secure Parameter Stack: Deployed (Epic 5.1)"
         else
             print_warning "  ⚠️  Secure Parameter Stack: Not deployed (can be added with --secure-parameters)"
@@ -646,16 +754,19 @@ main() {
     case "${ARGS[0]:-}" in
         "production")
             check_prerequisites
+            setup_lambda_dependencies
             setup_cdk_dependencies
             deploy_production
             ;;
         "staging")
             check_prerequisites
+            setup_lambda_dependencies
             setup_cdk_dependencies
             deploy_staging
             ;;
         "both")
             check_prerequisites
+            setup_lambda_dependencies
             setup_cdk_dependencies
             deploy_both
             ;;
@@ -667,11 +778,13 @@ main() {
             ;;
         "diff-staging")
             check_prerequisites
+            setup_lambda_dependencies
             setup_cdk_dependencies
             show_diff "staging"
             ;;
         "diff-production")
             check_prerequisites
+            setup_lambda_dependencies
             setup_cdk_dependencies
             show_diff "production"
             ;;
