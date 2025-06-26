@@ -100,6 +100,27 @@ export async function readSlackSigningSecret(): Promise<string> {
   }
 }
 
+// Epic 5.1.1: Read Slack bot token (encrypted parameter with KMS)
+export async function readSlackBotToken(): Promise<string> {
+  try {
+    const token = await readSecureParameter('/vpn/slack/bot_token');
+    
+    if (typeof token !== 'string') {
+      throw new Error('Slack bot token parameter is not a string');
+    }
+    
+    // Epic 5.1.2: Check for placeholder values
+    if (token.includes('PLACEHOLDER_')) {
+      throw new Error('Slack bot token is still a placeholder value. Please configure with actual bot token.');
+    }
+    
+    return token;
+  } catch (error) {
+    console.error('Failed to read Slack bot token:', error);
+    throw new Error(`Unable to read Slack bot token: ${error}`);
+  }
+}
+
 // Epic 5.1.1: Read cost optimization configuration (encrypted parameter)
 export async function readCostOptimizationConfig(): Promise<any> {
   try {

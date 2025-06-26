@@ -151,6 +151,7 @@ export class VpnAutomationStack extends cdk.Stack {
       VPN_STATE_PREFIX: '/vpn/',
       SIGNING_SECRET_PARAM: '/vpn/slack/signing_secret',
       WEBHOOK_PARAM: '/vpn/slack/webhook',
+      BOT_TOKEN_PARAM: '/vpn/slack/bot_token',
       
       // Epic 5.1: Secure parameter management configuration
       SECURE_PARAMETER_ENABLED: 'true',
@@ -598,6 +599,13 @@ export class VpnAutomationStack extends cdk.Stack {
       parameterName: '/vpn/slack/signing_secret',
       stringValue: 'PLACEHOLDER_SIGNING_SECRET',
       description: 'Slack app signing secret for request verification (SecureString recommended)',
+      tier: ssm.ParameterTier.STANDARD
+    });
+
+    new ssm.StringParameter(this, 'SlackBotTokenPlaceholder', {
+      parameterName: '/vpn/slack/bot_token',
+      stringValue: 'PLACEHOLDER_BOT_TOKEN',
+      description: 'Slack bot OAuth token for posting messages (SecureString recommended)',
       tier: ssm.ParameterTier.STANDARD
     });
 

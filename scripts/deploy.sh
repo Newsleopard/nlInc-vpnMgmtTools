@@ -552,6 +552,7 @@ validate_secure_parameters() {
     local required_params=(
         "/vpn/slack/webhook"
         "/vpn/slack/signing_secret"
+        "/vpn/slack/bot_token"
         "/vpn/config/endpoint_id/$environment"
         "/vpn/config/subnet_id/$environment"
     )

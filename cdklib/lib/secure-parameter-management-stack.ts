@@ -187,6 +187,17 @@ export class SecureParameterManagementStack extends cdk.Stack {
       allowedPattern: '^[a-f0-9]{64}$|^PLACEHOLDER_.*$' // 64-character hex string or placeholder
     });
 
+    // Slack bot OAuth token (sensitive, encrypted with KMS)
+    const slackBotToken = new ssm.StringParameter(this, 'SlackBotToken', {
+      parameterName: '/vpn/slack/bot_token',
+      stringValue: 'PLACEHOLDER_BOT_TOKEN',
+      description: `Slack bot OAuth token for ${environment} (ENCRYPTED)`,
+      tier: ssm.ParameterTier.STANDARD,
+      type: ssm.ParameterType.SECURE_STRING,
+      keyId: this.parameterKmsKey,
+      allowedPattern: '^xoxb-[0-9]+-[0-9]+-[a-zA-Z0-9]+$|^PLACEHOLDER_.*$' // Slack bot token pattern or placeholder
+    });
+
     // Epic 5.1.1: Cost optimization parameters (encrypted for security)
     const costOptimizationConfig = new ssm.StringParameter(this, 'CostOptimizationConfig', {
       parameterName: '/vpn/cost/optimization_config',
@@ -311,6 +322,7 @@ export class SecureParameterManagementStack extends cdk.Stack {
           '/vpn/endpoint/conf',
           '/vpn/slack/webhook',
           '/vpn/slack/signing_secret',
+          '/vpn/slack/bot_token',
           '/vpn/cost/optimization_config',
           '/vpn/admin/overrides',
           '/vpn/cost/metrics',
@@ -320,6 +332,7 @@ export class SecureParameterManagementStack extends cdk.Stack {
         encryptedParameters: [
           '/vpn/slack/webhook',
           '/vpn/slack/signing_secret',
+          '/vpn/slack/bot_token',
           '/vpn/cost/optimization_config',
           '/vpn/admin/overrides',
           '/vpn/cost/metrics',
@@ -328,7 +341,8 @@ export class SecureParameterManagementStack extends cdk.Stack {
         kmsKeyUsed: true,
         validationPatterns: {
           slackWebhook: '^https://hooks\\.slack\\.com/.*|PLACEHOLDER_.*$',
-          slackSigningSecret: '^[a-f0-9]{64}$|^PLACEHOLDER_.*$'
+          slackSigningSecret: '^[a-f0-9]{64}$|^PLACEHOLDER_.*$',
+          slackBotToken: '^xoxb-[0-9]+-[0-9]+-[a-zA-Z0-9]+$|^PLACEHOLDER_.*$'
         }
       }),
       description: 'Parameter validation and security summary'
