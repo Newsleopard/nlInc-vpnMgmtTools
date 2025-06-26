@@ -1,30 +1,22 @@
-# VPN Cost-Saving Automation – Architecture
+# VPN Cost Automation Architecture
 
 _Last updated: 2025-06-13_
 
-## 1  Component Map
+## Component Map
 
 ```mermaid
-flowchart TD
-    Slack[/Slack Workspace/]
-    subgraph AWS
-        APIGW[(API Gateway)]
-        LH[slack-handler λ]
-        VC[vpn-control λ]
-        VM[vpn-monitor λ]
-        SSM[(SSM Parameter<br/>/vpn/{env}/state)]
-        EC2[(AWS EC2<br/>Client-VPN APIs)]
-        CW>CloudWatch<br/>Metrics+Logs]
-    end
-    Slack -- slash cmd --> APIGW
-    APIGW --> LH
-    LH --> VC
-    VM --> VC
-    VC -- read/write --> SSM
-    VC -- call --> EC2
-    VM -- putMetric --> CW
-    VC -- putMetric --> CW
-    LH -- postMessage --> Slack
+graph TD
+    A[Lambda Function] --> B{Check SSM Parameter<br/>/vpn/env/state}
+    B -->|enabled| C[Get VPN Connections]
+    B -->|disabled| D[Exit - VPN Disabled]
+    C --> E[Check Connection State]
+    E -->|available| F[Delete VPN Connection]
+    E -->|deleted/deleting| G[Skip - Already Processed]
+    F --> H[Update SSM Parameter to disabled]
+    H --> I[Send SNS Notification]
+    G --> J[Continue to Next Connection]
+    I --> J
+    J --> K[Process Complete]
 ```
 
 ## 2  Data Flow Scenarios
