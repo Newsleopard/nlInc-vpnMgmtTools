@@ -183,6 +183,7 @@ AWS_REGION=ap-northeast-1
 14. **`complete_vpn_setup.sh`** - 完整 VPN 設置工具。從 "pending-associate" 狀態繼續完成 VPN 端點設置流程。
 15. **`validate_config.sh`** - 配置驗證工具。驗證所有環境的配置正確性並自動修復簡單的配置問題。
 16. **`verify_config_update_fix.sh`** - 配置更新修復驗證工具。驗證配置文件更新修復是否正確工作。
+17. **`fix_internet_access.sh`** - VPN 網際網路存取修復工具。為現有 VPN 端點新增缺少的網際網路路由 (0.0.0.0/0)，解決無法存取網際網路的問題。
 
 ### 📚 核心庫文件 (lib/)
 
@@ -300,7 +301,7 @@ VPN_ENV=production ./admin-tools/run-vpn-analysis.sh
 
 ### 完整工具清單
 
-總共包含 **17個主要腳本** 和 **7個核心庫文件**，提供從環境管理、VPN 端點創建、安全 CSR 管理、團隊管理、全面分析報告到故障診斷的完整解決方案。所有工具都支援雙環境（Staging/Production）架構，並提供自動備份和錯誤恢復功能。
+總共包含 **18個主要腳本** 和 **7個核心庫文件**，提供從環境管理、VPN 端點創建、安全 CSR 管理、團隊管理、全面分析報告到故障診斷的完整解決方案。所有工具都支援雙環境（Staging/Production）架構，並提供自動備份和錯誤恢復功能。
 
 詳細的診斷和修復工具說明請參考: [`admin-tools/tools/README.md`](admin-tools/tools/README.md)
 
@@ -719,6 +720,12 @@ aws ec2 authorize-security-group-ingress \
 
 # 驗證配置正確性
 ./admin-tools/tools/validate_config.sh
+
+# 修復 VPN 網際網路存取問題
+./admin-tools/tools/fix_internet_access.sh
+
+# 修復特定端點的網際網路存取
+./admin-tools/tools/fix_internet_access.sh cvpn-endpoint-xxxxx
 ```
 
 #### 📊 VPN 分析和報告操作

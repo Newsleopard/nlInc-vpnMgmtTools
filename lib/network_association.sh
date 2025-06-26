@@ -210,6 +210,27 @@ _setup_authorization_and_routes_ec() {
     else
         echo -e "${GREEN}✓ 網際網路訪問授權設定成功${NC}" >&2
         log_message_core "網際網路訪問授權設定成功"
+        
+        # 設定網際網路路由（必須有對應的路由才能實際存取）
+        echo -e "${CYAN}設定網際網路路由...${NC}" >&2
+        local internet_route_output
+        internet_route_output=$(aws ec2 create-client-vpn-route \
+            --client-vpn-endpoint-id "$endpoint_id" \
+            --destination-cidr-block "0.0.0.0/0" \
+            --target-vpc-subnet-id "$subnet_id" \
+            --description "Route to internet via subnet $subnet_id" \
+            --region "$aws_region" 2>&1)
+        
+        local internet_route_status=$?
+        
+        if [ $internet_route_status -eq 0 ]; then
+            echo -e "${GREEN}✓ 網際網路路由設定成功${NC}" >&2
+            log_message_core "網際網路路由設定成功"
+        else
+            echo -e "${YELLOW}⚠️ 設定網際網路路由失敗 - 請確保子網路有 Internet Gateway 路由${NC}" >&2
+            echo -e "${YELLOW}輸出: $internet_route_output${NC}" >&2
+            log_message_core "警告: 設定網際網路路由失敗 - 請檢查子網路 Internet Gateway 設定"
+        fi
     fi
     
     return 0
