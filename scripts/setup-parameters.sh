@@ -411,11 +411,11 @@ validate_slack_parameters() {
         validation_errors+=("Slack webhook URL must start with 'https://hooks.slack.com/'")
     fi
     
-    # Validate signing secret (must be 64 hex characters)
-    if [[ ! "$signing_secret" =~ ^[a-f0-9]{64}$ ]]; then
-        validation_errors+=("Slack signing secret must be exactly 64 hexadecimal characters")
+    # Validate signing secret (must be 32 hex characters)
+    if [[ ! "$signing_secret" =~ ^[a-f0-9]{32}$ ]]; then
+        validation_errors+=("Slack signing secret must be exactly 32 hexadecimal characters")
         validation_errors+=("Current length: ${#signing_secret} characters")
-        validation_errors+=("Pattern required: ^[a-f0-9]{64}$")
+        validation_errors+=("Pattern required: ^[a-f0-9]{32}$")
     fi
     
     # Validate bot token
@@ -432,7 +432,7 @@ validate_slack_parameters() {
         print_warning "   1. Go to https://api.slack.com/apps"
         print_warning "   2. Select your app"
         print_warning "   3. Go to 'Basic Information' → 'App Credentials'"
-        print_warning "   4. Copy the 'Signing Secret' (should be 64 hex characters)"
+        print_warning "   4. Copy the 'Signing Secret' (should be 32 hex characters)"
         return 1
     fi
     
@@ -565,16 +565,8 @@ configure_environment_parameters() {
     
     print_status "🔧 配置 $env_name 環境參數..."
     
-    # VPN endpoint configuration for this environment
-    VPN_CONFIG=$(cat <<EOF
-{
-  "ENDPOINT_ID": "$env_endpoint_id",
-  "SUBNET_ID": "$env_subnet_id",
-  "ENVIRONMENT": "$env_name",
-  "REGION": "$aws_region"
-}
-EOF
-)
+    # VPN endpoint configuration for this environment (single line JSON to avoid pattern issues)
+    VPN_CONFIG="{\"ENDPOINT_ID\": \"$env_endpoint_id\", \"SUBNET_ID\": \"$env_subnet_id\", \"ENVIRONMENT\": \"$env_name\", \"REGION\": \"$aws_region\"}"
 
     # Set parameters using the provided AWS profile with environment-specific path
     AWS_PROFILE="$aws_profile" aws ssm put-parameter \
@@ -592,15 +584,8 @@ EOF
         return 1
     fi
 
-    # VPN state (initial state) for this environment
-    VPN_STATE=$(cat <<EOF
-{
-  "associated": false,
-  "lastActivity": "$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")",
-  "environment": "$env_name"
-}
-EOF
-)
+    # VPN state (initial state) for this environment (single line JSON to avoid pattern issues)
+    VPN_STATE="{\"associated\": false, \"lastActivity\": \"$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")\", \"environment\": \"$env_name\"}"
 
     AWS_PROFILE="$aws_profile" aws ssm put-parameter \
         --name "/vpn/$env_name/endpoint/state" \
@@ -635,7 +620,7 @@ set_slack_parameters() {
     if ! validate_slack_parameters "$SLACK_WEBHOOK" "$SLACK_SECRET" "$SLACK_BOT_TOKEN"; then
         print_error "❌ Slack parameter validation failed for $env_name environment"
         print_warning "💡 You can use placeholder values for testing:"
-        print_warning "   --slack-secret 'PLACEHOLDER_$(openssl rand -hex 32)_update_with_real_64char_secret'"
+        print_warning "   --slack-secret 'PLACEHOLDER_$(openssl rand -hex 16)_update_with_real_32char_secret'"
         return 1
     fi
     

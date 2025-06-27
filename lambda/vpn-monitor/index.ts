@@ -1,5 +1,5 @@
 import { ScheduledEvent, Context } from 'aws-lambda';
-import { CloudWatch } from 'aws-sdk';
+import { CloudWatchClient, PutMetricDataCommand, StandardUnit } from '@aws-sdk/client-cloudwatch';
 
 // Import shared utilities from Lambda Layer
 import { VpnState } from '/opt/types';
@@ -8,7 +8,7 @@ import * as stateStore from '/opt/stateStore';
 import * as slack from '/opt/slack';
 import { createLogger, withPerformanceLogging } from '/opt/logger';
 
-const cloudwatch = new CloudWatch();
+const cloudwatch = new CloudWatchClient({});
 
 const IDLE_MINUTES = Number(process.env.IDLE_MINUTES || 60);
 const ENVIRONMENT = process.env.ENVIRONMENT || 'staging';
@@ -143,7 +143,7 @@ export const handler = async (
       )();
       
       // Reset cooldown if VPN is actively being used
-      await clearCooldownTimestamp(logger);
+      await clearCooldownTimestamp();
       return;
     }
 
@@ -521,19 +521,19 @@ function calculateHourlyCostSavings(): string {
 // Helper function to publish CloudWatch metrics
 async function publishMetric(metricName: string, value: number): Promise<void> {
   try {
-    await cloudwatch.putMetricData({
+    await cloudwatch.send(new PutMetricDataCommand({
       Namespace: 'VPN/Automation',
       MetricData: [{
         MetricName: metricName,
         Value: value,
-        Unit: 'Count',
+        Unit: StandardUnit.Count,
         Dimensions: [{
           Name: 'Environment',
           Value: ENVIRONMENT
         }],
         Timestamp: new Date()
       }]
-    }).promise();
+    }));
     
     console.log(`Published metric ${metricName}: ${value}`);
   } catch (error) {
@@ -548,27 +548,27 @@ async function publishStatusMetrics(status: any): Promise<void> {
     {
       MetricName: 'VpnAssociationStatus',
       Value: status.associated ? 1 : 0,
-      Unit: 'None'
+      Unit: StandardUnit.None
     },
     {
       MetricName: 'VpnActiveConnections',
       Value: status.activeConnections,
-      Unit: 'Count'
+      Unit: StandardUnit.Count
     },
     {
       MetricName: 'VpnUptimeMinutes',
       Value: status.associated ? 5 : 0, // 5-minute intervals when running
-      Unit: 'Count'
+      Unit: StandardUnit.Count
     },
     {
       MetricName: 'VpnDowntimeMinutes',
       Value: !status.associated ? 5 : 0, // 5-minute intervals when stopped
-      Unit: 'Count'
+      Unit: StandardUnit.Count
     }
   ];
 
   try {
-    await cloudwatch.putMetricData({
+    await cloudwatch.send(new PutMetricDataCommand({
       Namespace: 'VPN/Automation',
       MetricData: metrics.map(metric => ({
         ...metric,
@@ -578,7 +578,7 @@ async function publishStatusMetrics(status: any): Promise<void> {
         }],
         Timestamp: new Date()
       }))
-    }).promise();
+    }));
     
     console.log('Published status metrics:', metrics.map(m => `${m.MetricName}: ${m.Value}`));
   } catch (error) {
@@ -592,27 +592,27 @@ async function publishCostSavingsMetrics(costSavings: any, idleMinutes: number):
     {
       MetricName: 'CostSavingsPerHour',
       Value: parseFloat(costSavings.hourly),
-      Unit: 'Count' // Represents dollars
+      Unit: StandardUnit.Count // Represents dollars
     },
     {
       MetricName: 'CostSavingsTotal',
       Value: parseFloat(costSavings.total),
-      Unit: 'Count' // Represents dollars
+      Unit: StandardUnit.Count // Represents dollars
     },
     {
       MetricName: 'IdleTimeBeforeDisassociation',
       Value: idleMinutes,
-      Unit: 'Count' // Minutes
+      Unit: StandardUnit.Count // Minutes
     },
     {
       MetricName: 'SubnetCount',
       Value: costSavings.details.subnetCount || 1,
-      Unit: 'Count'
+      Unit: StandardUnit.Count
     }
   ];
 
   try {
-    await cloudwatch.putMetricData({
+    await cloudwatch.send(new PutMetricDataCommand({
       Namespace: 'VPN/CostOptimization',
       MetricData: metrics.map(metric => ({
         ...metric,
@@ -628,7 +628,7 @@ async function publishCostSavingsMetrics(costSavings: any, idleMinutes: number):
         ],
         Timestamp: new Date()
       }))
-    }).promise();
+    }));
     
     console.log('Published cost savings metrics:', metrics.map(m => `${m.MetricName}: ${m.Value}`));
   } catch (error) {
@@ -657,19 +657,19 @@ async function trackCumulativeSavings(costSavings: any): Promise<void> {
     await stateStore.writeParameter(cumulativeKey, cumulativeSavings.toString());
     
     // Publish cumulative savings metric
-    await cloudwatch.putMetricData({
+    await cloudwatch.send(new PutMetricDataCommand({
       Namespace: 'VPN/CostOptimization',
       MetricData: [{
         MetricName: 'CumulativeSavings',
         Value: cumulativeSavings,
-        Unit: 'Count',
+        Unit: StandardUnit.Count,
         Dimensions: [{
           Name: 'Environment',
           Value: ENVIRONMENT
         }],
         Timestamp: new Date()
       }]
-    }).promise();
+    }));
     
     console.log(`Updated cumulative savings: $${cumulativeSavings.toFixed(2)}`);
     
@@ -699,12 +699,12 @@ async function trackDailySavings(savingsAmount: number): Promise<void> {
     await stateStore.writeParameter(dailyKey, dailySavings.toString());
     
     // Publish daily savings metric
-    await cloudwatch.putMetricData({
+    await cloudwatch.send(new PutMetricDataCommand({
       Namespace: 'VPN/CostOptimization',
       MetricData: [{
         MetricName: 'DailySavings',
         Value: dailySavings,
-        Unit: 'Count',
+        Unit: StandardUnit.Count,
         Dimensions: [
           {
             Name: 'Environment',
@@ -717,7 +717,7 @@ async function trackDailySavings(savingsAmount: number): Promise<void> {
         ],
         Timestamp: new Date()
       }]
-    }).promise();
+    }));
     
     console.log(`Updated daily savings for ${today}: $${dailySavings.toFixed(2)}`);
     

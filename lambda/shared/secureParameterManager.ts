@@ -127,7 +127,7 @@ const PARAMETER_SCHEMA: SecureParameterConfig[] = [
     encrypted: true,
     required: true,
     description: 'Slack app signing secret for request verification',
-    validationPattern: /^([a-f0-9]{64}|PLACEHOLDER_.*)$/
+    validationPattern: /^([a-f0-9]{32}|PLACEHOLDER_.*)$/
   },
   {
     name: '/vpn/cost/optimization_config',

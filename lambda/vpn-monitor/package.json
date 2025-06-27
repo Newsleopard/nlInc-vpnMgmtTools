@@ -4,7 +4,7 @@
   "description": "VPN Monitor Lambda function for idle detection and cost optimization",
   "main": "index.js",
   "dependencies": {
-    "aws-sdk": "^2.1490.0"
+    "@aws-sdk/client-cloudwatch": "^3.350.0"
   },
   "devDependencies": {
     "@types/aws-lambda": "^8.10.109",

@@ -190,7 +190,7 @@ export class VpnAutomationStack extends cdk.Stack {
     // slack-handler Lambda function
     const slackHandler = new lambda.Function(this, 'SlackHandler', {
       runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'index.handler',
+      handler: 'dist/index.handler',
       code: lambda.Code.fromAsset(path.resolve(__dirname, '../../lambda/slack-handler')),
       layers: [sharedLayer],
       role: slackHandlerRole,
@@ -209,7 +209,7 @@ export class VpnAutomationStack extends cdk.Stack {
     // vpn-control Lambda function
     const vpnControl = new lambda.Function(this, 'VpnControl', {
       runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'index.handler',
+      handler: 'dist/index.handler',
       code: lambda.Code.fromAsset(path.resolve(__dirname, '../../lambda/vpn-control')),
       layers: [sharedLayer],
       role: vpnControlRole,
@@ -221,7 +221,7 @@ export class VpnAutomationStack extends cdk.Stack {
     // vpn-monitor Lambda function (for scheduled monitoring)
     const vpnMonitor = new lambda.Function(this, 'VpnMonitor', {
       runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'index.handler',
+      handler: 'dist/index.handler',
       code: lambda.Code.fromAsset(path.resolve(__dirname, '../../lambda/vpn-monitor')),
       layers: [sharedLayer],
       role: vpnControlRole, // Same role as vpn-control

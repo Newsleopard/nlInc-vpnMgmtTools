@@ -1,5 +1,6 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult, Context } from 'aws-lambda';
-import { Lambda, CloudWatch } from 'aws-sdk';
+import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
+import { CloudWatchClient, PutMetricDataCommand, StandardUnit } from '@aws-sdk/client-cloudwatch';
 import * as querystring from 'querystring';
 
 // Import shared utilities from Lambda Layer
@@ -8,8 +9,8 @@ import * as slack from '/opt/slack';
 import * as stateStore from '/opt/stateStore';
 import { createLogger, extractLogContext, withPerformanceLogging } from '/opt/logger';
 
-const lambda = new Lambda();
-const cloudwatch = new CloudWatch();
+const lambda = new LambdaClient({});
+const cloudwatch = new CloudWatchClient({});
 const ENVIRONMENT = process.env.ENVIRONMENT || 'staging';
 
 export const handler = async (
@@ -305,7 +306,7 @@ async function invokeLocalVpnControl(command: VpnCommandRequest, logger: any): P
     
     const invocationStart = Date.now();
     
-    const result = await lambda.invoke({
+    const result = await lambda.send(new InvokeCommand({
       FunctionName: `VpnAutomationStack-${ENVIRONMENT}-VpnControl`,
       InvocationType: 'RequestResponse',
       Payload: JSON.stringify({
@@ -316,7 +317,7 @@ async function invokeLocalVpnControl(command: VpnCommandRequest, logger: any): P
           'X-Correlation-ID': logger.getCorrelationId()
         }
       })
-    }).promise();
+    }));
 
     const invocationTime = Date.now() - invocationStart;
     
@@ -366,6 +367,7 @@ async function invokeLocalVpnControl(command: VpnCommandRequest, logger: any): P
     
     return {
       success: false,
+      message: 'Local VPN operation failed',
       error: `Local VPN operation failed: ${error.message}`
     };
   }
@@ -451,7 +453,7 @@ async function invokeProductionViaAPIGateway(command: VpnCommandRequest, logger:
           throw new Error(`Production API error: ${response.status} ${response.statusText} - ${errorText}`);
         }
 
-        const result = await response.json();
+        const result = await response.json() as VpnCommandResponse;
         
         childLogger.info('Production API response received', {
           success: result.success,
@@ -525,6 +527,7 @@ async function invokeProductionViaAPIGateway(command: VpnCommandRequest, logger:
         
         return {
           success: false,
+          message: 'Cross-account VPN operation failed',
           error: `Cross-account VPN operation failed after ${attempt} attempts: ${error.message}`
         };
       }
@@ -541,6 +544,7 @@ async function invokeProductionViaAPIGateway(command: VpnCommandRequest, logger:
   // This should never be reached, but just in case
   return {
     success: false,
+    message: 'Cross-account VPN operation failed',
     error: 'Cross-account VPN operation failed: Maximum retries exceeded'
   };
 }
@@ -552,12 +556,12 @@ async function publishCrossAccountMetric(
   targetEnvironment: string
 ): Promise<void> {
   try {
-    await cloudwatch.putMetricData({
+    await cloudwatch.send(new PutMetricDataCommand({
       Namespace: 'VPN/CrossAccount',
       MetricData: [{
         MetricName: metricName,
         Value: value,
-        Unit: 'Count',
+        Unit: StandardUnit.Count,
         Dimensions: [
           {
             Name: 'SourceEnvironment',
@@ -570,7 +574,7 @@ async function publishCrossAccountMetric(
         ],
         Timestamp: new Date()
       }]
-    }).promise();
+    }));
     
     console.log(`Published cross-account metric ${metricName}: ${value}`);
   } catch (error) {

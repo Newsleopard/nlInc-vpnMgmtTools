@@ -182,7 +182,7 @@ export class SecureParameterManagementStack extends cdk.Stack {
       type: 'String',
       description: `Slack app signing secret for ${environment} request verification (will be converted to SecureString)`,
       tier: ssm.ParameterTier.STANDARD,
-      allowedPattern: '^[a-f0-9]{64}$|^PLACEHOLDER_.*$' // 64-character hex string or placeholder
+      allowedPattern: '^[a-f0-9]{32}$|^PLACEHOLDER_.*$' // 32-character hex string or placeholder
     });
 
     // Slack bot OAuth token (sensitive, encrypted with KMS)

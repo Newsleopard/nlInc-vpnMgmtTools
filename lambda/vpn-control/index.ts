@@ -1,5 +1,5 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult, Context } from 'aws-lambda';
-import { CloudWatch } from 'aws-sdk';
+import { CloudWatchClient, PutMetricDataCommand, StandardUnit } from '@aws-sdk/client-cloudwatch';
 
 // Import shared utilities from Lambda Layer
 import { VpnCommandRequest, VpnCommandResponse, CrossAccountRequest } from '/opt/types';
@@ -8,7 +8,7 @@ import * as stateStore from '/opt/stateStore';
 import * as slack from '/opt/slack';
 import { createLogger, extractLogContext, withPerformanceLogging } from '/opt/logger';
 
-const cloudwatch = new CloudWatch();
+const cloudwatch = new CloudWatchClient({});
 const ENVIRONMENT = process.env.ENVIRONMENT || 'staging';
 
 export const handler = async (
@@ -43,6 +43,7 @@ export const handler = async (
         },
         body: JSON.stringify({
           success: false,
+          message: 'Failed to parse request body',
           error: 'Invalid JSON in request body'
         })
       };
@@ -72,6 +73,7 @@ export const handler = async (
         },
         body: JSON.stringify({
           success: false,
+          message: 'Request validation failed',
           error: 'Missing required fields: action and environment'
         })
       };
@@ -88,6 +90,7 @@ export const handler = async (
         },
         body: JSON.stringify({
           success: false,
+          message: 'Invalid action specified',
           error: `Invalid action. Must be one of: ${validActions.join(', ')}`
         })
       };
@@ -103,6 +106,7 @@ export const handler = async (
         },
         body: JSON.stringify({
           success: false,
+          message: 'Environment validation failed',
           error: `Environment mismatch. This function handles ${ENVIRONMENT}, but received ${command.environment}`
         })
       };
@@ -122,6 +126,7 @@ export const handler = async (
         },
         body: JSON.stringify({
           success: false,
+          message: 'VPN endpoint validation failed',
           error: errorMsg
         })
       };
@@ -229,7 +234,7 @@ export const handler = async (
       
       response = {
         success: false,
-        message: '',
+        message: `VPN ${command.action} operation failed`,
         error: `VPN ${command.action} failed: ${errorMessage}`
       };
     }
@@ -265,6 +270,7 @@ export const handler = async (
       },
       body: JSON.stringify({
         success: false,
+        message: 'Critical Lambda error occurred',
         error: 'Internal server error'
       })
     };
@@ -284,19 +290,19 @@ async function updateLastActivity(): Promise<void> {
 // Helper function to publish CloudWatch metrics
 async function publishMetric(metricName: string, value: number): Promise<void> {
   try {
-    await cloudwatch.putMetricData({
+    await cloudwatch.send(new PutMetricDataCommand({
       Namespace: 'VPN/Automation',
       MetricData: [{
         MetricName: metricName,
         Value: value,
-        Unit: 'Count',
+        Unit: StandardUnit.Count,
         Dimensions: [{
           Name: 'Environment',
           Value: ENVIRONMENT
         }],
         Timestamp: new Date()
       }]
-    }).promise();
+    }));
     
     console.log(`Published metric ${metricName}: ${value}`);
   } catch (error) {
@@ -344,6 +350,7 @@ async function handleAdminOverride(command: VpnCommandRequest): Promise<VpnComma
     const errorMessage = error instanceof Error ? error.message : String(error);
     return {
       success: false,
+      message: 'Admin override operation failed',
       error: `Failed to enable admin override: ${errorMessage}`
     };
   }
@@ -371,6 +378,7 @@ async function handleClearOverride(command: VpnCommandRequest): Promise<VpnComma
     const errorMessage = error instanceof Error ? error.message : String(error);
     return {
       success: false,
+      message: 'Clear override operation failed',
       error: `Failed to clear admin override: ${errorMessage}`
     };
   }
@@ -410,6 +418,7 @@ async function handleCooldownStatus(command: VpnCommandRequest): Promise<VpnComm
     const errorMessage = error instanceof Error ? error.message : String(error);
     return {
       success: false,
+      message: 'Cooldown status check failed',
       error: `Failed to check cooldown status: ${errorMessage}`
     };
   }
@@ -445,6 +454,7 @@ async function handleForceClose(command: VpnCommandRequest): Promise<VpnCommandR
     const errorMessage = error instanceof Error ? error.message : String(error);
     return {
       success: false,
+      message: 'Force close operation failed',
       error: `Failed to force close: ${errorMessage}`
     };
   }
@@ -496,6 +506,7 @@ async function handleCostSavings(command: VpnCommandRequest): Promise<VpnCommand
     const errorMessage = error instanceof Error ? error.message : String(error);
     return {
       success: false,
+      message: 'Cost savings report generation failed',
       error: `Failed to generate cost savings report: ${errorMessage}`
     };
   }
@@ -565,6 +576,7 @@ async function handleCostAnalysis(command: VpnCommandRequest): Promise<VpnComman
     const errorMessage = error instanceof Error ? error.message : String(error);
     return {
       success: false,
+      message: 'Cost analysis generation failed',
       error: `Failed to generate cost analysis: ${errorMessage}`
     };
   }
