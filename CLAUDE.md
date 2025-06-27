@@ -53,7 +53,7 @@ AWS_ACCOUNT_ID="123456789012"  # Replace with actual account ID for this environ
 ### Profile Operations
 ```bash
 # View current AWS profile status
-./vpn_env.sh status
+./admin-tools/vpn_env.sh status
 
 # Set specific profile for current environment
 ./admin-tools/aws_vpn_admin.sh --set-profile my-staging-profile
@@ -71,13 +71,13 @@ AWS_ACCOUNT_ID="123456789012"  # Replace with actual account ID for this environ
 
 ```bash
 # View current environment status
-./vpn_env.sh status
+./admin-tools/vpn_env.sh status
 
 # Switch to staging environment
-./vpn_env.sh switch staging
+./admin-tools/vpn_env.sh switch staging
 
 # Switch to production (requires confirmation)
-./vpn_env.sh switch production
+./admin-tools/vpn_env.sh switch production
 
 # Interactive environment selector
 ./enhanced_env_selector.sh
@@ -496,13 +496,13 @@ For large teams, use batch operations:
 
 1. **Regular Audits**: Use `./admin-tools/manage_vpn_users.sh list` to review active users
 2. **Permission Validation**: Run `./team_member_setup.sh --check-permissions` before VPN setup
-3. **Environment Isolation**: Verify environment with `./vpn_env.sh status` before user operations
+3. **Environment Isolation**: Verify environment with `./admin-tools/vpn_env.sh status` before user operations
 4. **Policy Updates**: Regularly review and update IAM policies in `iam-policies/` directory
 5. **Access Logging**: Monitor S3 bucket access logs for suspicious activity
 
 ## Important Notes
 
-- **Always verify current environment and AWS profile** before operations using `./vpn_env.sh status`
+- **Always verify current environment and AWS profile** before operations using `./admin-tools/vpn_env.sh status`
 - **Profile Configuration Required**: Each environment needs proper AWS profile configuration in `configs/{env}/{env}.env`
 - **Account ID Validation**: Set correct `AWS_ACCOUNT_ID` in each environment config
 - **Tool Separation**: Use `setup_csr_s3_bucket.sh` for infrastructure, `manage_vpn_users.sh` for user management
@@ -530,11 +530,11 @@ aws sts get-caller-identity --profile production
 # Set AWS_ACCOUNT_ID for each environment
 
 # Test environment switching with profile validation
-./vpn_env.sh switch staging
-./vpn_env.sh switch production
+./admin-tools/vpn_env.sh switch staging
+./admin-tools/vpn_env.sh switch production
 
 # View current status (shows environment + profile info)
-./vpn_env.sh status
+./admin-tools/vpn_env.sh status
 ```
 
 ## Adding New Administrators

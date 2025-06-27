@@ -13,8 +13,9 @@
 7. [🔐 安全 CSR 工作流程](#🔐-安全-csr-工作流程)
 8. [快速使用指南](#快速使用指南)
 9. [🚀 首次部署建議流程](#🚀-首次部署建議流程)
-10. [💰 成本試算與注意事項](#💰-成本試算與注意事項)
-11. [詳細文檔](#詳細文檔)
+10. [🔄 VPN Endpoint 重新建立流程](#🔄-vpn-endpoint-重新建立流程)
+11. [💰 成本試算與注意事項](#💰-成本試算與注意事項)
+12. [詳細文檔](#詳細文檔)
 
 ---
 
@@ -73,13 +74,13 @@ logs/
 
 ### 🔄 環境切換機制概述
 
-工具套件提供便捷的命令列工具（如 `vpn_env.sh`）來查看當前環境狀態和在不同環境間切換。切換到 Production 環境時，系統會要求額外確認，以防止誤操作。詳細的切換指令和操作指南請參閱 `vpn_connection_manual.md`。
+工具套件提供便捷的命令列工具（如 `admin-tools/vpn_env.sh`）來查看當前環境狀態和在不同環境間切換。切換到 Production 環境時，系統會要求額外確認，以防止誤操作。詳細的切換指令和操作指南請參閱 `vpn_connection_manual.md`。
 
 ---
 
 ## 環境管理簡介
 
-本工具套件提供 `vpn_env.sh` 作為環境管理的主要入口點。它允許用戶進行核心的環境操作，如：
+本工具套件提供 `admin-tools/vpn_env.sh` 作為環境管理的主要入口點。它允許用戶進行核心的環境操作，如：
 
 - **查看當前環境狀態**：顯示目前啟用的環境 (Staging 或 Production) 及其基本健康狀況。
 - **切換環境**：允許用戶在 Staging 和 Production 環境之間進行切換。切換至 Production 環境時會有額外的安全確認步驟。
@@ -161,7 +162,7 @@ AWS_REGION=ap-northeast-1
 
 ### 🌟 主要管理工具
 
-1.  **`vpn_env.sh`** - 環境管理入口工具。用於切換和查看 Staging/Production 環境狀態，以及執行環境健康檢查。
+1.  **`admin-tools/vpn_env.sh`** - 環境管理入口工具。用於切換和查看 Staging/Production 環境狀態，以及執行環境健康檢查。
 2.  **`enhanced_env_selector.sh`** - 增強型互動式環境選擇器。提供一個控制台界面，方便用戶進行環境切換、狀態查看和比較等操作。
 3.  **`admin-tools/aws_vpn_admin.sh`** - 管理員主控台。核心管理工具，用於創建、查看、管理和刪除 VPN 端點，以及管理團隊設定等。此工具會根據當前選定的環境（Staging/Production）執行操作。
 4.  **`team_member_setup.sh`** - 團隊成員設置工具。引導團隊成員完成 VPN 客戶端的配置，使用**安全的 CSR 工作流程**生成證書請求並等待管理員簽署。**自動配置進階 DNS 分流和 AWS 服務路由功能**。
@@ -667,13 +668,13 @@ aws ec2 authorize-security-group-ingress \
 #### 🚀 初始環境設置
 ```bash
 # 查看當前環境狀態
-./vpn_env.sh status
+./admin-tools/vpn_env.sh status
 
 # 切換到 staging 環境進行測試
-./vpn_env.sh switch staging
+./admin-tools/vpn_env.sh switch staging
 
 # 啟動互動式環境選擇器
-./vpn_env.sh selector
+./admin-tools/vpn_env.sh selector
 ```
 
 #### 🔧 VPN 管理操作
@@ -757,26 +758,32 @@ VPN_ENV=production ./admin-tools/run-vpn-analysis.sh
 **1.1 配置 AWS Profiles**
 ```bash
 # 配置 Production 環境 AWS Profile
-aws configure --profile production
+aws configure --profile prod
 # 輸入: Access Key ID, Secret Access Key, Region (建議: us-east-1), Output format (json)
 
 # 配置 Staging 環境 AWS Profile  
-aws configure --profile staging
+aws configure --profile default  # 或自定義名稱
 # 輸入: Access Key ID, Secret Access Key, Region (建議: us-east-1), Output format (json)
 ```
 
 **1.2 驗證 AWS Profiles 運作正常**
 ```bash
 # 驗證 Production Profile
-aws sts get-caller-identity --profile production
+aws sts get-caller-identity --profile prod
 
 # 驗證 Staging Profile
-aws sts get-caller-identity --profile staging
+aws sts get-caller-identity --profile default
 
 # 確認兩個 Profile 都能正常回傳 Account ID 和 User ARN
 ```
 
-**1.3 確認必要權限**
+**1.3 檢查環境狀態**
+```bash
+# 檢查當前環境和 AWS profile 配置
+./admin-tools/admin-tools/vpn_env.sh status
+```
+
+**1.4 確認必要權限**
 確保兩個 AWS 帳戶都具備以下權限：
 - CloudFormation 完整權限
 - Lambda 服務權限
@@ -812,7 +819,22 @@ aws sts get-caller-identity --profile staging
 
 **3.2 配置所有環境參數**
 ```bash
-# 一次配置兩個環境的參數（推薦做法）
+# 配置 Production 環境參數
+./scripts/setup-parameters.sh --env production --auto-read --secure \
+  --slack-webhook 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK' \
+  --slack-secret 'your-slack-signing-secret' \
+  --slack-bot-token 'xoxb-your-slack-bot-token'
+
+# 配置 Staging 環境參數  
+./scripts/setup-parameters.sh --env staging --auto-read --secure \
+  --slack-webhook 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK' \
+  --slack-secret 'your-slack-signing-secret' \
+  --slack-bot-token 'xoxb-your-slack-bot-token'
+```
+
+**替代方案：使用 --all 配置（如果腳本支援）**
+```bash
+# 一次配置兩個環境的參數（須確認腳本支援此功能）
 ./scripts/setup-parameters.sh --all --auto-read --secure \
   --slack-webhook 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK' \
   --slack-secret 'your-slack-signing-secret' \
@@ -858,13 +880,26 @@ aws sts get-caller-identity --profile staging
 #### **步驟 5: Slack 整合設定**
 
 **5.1 配置 Slack App**
+
+**⚠️ 重要：只需配置 Staging URL**
+
+由於系統採用智能路由架構，Slack App 只需要配置 **Staging 環境** 的 URL：
+
 1. 在 Slack App 設定中，將 **Request URL** 設定為：
-   - Staging: `https://yyyyyyyyyy.execute-api.us-east-1.amazonaws.com/prod/slack`
-   - Production: `https://xxxxxxxxxx.execute-api.us-east-1.amazonaws.com/prod/slack`
+   ```
+   https://yyyyyyyyyy.execute-api.us-east-1.amazonaws.com/prod/slack
+   ```
+   （使用 Staging API Gateway URL）
 
 2. 確認 Slash Command 設定：
    - Command: `/vpn`
-   - Request URL: 使用上述對應環境的 URL
+   - Request URL: 只使用 **Staging** 環境的 URL
+
+**路由邏輯說明：**
+- Staging 環境會智能路由 Production 指令到 Production 環境
+- Production 指令：`/vpn check production` → Staging 自動轉發到 Production
+- Staging 指令：`/vpn check staging` → Staging 本地處理
+- 這樣設計確保單一 Slack App 可以管理兩個環境
 
 **5.2 測試 Slack 整合**
 ```bash
@@ -878,11 +913,11 @@ aws sts get-caller-identity --profile staging
 **6.1 環境狀態檢查**
 ```bash
 # 檢查當前環境狀態
-./vpn_env.sh status
+./admin-tools/admin-tools/vpn_env.sh status
 
 # 切換環境測試
-./vpn_env.sh switch staging
-./vpn_env.sh switch production
+./admin-tools/admin-tools/vpn_env.sh switch staging
+./admin-tools/admin-tools/vpn_env.sh switch production
 ```
 
 **6.2 完整功能測試**
@@ -951,6 +986,145 @@ curl -X POST https://your-api-gateway-url/slack \
 - 📊 **監控設定**：啟用 CloudWatch 詳細監控
 - 🔧 **定期維護**：定期檢查和更新 Lambda 函數
 - 💾 **日誌管理**：設定適當的日誌保留期限
+
+---
+
+## 🔄 VPN Endpoint 重新建立流程
+
+當需要重新建立 VPN endpoint（例如：因為網路配置變更、安全性考量、或故障排除）時，請遵循以下步驟確保系統正常運作。
+
+### **🎯 重新建立 VPN Endpoint 的完整流程**
+
+#### **步驟 1: 確認要重新建立的環境**
+
+```bash
+# 檢查當前環境狀態
+./admin-tools/admin-tools/vpn_env.sh status
+
+# 檢查兩個環境的部署狀態
+./scripts/deploy.sh status
+```
+
+#### **步驟 2: 使用管理工具重新建立 Endpoint（推薦方法）**
+
+```bash
+# 切換到要重新建立的環境
+./admin-tools/admin-tools/vpn_env.sh switch production  # 或 staging
+
+# 使用管理工具重新建立 endpoint
+./admin-tools/aws_vpn_admin.sh
+# 在選單中選擇刪除現有 endpoint，然後建立新的 endpoint
+```
+
+#### **步驟 3: 更新 CDK 部署**
+
+**方法 A: 自動重新部署（推薦）**
+```bash
+# 重新部署受影響的環境，系統會自動偵測新的 endpoint
+./scripts/deploy.sh production --secure-parameters  # 如果重建了 production
+./scripts/deploy.sh staging --secure-parameters     # 如果重建了 staging
+```
+
+**方法 B: 手動更新參數（進階用戶）**
+```bash
+# 取得新的 endpoint ID
+NEW_ENDPOINT_ID="cvpn-endpoint-NEW_ID_HERE"
+
+# 更新 Production 環境參數
+aws ssm put-parameter \
+  --name "/vpn/prod/endpoint/conf" \
+  --value "{\"ENDPOINT_ID\":\"$NEW_ENDPOINT_ID\",\"SUBNET_ID\":\"subnet-93ca50d9\"}" \
+  --type "String" \
+  --overwrite \
+  --profile prod
+
+# 更新 Staging 環境參數  
+aws ssm put-parameter \
+  --name "/vpn/staging/endpoint/conf" \
+  --value "{\"ENDPOINT_ID\":\"$NEW_ENDPOINT_ID\",\"SUBNET_ID\":\"subnet-93ca50d9\"}" \
+  --type "String" \
+  --overwrite \
+  --profile prod
+
+# 重新部署 CDK
+./scripts/deploy.sh production --secure-parameters
+```
+
+#### **步驟 4: 更新跨環境路由配置（如果重建 Production）**
+
+如果重新建立了 **Production** endpoint，需要更新 Staging 的跨帳戶路由配置：
+
+```bash
+# 部署腳本會自動處理，但也可以手動檢查
+./scripts/deploy.sh validate-routing
+
+# 或者手動觸發 Staging 重新部署來更新路由
+./scripts/deploy.sh staging --secure-parameters
+```
+
+#### **步驟 5: 更新團隊成員配置**
+
+```bash
+# 重新生成團隊成員的 VPN 配置檔案
+./team_member_setup.sh --resume
+
+# 或使用零接觸工作流程
+./team_member_setup.sh --init
+```
+
+#### **步驟 6: 驗證系統功能**
+
+```bash
+# 檢查部署狀態
+./scripts/deploy.sh status
+
+# 驗證跨帳戶路由
+./scripts/deploy.sh validate-routing
+
+# 測試 Slack 整合
+# 在 Slack 中執行：/vpn check production 或 /vpn check staging
+```
+
+### **⚠️ 重要注意事項**
+
+1. **操作順序很重要**：
+   - 先重新建立 VPN endpoint
+   - 再更新參數存儲庫
+   - 最後重新部署 CDK
+
+2. **備份現有配置**：
+   ```bash
+   # 在重新建立前備份當前配置
+   aws ssm get-parameter --name "/vpn/prod/endpoint/conf" --profile prod
+   aws ssm get-parameter --name "/vpn/staging/endpoint/conf" --profile prod
+   ```
+
+3. **測試建議**：
+   - 優先在 Staging 環境測試整個流程
+   - 確認無誤後再操作 Production 環境
+
+4. **團隊通知**：
+   - 重新建立 endpoint 後，所有團隊成員需要下載新的 `.ovpn` 配置檔案
+   - API Gateway 端點會自動更新指向新的 VPN endpoint
+
+5. **自動化功能**：
+   - 部署腳本會自動更新 Staging 環境的跨帳戶路由配置
+   - CDK 會自動更新 API Gateway 來指向新的 VPN endpoint
+
+### **故障排除**
+
+如果遇到問題，可以使用以下工具進行診斷：
+
+```bash
+# 檢查配置檔案
+./admin-tools/tools/validate_config.sh
+
+# 修復 endpoint ID 問題
+./admin-tools/tools/fix_endpoint_id.sh
+
+# 診斷 VPN 建立問題
+./admin-tools/tools/debug_vpn_creation.sh
+```
 
 ---
 
