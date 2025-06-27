@@ -398,12 +398,65 @@ create_parameter() {
     fi
 }
 
+# Function to validate Slack parameters against CDK validation patterns
+validate_slack_parameters() {
+    local webhook="$1"
+    local signing_secret="$2"
+    local bot_token="$3"
+    
+    local validation_errors=()
+    
+    # Validate webhook URL
+    if [[ ! "$webhook" =~ ^https://hooks\.slack\.com/.* ]]; then
+        validation_errors+=("Slack webhook URL must start with 'https://hooks.slack.com/'")
+    fi
+    
+    # Validate signing secret (must be 64 hex characters)
+    if [[ ! "$signing_secret" =~ ^[a-f0-9]{64}$ ]]; then
+        validation_errors+=("Slack signing secret must be exactly 64 hexadecimal characters")
+        validation_errors+=("Current length: ${#signing_secret} characters")
+        validation_errors+=("Pattern required: ^[a-f0-9]{64}$")
+    fi
+    
+    # Validate bot token
+    if [[ ! "$bot_token" =~ ^xoxb-[0-9]+-[0-9]+-[a-zA-Z0-9]+$ ]]; then
+        validation_errors+=("Slack bot token must match pattern: xoxb-XXXXXXXX-XXXXXXXX-XXXXXXXXXXXXXXXX")
+    fi
+    
+    if [ ${#validation_errors[@]} -gt 0 ]; then
+        print_error "❌ Slack parameter validation failed:"
+        for error in "${validation_errors[@]}"; do
+            print_error "   • $error"
+        done
+        print_warning "💡 To get the correct Slack signing secret:"
+        print_warning "   1. Go to https://api.slack.com/apps"
+        print_warning "   2. Select your app"
+        print_warning "   3. Go to 'Basic Information' → 'App Credentials'"
+        print_warning "   4. Copy the 'Signing Secret' (should be 64 hex characters)"
+        return 1
+    fi
+    
+    return 0
+}
+
+# Function to map environment short names to CDK full names
+get_cdk_environment_name() {
+    local env_short="$1"
+    case "$env_short" in
+        "prod") echo "production" ;;
+        "production") echo "production" ;;
+        "staging") echo "staging" ;;
+        *) echo "$env_short" ;;
+    esac
+}
+
 # Function to set secure parameter (Epic 5.1)
 set_secure_parameter() {
     local param_name="$1"
     local param_value="$2"
     local description="$3"
-    local kms_key_alias="vpn-parameter-store-$CURRENT_ENVIRONMENT"
+    local cdk_env_name=$(get_cdk_environment_name "$CURRENT_ENVIRONMENT")
+    local kms_key_alias="vpn-parameter-store-$cdk_env_name"
     
     print_status "Setting secure parameter: $param_name"
     
@@ -578,6 +631,14 @@ set_slack_parameters() {
     
     print_status "🔐 配置 $env_name Slack 參數..."
     
+    # Validate Slack parameters before setting them
+    if ! validate_slack_parameters "$SLACK_WEBHOOK" "$SLACK_SECRET" "$SLACK_BOT_TOKEN"; then
+        print_error "❌ Slack parameter validation failed for $env_name environment"
+        print_warning "💡 You can use placeholder values for testing:"
+        print_warning "   --slack-secret 'PLACEHOLDER_$(openssl rand -hex 32)_update_with_real_64char_secret'"
+        return 1
+    fi
+    
     # Slack webhook (encrypted)
     if [ "$USE_SECURE_PARAMETERS" = "true" ]; then
         set_secure_parameter_with_profile "/vpn/$env_name/slack/webhook" "$SLACK_WEBHOOK" \
@@ -649,7 +710,8 @@ set_secure_parameter_with_profile() {
     local aws_profile="$4" 
     local aws_region="$5"
     local env_name="$6"
-    local kms_key_alias="vpn-parameter-store-$env_name"
+    local cdk_env_name=$(get_cdk_environment_name "$env_name")
+    local kms_key_alias="vpn-parameter-store-$cdk_env_name"
     
     print_status "Setting secure parameter: $param_name for $env_name"
     

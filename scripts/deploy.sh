@@ -162,12 +162,60 @@ validate_aws_profile() {
     fi
 }
 
+# Map environment names between config directories and CDK stack names
+map_env_to_config_dir() {
+    local env="$1"
+    case "$env" in
+        "production") echo "prod" ;;
+        "staging") echo "staging" ;;
+        "prod") echo "prod" ;;
+        *) echo "$env" ;;
+    esac
+}
+
+# Map config directory names to CDK environment names
+map_config_dir_to_cdk_env() {
+    local config_dir="$1"
+    case "$config_dir" in
+        "prod") echo "production" ;;
+        "staging") echo "staging" ;;
+        *) echo "$config_dir" ;;
+    esac
+}
+
+# Auto-detect and set CDK environment variables from AWS profile
+auto_set_cdk_environment() {
+    local profile="$1"
+    
+    if [ -z "$CDK_DEFAULT_ACCOUNT" ] || [ -z "$CDK_DEFAULT_REGION" ]; then
+        print_status "Auto-detecting CDK environment from AWS profile: $profile"
+        
+        local account_id=$(aws sts get-caller-identity --profile "$profile" --query Account --output text 2>/dev/null)
+        local region=$(aws configure get region --profile "$profile" 2>/dev/null || echo "us-east-1")
+        
+        if [ -n "$account_id" ] && [ "$account_id" != "None" ]; then
+            export CDK_DEFAULT_ACCOUNT="$account_id"
+            export CDK_DEFAULT_REGION="$region"
+            print_status "CDK Account: $account_id"
+            print_status "CDK Region: $region"
+        else
+            print_error "Failed to detect AWS account ID for profile: $profile"
+            return 1
+        fi
+    fi
+}
+
 # Add validation function after print functions
 validate_deployment_environment() {
     local environment=$1
     local profile=$2
     
     print_status "驗證部署環境: $environment"
+    
+    # Auto-set CDK environment variables if not already set
+    if ! auto_set_cdk_environment "$profile"; then
+        return 1
+    fi
     
     # Validate AWS environment variables
     if [ -z "$CDK_DEFAULT_ACCOUNT" ] || [ -z "$CDK_DEFAULT_REGION" ]; then

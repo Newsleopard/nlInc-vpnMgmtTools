@@ -13,9 +13,10 @@
 7. [🔐 安全 CSR 工作流程](#🔐-安全-csr-工作流程)
 8. [快速使用指南](#快速使用指南)
 9. [🚀 首次部署建議流程](#🚀-首次部署建議流程)
-10. [🔄 VPN Endpoint 重新建立流程](#🔄-vpn-endpoint-重新建立流程)
-11. [💰 成本試算與注意事項](#💰-成本試算與注意事項)
-12. [詳細文檔](#詳細文檔)
+10. [🤖 自動化部署指南](#🤖-自動化部署指南)
+11. [🔄 VPN Endpoint 重新建立流程](#🔄-vpn-endpoint-重新建立流程)
+12. [💰 成本試算與注意事項](#💰-成本試算與注意事項)
+13. [詳細文檔](#詳細文檔)
 
 ---
 
@@ -986,6 +987,102 @@ curl -X POST https://your-api-gateway-url/slack \
 - 📊 **監控設定**：啟用 CloudWatch 詳細監控
 - 🔧 **定期維護**：定期檢查和更新 Lambda 函數
 - 💾 **日誌管理**：設定適當的日誌保留期限
+
+---
+
+## 🤖 自動化部署指南
+
+### **✅ 完全自動化的部署流程**
+
+經過系統優化，`deploy.sh` 和 `setup-parameters.sh` 腳本現在支援完全自動化部署，無需手動設定環境變數或處理配置問題。
+
+#### **前置條件**
+
+1. **配置 AWS Profiles**
+   ```bash
+   # 配置生產環境 profile
+   aws configure --profile prod
+   
+   # 配置測試環境 profile（如果需要）
+   aws configure --profile default
+   ```
+
+2. **獲取正確的 Slack 配置**
+   - **Slack Webhook URL**: 從 Slack App 設定中取得
+   - **Slack Signing Secret**: **必須是 64 字元的十六進位字串**
+     - 前往 https://api.slack.com/apps
+     - 選擇您的 App → Basic Information → App Credentials
+     - 複製 "Signing Secret"（應該是 64 個字元）
+   - **Slack Bot Token**: 格式為 `xoxb-XXXXXXXX-XXXXXXXX-XXXXXXXXXXXXXXXX`
+
+#### **一鍵部署命令**
+
+```bash
+# 部署兩個環境（推薦）
+./scripts/deploy.sh both --secure-parameters
+
+# 設定所有參數
+./scripts/setup-parameters.sh --all --secure --auto-read \
+  --slack-webhook "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK" \
+  --slack-secret "YOUR_64_CHARACTER_HEX_SIGNING_SECRET" \
+  --slack-bot-token "xoxb-YOUR-BOT-TOKEN"
+```
+
+#### **自動化特性**
+
+✅ **自動 CDK 環境檢測**: 腳本會自動從 AWS profiles 偵測帳戶 ID 和區域  
+✅ **智能參數驗證**: 自動驗證 Slack 參數格式，提供詳細錯誤訊息  
+✅ **環境名稱映射**: 自動處理 `prod` ↔ `production` 環境名稱對應  
+✅ **KMS 金鑰管理**: 自動檢測和使用正確的 KMS 金鑰別名  
+✅ **錯誤處理**: 提供清楚的錯誤訊息和解決建議  
+
+#### **常見問題自動解決**
+
+1. **CDK 環境變數未設置**
+   - ❌ 以前：需要手動設定 `CDK_DEFAULT_ACCOUNT` 和 `CDK_DEFAULT_REGION`
+   - ✅ 現在：自動從 AWS profile 偵測並設定
+
+2. **Slack 參數驗證錯誤**
+   - ❌ 以前：`ParameterPatternMismatchException` 錯誤難以理解
+   - ✅ 現在：詳細的驗證錯誤訊息和修正建議
+
+3. **環境名稱不一致**
+   - ❌ 以前：`prod` vs `production` 命名混淆
+   - ✅ 現在：自動映射和處理不同的環境名稱
+
+#### **驗證部署**
+
+```bash
+# 檢查部署狀態
+./scripts/deploy.sh status
+
+# 測試 Slack 整合
+curl -X POST YOUR_STAGING_API_URL/slack \
+  -H "Content-Type: application/json" \
+  -d '{"text":"test","user_name":"testuser"}'
+```
+
+#### **如果遇到問題**
+
+1. **Slack Signing Secret 格式錯誤**
+   ```bash
+   # 錯誤範例（32 字元）
+   c9c157368cbc83e2feeff2e774219fe4
+   
+   # 正確範例（64 字元）
+   a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2
+   ```
+
+2. **使用 Placeholder 進行測試**
+   ```bash
+   # 如果暫時沒有正確的 signing secret，可以使用 placeholder
+   ./scripts/setup-parameters.sh --env staging --secure \
+     --slack-secret "PLACEHOLDER_$(openssl rand -hex 32)_update_with_real_64char_secret"
+   ```
+
+### **升級指南：從手動部署到自動化**
+
+如果您之前使用過舊版本的手動部署流程，新的自動化版本向後相容。只需使用新的命令即可享受自動化部署的便利。
 
 ---
 
