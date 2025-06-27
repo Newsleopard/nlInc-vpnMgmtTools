@@ -523,9 +523,9 @@ configure_environment_parameters() {
 EOF
 )
 
-    # Set parameters using the provided AWS profile
+    # Set parameters using the provided AWS profile with environment-specific path
     AWS_PROFILE="$aws_profile" aws ssm put-parameter \
-        --name "/vpn/endpoint/conf" \
+        --name "/vpn/$env_name/endpoint/conf" \
         --value "$VPN_CONFIG" \
         --type "String" \
         --description "VPN endpoint configuration for $env_name environment (endpoint ID, subnet ID, region)" \
@@ -550,7 +550,7 @@ EOF
 )
 
     AWS_PROFILE="$aws_profile" aws ssm put-parameter \
-        --name "/vpn/endpoint/state" \
+        --name "/vpn/$env_name/endpoint/state" \
         --value "$VPN_STATE" \
         --type "String" \
         --description "VPN endpoint state for $env_name environment (associated status and last activity)" \
@@ -580,20 +580,20 @@ set_slack_parameters() {
     
     # Slack webhook (encrypted)
     if [ "$USE_SECURE_PARAMETERS" = "true" ]; then
-        set_secure_parameter_with_profile "/vpn/slack/webhook" "$SLACK_WEBHOOK" \
+        set_secure_parameter_with_profile "/vpn/$env_name/slack/webhook" "$SLACK_WEBHOOK" \
             "Slack webhook URL for VPN automation notifications ($env_name environment)" \
             "$aws_profile" "$aws_region" "$env_name"
         
-        set_secure_parameter_with_profile "/vpn/slack/signing_secret" "$SLACK_SECRET" \
+        set_secure_parameter_with_profile "/vpn/$env_name/slack/signing_secret" "$SLACK_SECRET" \
             "Slack signing secret for request verification ($env_name environment)" \
             "$aws_profile" "$aws_region" "$env_name"
         
-        set_secure_parameter_with_profile "/vpn/slack/bot_token" "$SLACK_BOT_TOKEN" \
+        set_secure_parameter_with_profile "/vpn/$env_name/slack/bot_token" "$SLACK_BOT_TOKEN" \
             "Slack bot OAuth token for posting messages ($env_name environment)" \
             "$aws_profile" "$aws_region" "$env_name"
     else
         AWS_PROFILE="$aws_profile" aws ssm put-parameter \
-            --name "/vpn/slack/webhook" \
+            --name "/vpn/$env_name/slack/webhook" \
             --value "$SLACK_WEBHOOK" \
             --type "SecureString" \
             --description "Slack webhook URL for VPN automation notifications ($env_name environment)" \
@@ -608,7 +608,7 @@ set_slack_parameters() {
         fi
 
         AWS_PROFILE="$aws_profile" aws ssm put-parameter \
-            --name "/vpn/slack/signing_secret" \
+            --name "/vpn/$env_name/slack/signing_secret" \
             --value "$SLACK_SECRET" \
             --type "SecureString" \
             --description "Slack signing secret for request verification ($env_name environment)" \
@@ -623,7 +623,7 @@ set_slack_parameters() {
         fi
 
         AWS_PROFILE="$aws_profile" aws ssm put-parameter \
-            --name "/vpn/slack/bot_token" \
+            --name "/vpn/$env_name/slack/bot_token" \
             --value "$SLACK_BOT_TOKEN" \
             --type "SecureString" \
             --description "Slack bot OAuth token for posting messages ($env_name environment)" \
