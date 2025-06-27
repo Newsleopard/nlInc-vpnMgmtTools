@@ -17,6 +17,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 CDK_DIR="$PROJECT_ROOT/cdklib"
 
+# Load environment manager for AWS profile awareness
+source "$PROJECT_ROOT/lib/env_core.sh" 2>/dev/null || true
+
 # Function to print colored output
 print_status() {
     echo -e "${BLUE}[INFO]${NC} $1"
@@ -193,11 +196,68 @@ validate_deployment_environment() {
     return 0
 }
 
+# Function to automatically update staging cross-account configuration
+update_staging_cross_account_config() {
+    local staging_profile=$1
+    local production_url=$2
+    local production_profile=$3
+    
+    print_status "Updating staging cross-account configuration..."
+    
+    # Get production API key value
+    local api_key_id=$(aws cloudformation describe-stacks \
+        --stack-name VpnAutomation-production \
+        --query 'Stacks[0].Outputs[?OutputKey==`ApiKeyId`].OutputValue' \
+        --output text \
+        --profile "$production_profile" 2>/dev/null || echo "")
+    
+    local api_key_value=""
+    if [ -n "$api_key_id" ] && [ "$api_key_id" != "None" ]; then
+        api_key_value=$(aws apigateway get-api-key \
+            --api-key "$api_key_id" \
+            --include-value \
+            --query 'value' \
+            --output text \
+            --profile "$production_profile" 2>/dev/null || echo "")
+    fi
+    
+    # Create the cross-account configuration JSON
+    local cross_account_config=$(cat <<EOF
+{
+  "productionApiEndpoint": "${production_url}vpn",
+  "productionApiKey": "${api_key_value:-PLACEHOLDER_PRODUCTION_API_KEY}",
+  "retryConfig": {
+    "maxRetries": 3,
+    "backoffMultiplier": 2,
+    "baseDelayMs": 1000
+  }
+}
+EOF
+)
+    
+    # Update the staging parameter store
+    if aws ssm put-parameter \
+        --name "/vpn/staging/cross_account/config" \
+        --value "$cross_account_config" \
+        --type "String" \
+        --overwrite \
+        --profile "$staging_profile" &> /dev/null; then
+        
+        if [ -n "$api_key_value" ]; then
+            print_success "✅ Cross-account routing configured with production API key"
+        else
+            print_warning "⚠️  Cross-account routing configured but API key not found"
+        fi
+    else
+        print_error "❌ Failed to update staging cross-account configuration"
+    fi
+}
+
 # Function to deploy production environment
 deploy_production() {
     print_status "🚀 部署到生產環境"
     
-    local profile=${PRODUCTION_PROFILE:-"prod"}
+    local profile=${PRODUCTION_PROFILE:-$(get_env_profile "prod" 2>/dev/null || echo "prod")}
     local use_secure_params=${USE_SECURE_PARAMETERS:-false}
     
     # Validate environment before deployment
@@ -271,7 +331,7 @@ deploy_staging() {
         return 1
     fi
     
-    local profile=${STAGING_PROFILE:-"staging"}
+    local profile=${STAGING_PROFILE:-$(get_env_profile "staging" 2>/dev/null || echo "default")}
     local use_secure_params=${USE_SECURE_PARAMETERS:-false}
     
     validate_aws_profile "$profile" "staging"
@@ -279,7 +339,7 @@ deploy_staging() {
     print_status "📡 Getting production API Gateway URL..."
     
     # Try to get production URL from CloudFormation
-    local production_profile=${PRODUCTION_PROFILE:-"production"}
+    local production_profile=${PRODUCTION_PROFILE:-$(get_env_profile "prod" 2>/dev/null || echo "prod")}
     PRODUCTION_URL=$(aws cloudformation describe-stacks \
         --stack-name VpnAutomation-production \
         --query 'Stacks[0].Outputs[?OutputKey==`ApiGatewayUrl`].OutputValue' \
@@ -333,6 +393,10 @@ deploy_staging() {
     print_success "✅ Staging deployment completed!"
     print_success "🔗 Staging will route production commands to: $PRODUCTION_URL"
     
+    # Automatically update staging parameter store with production API information
+    print_status "🔧 Automatically configuring cross-account routing parameters..."
+    update_staging_cross_account_config "$profile" "$PRODUCTION_URL" "$production_profile"
+    
     if [ -n "$PRODUCTION_API_KEY" ]; then
         print_success "🔐 Cross-account authentication configured successfully"
     else
@@ -356,9 +420,9 @@ destroy_environment() {
     local profile
     
     if [ "$environment" = "production" ]; then
-        profile=${PRODUCTION_PROFILE:-"production"}
+        profile=${PRODUCTION_PROFILE:-$(get_env_profile "prod" 2>/dev/null || echo "prod")}
     else
-        profile=${STAGING_PROFILE:-"staging"}
+        profile=${STAGING_PROFILE:-$(get_env_profile "staging" 2>/dev/null || echo "default")}
     fi
     
     print_warning "⚠️  Destroying $environment environment..."
@@ -402,8 +466,8 @@ show_usage() {
     echo "  --secure-parameters  Enable Epic 5.1 secure parameter management with KMS encryption"
     echo ""
     echo "Environment Variables:"
-    echo "  STAGING_PROFILE         AWS profile for staging (default: staging)"
-    echo "  PRODUCTION_PROFILE      AWS profile for production (default: production)"
+    echo "  STAGING_PROFILE         AWS profile for staging (default: auto-detected from config)"
+    echo "  PRODUCTION_PROFILE      AWS profile for production (default: auto-detected from config)"
     echo "  USE_SECURE_PARAMETERS   Enable secure parameter management (default: false)"
     echo ""
     echo "Examples:"
@@ -439,9 +503,9 @@ show_diff() {
     local profile
     
     if [ "$environment" = "production" ]; then
-        profile=${PRODUCTION_PROFILE:-"production"}
+        profile=${PRODUCTION_PROFILE:-$(get_env_profile "prod" 2>/dev/null || echo "prod")}
     else
-        profile=${STAGING_PROFILE:-"staging"}
+        profile=${STAGING_PROFILE:-$(get_env_profile "staging" 2>/dev/null || echo "default")}
     fi
     
     validate_aws_profile "$profile" "$environment"
@@ -452,7 +516,7 @@ show_diff() {
     
     if [ "$environment" = "staging" ]; then
         # For staging, we need production URL
-        local production_profile=${PRODUCTION_PROFILE:-"production"}
+        local production_profile=${PRODUCTION_PROFILE:-$(get_env_profile "prod" 2>/dev/null || echo "prod")}
         PRODUCTION_URL=$(aws cloudformation describe-stacks \
             --stack-name VpnAutomation-production \
             --query 'Stacks[0].Outputs[?OutputKey==`ApiGatewayUrl`].OutputValue' \
@@ -478,7 +542,7 @@ validate_cross_account_routing() {
     print_status "Validating cross-account routing configuration..."
     
     local staging_profile=${STAGING_PROFILE:-"staging"}
-    local production_profile=${PRODUCTION_PROFILE:-"production"}
+    local production_profile=${PRODUCTION_PROFILE:-$(get_env_profile "prod" 2>/dev/null || echo "prod")}
     
     # Check if both environments are deployed
     if ! aws cloudformation describe-stacks --stack-name VpnAutomation-production --profile "$production_profile" &> /dev/null; then
@@ -550,7 +614,7 @@ show_status() {
     print_status "Checking deployment status..."
     
     local staging_profile=${STAGING_PROFILE:-"staging"}
-    local production_profile=${PRODUCTION_PROFILE:-"production"}
+    local production_profile=${PRODUCTION_PROFILE:-$(get_env_profile "prod" 2>/dev/null || echo "prod")}
     
     # Check production
     if aws cloudformation describe-stacks --stack-name VpnAutomation-production --profile "$production_profile" &> /dev/null; then
@@ -622,6 +686,25 @@ deploy_with_secure_parameters() {
     fi
     
     print_success "✅ Secure parameter management deployment completed!"
+    
+    # Automatically update staging cross-account configuration if this is staging deployment
+    if [ "$environment" = "staging" ]; then
+        print_status "🔧 Automatically configuring cross-account routing parameters..."
+        
+        # Get production profile and URL for staging configuration
+        local production_profile=${PRODUCTION_PROFILE:-"prod"}
+        local production_url=$(aws cloudformation describe-stacks \
+            --stack-name VpnAutomation-production \
+            --query 'Stacks[0].Outputs[?OutputKey==`ApiGatewayUrl`].OutputValue' \
+            --output text \
+            --profile "$production_profile" 2>/dev/null || echo "")
+        
+        if [ -n "$production_url" ] && [ "$production_url" != "None" ]; then
+            update_staging_cross_account_config "$profile" "$production_url" "$production_profile"
+        else
+            print_warning "⚠️  Could not retrieve production URL for cross-account configuration"
+        fi
+    fi
     
     # Validate configuration
     print_status "🔍 Running post-deployment validation..."
@@ -737,7 +820,7 @@ show_deployment_status() {
     echo ""
     
     local staging_profile=${STAGING_PROFILE:-"staging"}
-    local production_profile=${PRODUCTION_PROFILE:-"production"}
+    local production_profile=${PRODUCTION_PROFILE:-$(get_env_profile "prod" 2>/dev/null || echo "prod")}
     
     # Check production environment
     print_status "Production Environment:"

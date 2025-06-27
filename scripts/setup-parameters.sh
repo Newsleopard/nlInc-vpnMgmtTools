@@ -6,8 +6,13 @@
 
 # 全域變數
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
-# Color codes for output (basic colors for help function)
+# 載入環境管理器 (必須第一個載入)
+source "$PROJECT_ROOT/lib/env_manager.sh"
+
+# Color codes will be loaded from env_manager.sh
+# Additional color codes for compatibility
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -52,7 +57,7 @@ show_usage() {
     echo "  --secure             使用加密參數 (encrypted)"
     echo "  --auto-read          自動從配置檔案讀取所有可用參數"
     echo "  --all                配置所有環境 (staging + production)"
-    echo "  --env ENV            指定特定環境 (staging 或 production)"
+    echo "  --env ENV            指定特定環境 (staging, production, 或 prod)"
     echo ""
     echo "範例:"
     echo "  # 配置所有環境 (推薦用法)"
@@ -146,10 +151,7 @@ done
 # Now that we've handled help, initialize the environment
 print_status "正在初始化環境管理器..."
 
-# 載入環境管理器
-source "$SCRIPT_DIR/../lib/env_manager.sh"
-
-# 初始化環境
+# 初始化環境 (env_manager.sh already loaded above)
 if ! env_init_for_script "setup-parameters.sh"; then
     print_error "無法初始化環境管理器"
     exit 1
@@ -308,15 +310,24 @@ elif [ -n "$TARGET_ENVIRONMENT" ]; then
         exit 1
     fi
     
-    # Get AWS profile for target environment
-    if [ "$TARGET_ENVIRONMENT" = "production" ]; then
-        CURRENT_AWS_PROFILE="production"
-    elif [ "$TARGET_ENVIRONMENT" = "staging" ]; then
-        CURRENT_AWS_PROFILE="staging"
-    else
-        print_error "不支援的環境: $TARGET_ENVIRONMENT (僅支援 staging, production)"
-        exit 1
-    fi
+    # Normalize environment name and get AWS profile
+    case "$TARGET_ENVIRONMENT" in
+        production)
+            TARGET_ENVIRONMENT="prod"  # Map to actual directory name
+            CURRENT_ENVIRONMENT="prod"
+            ;;
+        prod|staging)
+            # Already correct
+            ;;
+        *)
+            print_error "不支援的環境: $TARGET_ENVIRONMENT (僅支援 staging, production, prod)"
+            exit 1
+            ;;
+    esac
+    
+    # Use environment manager to get correct AWS profile
+    source "$PROJECT_ROOT/lib/env_core.sh"
+    CURRENT_AWS_PROFILE=$(get_env_profile "$TARGET_ENVIRONMENT")
     
     # Validate AWS profile
     print_status "驗證 AWS profile: $CURRENT_AWS_PROFILE"
