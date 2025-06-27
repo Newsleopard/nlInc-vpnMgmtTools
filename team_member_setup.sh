@@ -36,6 +36,25 @@ log_team_setup_message() {
     fi
 }
 
+# 環境顯示名稱映射函數
+get_env_display_name() {
+    local env="$1"
+    case "$env" in
+        "prod")
+            echo "Production Environment"
+            ;;
+        "staging")
+            echo "Staging Environment"
+            ;;
+        "production")
+            echo "Production Environment"
+            ;;
+        *)
+            echo "$env Environment"
+            ;;
+    esac
+}
+
 # 顯示歡迎訊息
 show_welcome() {
     clear
@@ -310,7 +329,7 @@ init_environment_and_aws() {
         echo -e "${YELLOW}⚠️ 重要提醒:${NC}"
         echo -e "  • 請確保您的 AWS 帳號有足夠權限進行 VPN 操作"
         echo -e "  • 輸入的憑證將用於上傳證書到 AWS Certificate Manager"
-        echo -e "═══════════════════════════════════════"
+        echo "═══════════════════════════════════════"
         echo -e ""
         
         local aws_access_key
@@ -498,12 +517,38 @@ setup_ca_cert_and_environment() {
 setup_vpn_endpoint_info() {
     echo -e "\\n${YELLOW}[3/6] 設定 VPN 端點資訊...${NC}"
     
-    echo -e "${BLUE}請向管理員獲取以下資訊：${NC}"
+    local endpoint_id=""
     
-    local endpoint_id
-    if ! read_secure_input "請輸入 Client VPN 端點 ID: " endpoint_id "validate_endpoint_id"; then
-        echo -e "${RED}VPN 端點 ID 驗證失敗${NC}"
-        return 1
+    # 首先嘗試從 vpn_endpoint.conf 載入端點 ID
+    local env_folder
+    case "$TARGET_ENVIRONMENT" in
+        "production")
+            env_folder="prod"
+            ;;
+        "staging")
+            env_folder="staging"
+            ;;
+        *)
+            env_folder="$TARGET_ENVIRONMENT"
+            ;;
+    esac
+    
+    local endpoint_config="$TEAM_SCRIPT_DIR/configs/$env_folder/vpn_endpoint.conf"
+    if [ -f "$endpoint_config" ]; then
+        echo -e "${BLUE}從配置檔案載入 VPN 端點資訊...${NC}"
+        # 載入端點配置檔案
+        source "$endpoint_config"
+        endpoint_id="$ENDPOINT_ID"
+        echo -e "${GREEN}✓ 從配置檔案載入端點 ID: $endpoint_id${NC}"
+    fi
+    
+    # 如果沒有從配置檔案載入到端點 ID，要求用戶輸入
+    if [ -z "$endpoint_id" ]; then
+        echo -e "${BLUE}請向管理員獲取以下資訊：${NC}"
+        if ! read_secure_input "請輸入 Client VPN 端點 ID: " endpoint_id "validate_endpoint_id"; then
+            echo -e "${RED}VPN 端點 ID 驗證失敗${NC}"
+            return 1
+        fi
     fi
     
     # 驗證端點 ID
@@ -759,9 +804,74 @@ resume_with_signed_certificate() {
 # S3 零接觸功能
 # =====================================
 
+# 生成環境特定的存儲桶名稱
+get_default_bucket_name() {
+    # 使用環境和帳戶ID來確保存儲桶名稱唯一性，與 setup_csr_s3_bucket.sh 保持一致
+    local env_suffix=""
+    local current_env=""
+    
+    # 確定當前環境
+    if [[ -n "$TARGET_ENVIRONMENT" ]]; then
+        current_env="$TARGET_ENVIRONMENT"
+    elif [[ -n "$SELECTED_ENVIRONMENT" ]]; then
+        current_env="$SELECTED_ENVIRONMENT"
+    elif [[ -n "$CURRENT_ENVIRONMENT" ]]; then
+        current_env="$CURRENT_ENVIRONMENT"
+    fi
+    
+    # 根據環境設置後綴（與 setup_csr_s3_bucket.sh 保持一致）
+    if [[ -n "$current_env" ]]; then
+        case "$current_env" in
+            "production"|"prod")
+                env_suffix="-prod"
+                ;;
+            "staging")
+                env_suffix="-staging"
+                ;;
+            *)
+                env_suffix="-${current_env}"
+                ;;
+        esac
+    fi
+    
+    # 如果有帳戶ID，使用它來確保唯一性
+    if [[ -n "$ACCOUNT_ID" ]]; then
+        echo "vpn-csr-exchange${env_suffix}-${ACCOUNT_ID}"
+    else
+        # 備用方案：嘗試從 AWS 獲取帳戶ID
+        local account_id
+        if [[ -n "$SELECTED_AWS_PROFILE" ]]; then
+            account_id=$(aws sts get-caller-identity --query 'Account' --output text --profile "$SELECTED_AWS_PROFILE" 2>/dev/null)
+            if [[ -n "$account_id" ]]; then
+                echo "vpn-csr-exchange${env_suffix}-${account_id}"
+                return 0
+            fi
+        fi
+        # 最後備用方案：使用基本名稱
+        echo "vpn-csr-exchange${env_suffix}"
+    fi
+}
+
+# 更新 S3 存儲桶名稱
+update_s3_bucket_name() {
+    # 獲取帳戶ID
+    if [[ -z "$ACCOUNT_ID" ]] && [[ -n "$SELECTED_AWS_PROFILE" ]]; then
+        ACCOUNT_ID=$(aws sts get-caller-identity --query 'Account' --output text --profile "$SELECTED_AWS_PROFILE" 2>/dev/null)
+    fi
+    
+    # 如果 S3_BUCKET 是預設值，重新生成
+    if [[ "$S3_BUCKET" == "vpn-csr-exchange" ]]; then
+        S3_BUCKET=$(get_default_bucket_name)
+        echo -e "${BLUE}使用環境特定的存儲桶名稱: $S3_BUCKET${NC}"
+    fi
+}
+
 # 檢查 S3 存儲桶訪問權限
 check_s3_access() {
     echo -e "${BLUE}檢查 S3 存儲桶訪問權限...${NC}"
+    
+    # 更新存儲桶名稱
+    update_s3_bucket_name
     
     if ! aws s3 ls "s3://$S3_BUCKET/public/" --profile "$SELECTED_AWS_PROFILE" &>/dev/null; then
         echo -e "${RED}無法訪問 S3 存儲桶: $S3_BUCKET${NC}"
@@ -776,9 +886,44 @@ check_s3_access() {
     return 0
 }
 
+# 檢查 S3 CSR 上傳權限
+check_s3_csr_permissions() {
+    local username="$1"
+    
+    echo -e "${BLUE}檢查 S3 CSR 上傳權限...${NC}"
+    
+    # 確保存儲桶名稱是最新的
+    update_s3_bucket_name
+    
+    # 創建測試文件
+    local test_file=$(mktemp)
+    echo "test-csr-permissions" > "$test_file"
+    local test_key="csr/test-${username}-$(date +%s).csr"
+    
+    # 測試上傳權限
+    if aws s3 cp "$test_file" "s3://$S3_BUCKET/$test_key" \
+        --sse AES256 \
+        --profile "$SELECTED_AWS_PROFILE" &>/dev/null; then
+        
+        # 清理測試文件
+        aws s3 rm "s3://$S3_BUCKET/$test_key" --profile "$SELECTED_AWS_PROFILE" &>/dev/null || true
+        rm -f "$test_file"
+        
+        echo -e "${GREEN}✓ S3 權限檢查通過${NC}"
+        return 0
+    else
+        rm -f "$test_file"
+        echo -e "${RED}✗ S3 權限檢查失敗${NC}"
+        return 1
+    fi
+}
+
 # 從 S3 下載 CA 證書
 download_ca_from_s3() {
     echo -e "${BLUE}從 S3 下載 CA 證書...${NC}"
+    
+    # 確保使用正確的存儲桶名稱
+    update_s3_bucket_name
     
     # 確保有證書目錄，如果 USER_CERT_DIR 未設定則使用臨時目錄
     local cert_dir
@@ -829,6 +974,9 @@ download_ca_from_s3() {
 download_endpoints_from_s3() {
     echo -e "${BLUE}從 S3 下載 VPN 端點配置...${NC}"
     
+    # 確保使用正確的存儲桶名稱
+    update_s3_bucket_name
+    
     local endpoints_path="/tmp/vpn_endpoints.json"
     local s3_endpoints_path="s3://$S3_BUCKET/public/vpn_endpoints.json"
     
@@ -849,6 +997,55 @@ download_endpoints_from_s3() {
     echo -e "${GREEN}✓ 端點配置下載完成${NC}"
     ENDPOINTS_CONFIG_FILE="$endpoints_path"
     return 0
+}
+
+# 上傳 CSR 到 S3
+upload_csr_to_s3() {
+    local csr_file="$1"
+    local username="$2"
+    
+    echo -e "${BLUE}上傳 CSR 到 S3...${NC}"
+    
+    # 確保使用正確的存儲桶名稱
+    update_s3_bucket_name
+    
+    local s3_csr_path="s3://$S3_BUCKET/csr/${username}.csr"
+    
+    if aws s3 cp "$csr_file" "$s3_csr_path" \
+        --sse AES256 \
+        --acl bucket-owner-full-control \
+        --profile "$SELECTED_AWS_PROFILE"; then
+        echo -e "${GREEN}✓ CSR 已上傳到 S3${NC}"
+        echo -e "${GREEN}✓ S3 位置: $s3_csr_path${NC}"
+        log_team_setup_message "CSR 已上傳到 S3: $s3_csr_path"
+        return 0
+    else
+        echo -e "${RED}CSR 上傳失敗${NC}"
+        return 1
+    fi
+}
+
+# 從 S3 下載證書
+download_certificate_from_s3() {
+    local username="$1"
+    local output_file="$2"
+    
+    echo -e "${BLUE}從 S3 下載證書...${NC}"
+    
+    # 確保使用正確的存儲桶名稱
+    update_s3_bucket_name
+    
+    local s3_cert_path="s3://$S3_BUCKET/cert/${username}.crt"
+    
+    if aws s3 cp "$s3_cert_path" "$output_file" --profile "$SELECTED_AWS_PROFILE"; then
+        echo -e "${GREEN}✓ 證書已從 S3 下載${NC}"
+        chmod 600 "$output_file"
+        return 0
+    else
+        echo -e "${RED}證書下載失敗${NC}"
+        echo -e "${YELLOW}證書可能尚未被管理員簽署，或者 S3 訪問權限有問題${NC}"
+        return 1
+    fi
 }
 
 # 從端點配置中選擇環境
@@ -951,241 +1148,32 @@ select_environment_from_config() {
     return 0
 }
 
-# 檢查 S3 CSR 上傳權限
-check_s3_csr_permissions() {
-    local username="$1"
-    
-    echo -e "${BLUE}檢查 S3 CSR 上傳權限...${NC}"
-    
-    # 創建測試文件
-    local test_file=$(mktemp)
-    echo "test-csr-permissions" > "$test_file"
-    local test_key="csr/test-${username}-$(date +%s).csr"
-    
-    # 測試上傳權限
-    if aws s3 cp "$test_file" "s3://$S3_BUCKET/$test_key" \
-        --sse AES256 \
-        --profile "$SELECTED_AWS_PROFILE" &>/dev/null; then
-        
-        # 清理測試文件
-        aws s3 rm "s3://$S3_BUCKET/$test_key" --profile "$SELECTED_AWS_PROFILE" &>/dev/null || true
-        rm -f "$test_file"
-        
-        echo -e "${GREEN}✓ S3 權限檢查通過${NC}"
-        return 0
-    else
-        rm -f "$test_file"
-        echo -e "${RED}✗ S3 權限檢查失敗${NC}"
-        return 1
-    fi
-}
-
-# 顯示權限問題解決指引
-show_permission_help() {
-    local username="$1"
-    
-    echo -e "\n${YELLOW}========================================${NC}"
-    echo -e "${YELLOW}     S3 權限配置需求     ${NC}"
-    echo -e "${YELLOW}========================================${NC}"
-    echo -e ""
-    echo -e "${RED}❌ 檢測到 S3 權限不足${NC}"
-    echo -e ""
-    echo -e "${CYAN}問題原因：${NC}"
-    echo -e "您的 AWS 用戶缺少上傳 CSR 到 S3 的權限"
-    echo -e ""
-    echo -e "${CYAN}解決方案：${NC}"
-    echo -e ""
-    echo -e "${BLUE}方案 1：聯繫管理員配置權限 (推薦)${NC}"
-    echo -e "告知管理員您需要 VPN CSR 上傳權限："
-    echo -e "  • 用戶名: ${YELLOW}$username${NC}"
-    echo -e "  • AWS 用戶: ${YELLOW}$(aws sts get-caller-identity --query 'Arn' --output text --profile "$SELECTED_AWS_PROFILE" 2>/dev/null || echo "未知")${NC}"
-    echo -e "  • 需要權限: ${YELLOW}s3:PutObject on arn:aws:s3:::$S3_BUCKET/csr/*${NC}"
-    echo -e ""
-    echo -e "${BLUE}方案 2：管理員可執行以下命令：${NC}"
-    echo -e "  ${CYAN}# 為現有用戶添加權限${NC}"
-    echo -e "  ${CYAN}./admin-tools/setup_csr_s3_bucket.sh --attach-policy $(aws sts get-caller-identity --query 'UserName' --output text --profile "$SELECTED_AWS_PROFILE" 2>/dev/null || echo "USERNAME")${NC}"
-    echo -e ""
-    echo -e "  ${CYAN}# 或使用專用用戶管理工具${NC}"
-    echo -e "  ${CYAN}./admin-tools/manage_vpn_users.sh add $(aws sts get-caller-identity --query 'UserName' --output text --profile "$SELECTED_AWS_PROFILE" 2>/dev/null || echo "USERNAME")${NC}"
-    echo -e ""
-    echo -e "${BLUE}方案 3：使用傳統模式 (臨時解決)${NC}"
-    echo -e "  重新執行腳本並添加 ${YELLOW}--no-s3${NC} 參數："
-    echo -e "  ${CYAN}$0 --no-s3${NC}"
-    echo -e ""
-    echo -e "${YELLOW}建議：${NC}推薦使用方案 1，可確保未來順暢使用零接觸工作流程"
-    echo -e ""
-}
-
-# 上傳 CSR 到 S3
-upload_csr_to_s3() {
-    local csr_file="$1"
-    local username="$2"
-    
-    echo -e "${BLUE}準備上傳 CSR 到 S3...${NC}"
-    
-    # 檢查權限
-    if ! check_s3_csr_permissions "$username"; then
-        show_permission_help "$username"
-        echo -e "${YELLOW}建議：聯繫管理員配置權限後重新嘗試${NC}"
-        return 1
-    fi
-    
-    echo -e "${BLUE}上傳 CSR 到 S3...${NC}"
-    
-    local s3_csr_path="s3://$S3_BUCKET/csr/${username}.csr"
-    
-    if aws s3 cp "$csr_file" "$s3_csr_path" \
-        --sse AES256 \
-        --profile "$SELECTED_AWS_PROFILE"; then
-        echo -e "${GREEN}✓ CSR 已上傳到 S3${NC}"
-        log_team_setup_message "CSR 已上傳到 S3: $s3_csr_path"
-        return 0
-    else
-        echo -e "${RED}CSR 上傳失敗${NC}"
-        show_permission_help "$username"
-        return 1
-    fi
-}
-
-# 從 S3 下載簽署證書
-download_certificate_from_s3() {
-    local username="$1"
-    local cert_file="$2"
-    
-    echo -e "${BLUE}從 S3 下載簽署證書...${NC}"
-    
-    local s3_cert_path="s3://$S3_BUCKET/cert/${username}.crt"
-    
-    # 檢查證書是否存在
-    if ! aws s3 ls "$s3_cert_path" --profile "$SELECTED_AWS_PROFILE" &>/dev/null; then
-        echo -e "${YELLOW}證書尚未準備好，請等待管理員簽署${NC}"
-        echo -e "${BLUE}證書位置: $s3_cert_path${NC}"
-        return 1
-    fi
-    
-    if aws s3 cp "$s3_cert_path" "$cert_file" --profile "$SELECTED_AWS_PROFILE"; then
-        echo -e "${GREEN}✓ 證書已從 S3 下載${NC}"
-        log_team_setup_message "證書已從 S3 下載: $s3_cert_path"
-        return 0
-    else
-        echo -e "${RED}證書下載失敗${NC}"
-        return 1
-    fi
-}
-
 # 零接觸初始化模式
 zero_touch_init_mode() {
     echo -e "\n${YELLOW}[零接觸模式] 初始化 VPN 設定...${NC}"
     
-    # 檢查 S3 訪問
-    if [ "$DISABLE_S3" = false ]; then
-        if ! check_s3_access; then
-            echo -e "${YELLOW}S3 訪問失敗，切換到本地模式${NC}"
-            DISABLE_S3=true
-        fi
-    fi
+    # 檢查必要工具
+    check_team_prerequisites
     
     # 初始化環境和 AWS 配置
-    if ! init_environment_and_aws; then
-        return 1
-    fi
+    echo -e "\n${YELLOW}[1/6] 初始化環境和 AWS 配置...${NC}"
+    init_environment_and_aws
     
-    # 下載或使用本地 CA 證書
-    if [ "$DISABLE_S3" = false ] && [ -z "$CA_PATH" ]; then
-        if ! download_ca_from_s3; then
-            echo -e "${YELLOW}CA 證書下載失敗，請手動提供${NC}"
-            setup_ca_cert_and_environment
-        else
-            # CA 下載成功，但需要確保環境路徑已設置
-            echo -e "${BLUE}DEBUG: CA 證書下載成功，處理環境偵測${NC}"
-            log_team_setup_message "DEBUG: CA 證書下載成功，處理環境偵測"
-            # 先嘗試從 CA 證書偵測環境
-            local ca_cert_path="$TEAM_SCRIPT_DIR/temp_certs/ca.crt"
-            if [ -f "$ca_cert_path" ]; then
-                echo -e "${BLUE}DEBUG: 找到 CA 證書文件，嘗試偵測環境${NC}"
-                local detected_env
-                detected_env=$(detect_environment_from_ca_cert "$ca_cert_path") || true
-                echo -e "${BLUE}DEBUG: 偵測到環境: $detected_env${NC}"
-                if [ -n "$detected_env" ]; then
-                    TARGET_ENVIRONMENT="$detected_env"
-                    setup_team_member_paths "$TARGET_ENVIRONMENT" "$TEAM_SCRIPT_DIR"
-                    USER_CONFIG_FILE="$USER_VPN_CONFIG_FILE"
-                    LOG_FILE="$TEAM_SETUP_LOG_FILE"
-                    echo -e "${GREEN}✓ 從 CA 證書偵測到環境: $(get_env_display_name "$TARGET_ENVIRONMENT")${NC}"
-                    echo -e "${BLUE}DEBUG: 環境設定完成，USER_CONFIG_FILE=$USER_CONFIG_FILE${NC}"
-                fi
-            else
-                echo -e "${BLUE}DEBUG: CA 證書文件不存在: $ca_cert_path${NC}"
-            fi
-        fi
-    else
-        setup_ca_cert_and_environment
-    fi
+    # 設置 CA 證書和環境
+    echo -e "\n${YELLOW}[2/6] 設置 CA 證書和環境...${NC}"
+    setup_ca_cert_and_environment
     
-    # 下載或手動設置端點配置
-    if [ "$DISABLE_S3" = false ] && [ -z "$ENDPOINT_ID" ]; then
-        if download_endpoints_from_s3; then
-            if select_environment_from_config; then
-                echo -e "${GREEN}✓ 使用 S3 端點配置${NC}"
-            else
-                echo -e "${YELLOW}端點配置解析失敗，手動設置${NC}"
-                setup_vpn_endpoint_info
-            fi
-        else
-            echo -e "${YELLOW}端點配置下載失敗，手動設置${NC}"
-            # 確保環境路徑已設置（如果之前未設置）
-            if [ -z "$USER_CONFIG_FILE" ]; then
-                # 使用預設環境進行設置
-                TARGET_ENVIRONMENT="staging"
-                setup_team_member_paths "$TARGET_ENVIRONMENT" "$TEAM_SCRIPT_DIR"
-                USER_CONFIG_FILE="$USER_VPN_CONFIG_FILE"
-                LOG_FILE="$TEAM_SETUP_LOG_FILE"
-                echo -e "${BLUE}使用預設環境: $(get_env_display_name "$TARGET_ENVIRONMENT")${NC}"
-            fi
-            setup_vpn_endpoint_info
-        fi
-    else
-        # 確保環境路徑已設置（如果之前未設置）
-        if [ -z "$USER_CONFIG_FILE" ]; then
-            # 使用預設環境進行設置
-            TARGET_ENVIRONMENT="staging"
-            setup_team_member_paths "$TARGET_ENVIRONMENT" "$TEAM_SCRIPT_DIR"
-            USER_CONFIG_FILE="$USER_VPN_CONFIG_FILE"
-            LOG_FILE="$TEAM_SETUP_LOG_FILE"
-            echo -e "${BLUE}使用預設環境: $(get_env_display_name "$TARGET_ENVIRONMENT")${NC}"
-        fi
-        setup_vpn_endpoint_info
-    fi
+    # 設置 VPN 端點信息
+    echo -e "\n${YELLOW}[3/6] 設置 VPN 端點信息...${NC}"
+    setup_vpn_endpoint_info
     
-    # 設定用戶資訊
-    echo -e "${BLUE}DEBUG: 準備調用 setup_user_info${NC}"
-    log_team_setup_message "DEBUG: 準備調用 setup_user_info"
-    if ! setup_user_info; then
-        echo -e "${RED}用戶資訊設定失敗${NC}"
-        log_team_setup_message "ERROR: setup_user_info 失敗"
-        return 1
-    fi
-    echo -e "${BLUE}DEBUG: setup_user_info 成功完成${NC}"
-    log_team_setup_message "DEBUG: setup_user_info 成功完成"
+    # 設置用戶信息
+    echo -e "\n${YELLOW}[4/6] 設定用戶資訊...${NC}"
+    setup_user_info
     
-    # 載入配置以獲取用戶名
-    if [ ! -f "$USER_CONFIG_FILE" ]; then
-        echo -e "${RED}用戶配置文件不存在: $USER_CONFIG_FILE${NC}"
-        echo -e "${YELLOW}提示: setup_user_info 可能未正確創建配置文件${NC}"
-        return 1
-    fi
-    
-    if ! source "$USER_CONFIG_FILE"; then
-        echo -e "${RED}載入配置文件失敗: $USER_CONFIG_FILE${NC}"
-        return 1
-    fi
-    
-    # 生成 CSR 並上傳
-    echo -e "${BLUE}DEBUG: 準備調用 generate_csr_for_zero_touch${NC}"
-    log_team_setup_message "DEBUG: 準備調用 generate_csr_for_zero_touch"
+    # 生成 CSR 用於零接觸模式
+    echo -e "\n${YELLOW}[5/6] 生成 CSR 用於零接觸交換...${NC}"
     generate_csr_for_zero_touch
-    echo -e "${BLUE}DEBUG: generate_csr_for_zero_touch 已完成${NC}"
-    log_team_setup_message "DEBUG: generate_csr_for_zero_touch 已完成"
     
     return 0
 }
@@ -1194,46 +1182,59 @@ zero_touch_init_mode() {
 zero_touch_resume_mode() {
     echo -e "\n${YELLOW}[零接觸模式] 恢復 VPN 設定...${NC}"
     
-    # 如果 USER_CONFIG_FILE 未初始化，嘗試自動發現配置文件
-    if [ -z "$USER_CONFIG_FILE" ]; then
-        echo -e "${BLUE}自動搜尋現有配置文件...${NC}"
-        
-        # 搜尋可能的配置文件位置
-        local found_config=""
-        local config_env=""
-        
-        for env in staging production; do
-            local potential_config="$TEAM_SCRIPT_DIR/configs/$env/user_vpn_config.env"
-            if [ -f "$potential_config" ]; then
-                found_config="$potential_config"
-                config_env="$env"
-                break
-            fi
-        done
-        
-        if [ -n "$found_config" ]; then
-            echo -e "${GREEN}✓ 找到配置文件: $found_config${NC}"
-            
-            # 設置環境路徑
-            TARGET_ENVIRONMENT="$config_env"
-            setup_team_member_paths "$TARGET_ENVIRONMENT" "$TEAM_SCRIPT_DIR"
-            USER_CONFIG_FILE="$USER_VPN_CONFIG_FILE"
-            LOG_FILE="$TEAM_SETUP_LOG_FILE"
-            
-            echo -e "${GREEN}✓ 環境設定完成: $(get_env_display_name "$TARGET_ENVIRONMENT")${NC}"
-        else
-            echo -e "${RED}找不到配置文件，請先執行初始化模式${NC}"
-            echo -e "${YELLOW}執行: $0 --init${NC}"
-            return 1
-        fi
-    fi
+    # 檢查必要工具
+    check_team_prerequisites
     
-    # 檢查是否有現有配置
-    if [ ! -f "$USER_CONFIG_FILE" ]; then
+    # 搜尋現有配置文件
+    echo -e "${BLUE}自動搜尋現有配置文件...${NC}"
+    
+    local found_configs=()
+    local config_envs=()
+    
+    # 搜尋所有環境的配置文件
+    for env_folder in prod staging; do
+        local potential_config="$TEAM_SCRIPT_DIR/configs/$env_folder/user_vpn_config.env"
+        if [ -f "$potential_config" ]; then
+            found_configs+=("$potential_config")
+            config_envs+=("$env_folder")
+        fi
+    done
+    
+    if [ ${#found_configs[@]} -eq 0 ]; then
         echo -e "${RED}找不到配置文件，請先執行初始化模式${NC}"
         echo -e "${YELLOW}執行: $0 --init${NC}"
         return 1
+    elif [ ${#found_configs[@]} -eq 1 ]; then
+        # 只有一個配置文件，自動選擇
+        USER_CONFIG_FILE="${found_configs[0]}"
+        TARGET_ENVIRONMENT="${config_envs[0]}"
+        echo -e "${GREEN}✓ 找到配置文件: $USER_CONFIG_FILE${NC}"
+        echo -e "${GREEN}✓ 環境設定完成: $(get_env_display_name "$TARGET_ENVIRONMENT")${NC}"
+    else
+        # 多個配置文件，讓用戶選擇
+        echo -e "${CYAN}找到多個配置文件，請選擇：${NC}"
+        for i in "${!found_configs[@]}"; do
+            echo -e "  ${YELLOW}$((i+1))${NC}. $(get_env_display_name "${config_envs[$i]}") - ${found_configs[$i]}"
+        done
+        
+        local choice
+        while true; do
+            read -p "請選擇配置 (1-${#found_configs[@]}): " choice
+            if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#found_configs[@]} ]; then
+                USER_CONFIG_FILE="${found_configs[$((choice-1))]}"
+                TARGET_ENVIRONMENT="${config_envs[$((choice-1))]}"
+                echo -e "${GREEN}✓ 選擇配置: $USER_CONFIG_FILE${NC}"
+                echo -e "${GREEN}✓ 環境設定完成: $(get_env_display_name "$TARGET_ENVIRONMENT")${NC}"
+                break
+            else
+                echo -e "${RED}無效選擇，請輸入 1-${#found_configs[@]}${NC}"
+            fi
+        done
     fi
+    
+    # 設置環境特定路徑
+    setup_team_member_paths "$TARGET_ENVIRONMENT" "$TEAM_SCRIPT_DIR"
+    LOG_FILE="$TEAM_SETUP_LOG_FILE"
     
     # 載入配置
     if ! source "$USER_CONFIG_FILE"; then
@@ -1241,8 +1242,41 @@ zero_touch_resume_mode() {
         return 1
     fi
     
+    # 重新初始化 AWS 環境以確保所有變數正確設置（特別是 ACCOUNT_ID）
+    echo -e "${BLUE}重新初始化 AWS 環境...${NC}"
+    
+    # 設置 AWS profile 環境變數
+    if [[ -n "$AWS_PROFILE" ]]; then
+        export AWS_PROFILE
+        export SELECTED_AWS_PROFILE="$AWS_PROFILE"
+    fi
+    
+    # 獲取 AWS 帳戶信息
+    if [[ -n "$AWS_PROFILE" ]]; then
+        ACCOUNT_ID=$(aws sts get-caller-identity --query 'Account' --output text --profile "$AWS_PROFILE" 2>/dev/null)
+        if [[ -n "$ACCOUNT_ID" ]]; then
+            echo -e "${GREEN}✓ AWS 帳戶 ID: $ACCOUNT_ID${NC}"
+        else
+            echo -e "${YELLOW}警告: 無法獲取 AWS 帳戶 ID${NC}"
+        fi
+    fi
+    
     # 載入 VPN 端點配置（如果存在）
-    local endpoint_config="$TEAM_SCRIPT_DIR/configs/$TARGET_ENVIRONMENT/vpn_endpoint.conf"
+    # 映射邏輯環境名稱到實際文件夾名稱
+    local env_folder
+    case "$TARGET_ENVIRONMENT" in
+        "production")
+            env_folder="prod"
+            ;;
+        "staging")
+            env_folder="staging"
+            ;;
+        *)
+            env_folder="$TARGET_ENVIRONMENT"
+            ;;
+    esac
+    
+    local endpoint_config="$TEAM_SCRIPT_DIR/configs/$env_folder/vpn_endpoint.conf"
     if [ -f "$endpoint_config" ]; then
         source "$endpoint_config"
         echo -e "${GREEN}✓ 已載入 VPN 端點配置${NC}"
@@ -1368,17 +1402,17 @@ generate_csr_for_zero_touch() {
     # 顯示零接觸等待指示
     show_zero_touch_instructions "$cert_dir/${USERNAME}.csr"
     
-    log_team_setup_message "CSR 已生成，等待管理員簽署"
-    
+    # 安全地切換回原始目錄
     cd "$original_dir" || true
     
-    # 零接觸模式：CSR 生成階段完成，退出腳本等待管理員簽署
-    exit 0
+    log_team_setup_message "DEBUG: generate_csr_for_zero_touch 已完成"
+    
+    return 0
 }
 
 # 顯示零接觸等待指示
 show_zero_touch_instructions() {
-    local csr_path="$1"
+    local csr_file="$1"
     
     echo -e "\n${GREEN}=============================================${NC}"
     echo -e "${GREEN}       零接觸 CSR 生成完成！       ${NC}"
@@ -1388,13 +1422,13 @@ show_zero_touch_instructions() {
     echo -e ""
     
     if [ "$DISABLE_S3" = false ]; then
-        echo -e "${BLUE}✅ CSR 已自動上傳到 S3 存儲桶${NC}"
+        echo -e "${GREEN}✅ CSR 已自動上傳到 S3 存儲桶${NC}"
         echo -e "   位置: ${YELLOW}s3://$S3_BUCKET/csr/${USERNAME}.csr${NC}"
         echo -e ""
         echo -e "${BLUE}🔔 通知管理員${NC}"
         echo -e "   告知管理員您的 CSR 已準備好簽署"
         echo -e "   用戶名: ${CYAN}$USERNAME${NC}"
-        echo -e "   環境: ${CYAN}$TARGET_ENVIRONMENT${NC}"
+        echo -e "   環境: ${CYAN}$(get_env_display_name "$TARGET_ENVIRONMENT")${NC}"
         echo -e ""
         echo -e "${BLUE}⏳ 等待簽署完成${NC}"
         echo -e "   管理員簽署後，證書將自動上傳到:"
@@ -1402,21 +1436,21 @@ show_zero_touch_instructions() {
         echo -e ""
         echo -e "${BLUE}🎯 完成設定${NC}"
         echo -e "   當管理員告知證書已簽署後，執行:"
-        echo -e "   ${CYAN}$0 --resume${NC}"
+        echo -e "   ${CYAN}./team_member_setup.sh --resume${NC}"
     else
-        echo -e "${BLUE}📁 本地 CSR 文件位置：${NC}"
-        echo -e "   ${YELLOW}$csr_path${NC}"
+        echo -e "${YELLOW}⚠ S3 功能已停用${NC}"
         echo -e ""
-        echo -e "${BLUE}📧 手動提供給管理員${NC}"
-        echo -e "   將上述 CSR 文件提供給管理員進行簽署"
+        echo -e "${BLUE}📧 手動提交 CSR${NC}"
+        echo -e "   請將以下 CSR 文件提供給管理員:"
+        echo -e "   ${YELLOW}$csr_file${NC}"
         echo -e ""
-        echo -e "${BLUE}📥 等待簽署證書${NC}"
-        echo -e "   簽署後的證書應放置在:"
+        echo -e "${BLUE}📬 等待證書${NC}"
+        echo -e "   管理員簽署後，請將證書放置在:"
         echo -e "   ${YELLOW}$USER_CERT_DIR/${USERNAME}.crt${NC}"
         echo -e ""
         echo -e "${BLUE}🎯 完成設定${NC}"
-        echo -e "   當收到簽署證書後，執行:"
-        echo -e "   ${CYAN}$0 --resume${NC}"
+        echo -e "   收到證書後，執行:"
+        echo -e "   ${CYAN}./team_member_setup.sh --resume${NC}"
     fi
     
     echo -e ""
@@ -1425,386 +1459,30 @@ show_zero_touch_instructions() {
     echo -e "• 零接觸模式可自動處理大部分配置"
     echo -e "• 如有問題，請聯繫系統管理員"
     echo -e ""
-    echo -e "${GREEN}設定暫停，等待證書簽署...${NC}"
+    echo -e "${BLUE}設定暫停，等待證書簽署...${NC}"
 }
 
-# 顯示 CSR 上傳和等待指示
-show_csr_instructions() {
-    local csr_path="$1"
-    
-    echo -e "\n${GREEN}=============================================${NC}"
-    echo -e "${GREEN}       CSR 生成完成！       ${NC}"
-    echo -e "${GREEN}=============================================${NC}"
-    echo -e ""
-    echo -e "${CYAN}📋 下一步操作：${NC}"
-    echo -e ""
-    echo -e "${BLUE}1. 將以下 CSR 文件提供給管理員：${NC}"
-    echo -e "   ${YELLOW}$csr_path${NC}"
-    echo -e ""
-    echo -e "${BLUE}2. 將 CSR 上傳到指定位置（根據管理員指示）：${NC}"
-    echo -e "   • 上傳到 S3: ${CYAN}s3://vpn-csr-exchange/csr/${USERNAME}.csr${NC}"
-    echo -e "   • 或者發送電子郵件給管理員"
-    echo -e ""
-    echo -e "${BLUE}3. 等待管理員簽署您的證書${NC}"
-    echo -e ""
-    echo -e "${BLUE}4. 當管理員告知證書已簽署後，執行以下命令繼續設定：${NC}"
-    echo -e "   ${CYAN}$0 --resume-cert${NC}"
-    echo -e ""
-    echo -e "${YELLOW}💡 提示：${NC}"
-    echo -e "• 請保留此 CSR 文件直到設定完成"
-    echo -e "• 簽署後的證書文件將命名為: ${USERNAME}.crt"
-    echo -e "• 管理員將提供具體的上傳和下載指示"
-    echo -e ""
-    echo -e "${GREEN}設定暫停，等待證書簽署...${NC}"
-}
-# 導入證書到 ACM
-import_certificate() {
-    echo -e "\\n${YELLOW}[6/6] 導入證書到 AWS Certificate Manager...${NC}"
-    
-    # 載入配置
-    if ! source "$USER_CONFIG_FILE"; then
-        echo -e "${RED}載入配置文件失敗${NC}"
-        return 1
-    fi
-    
-    # 確保環境配置已載入，特別是 AWS_REGION
-    local endpoint_config="$TEAM_SCRIPT_DIR/configs/$TARGET_ENVIRONMENT/vpn_endpoint.conf"
-    if [ -f "$endpoint_config" ]; then
-        source "$endpoint_config"
-    fi
-    
-    local env_config="$TEAM_SCRIPT_DIR/configs/$TARGET_ENVIRONMENT/${TARGET_ENVIRONMENT}.env"
-    if [ -f "$env_config" ]; then
-        source "$env_config"
-    fi
-    
-    # 驗證 AWS_REGION 是否有效
-    if [[ -z "$AWS_REGION" ]]; then
-        echo -e "${RED}AWS_REGION 未設定，無法繼續${NC}"
-        return 1
-    fi
-    
-    local cert_dir="$USER_CERT_DIR"
-    
-    # 檢查證書文件
-    local required_files=(
-        "$cert_dir/${USERNAME}.crt"
-        "$cert_dir/${USERNAME}.key"
-        "$cert_dir/ca.crt"
-    )
-    
-    for file in "${required_files[@]}"; do
-        if [ ! -f "$file" ]; then
-            echo -e "${RED}找不到必要的證書文件: $file${NC}"
-            return 1
-        fi
-    done
-    
-    # 導入客戶端證書
-    echo -e "${BLUE}導入客戶端證書到 ACM...${NC}"
-    local client_cert
-    if ! client_cert=$(aws acm import-certificate \
-    --certificate "fileb://$cert_dir/${USERNAME}.crt" \
-    --private-key "fileb://$cert_dir/${USERNAME}.key" \
-    --certificate-chain "fileb://$cert_dir/ca.crt" \
-    --region "$AWS_REGION" \
-    --profile "$AWS_PROFILE" \
-    --tags Key=Name,Value="VPN-Client-${USERNAME}" Key=Purpose,Value="ClientVPN" Key=User,Value="$USERNAME"); then
-        echo -e "${RED}導入證書失敗${NC}"
-        return 1
-    fi
-    
-    local client_cert_arn
-    if ! client_cert_arn=$(echo "$client_cert" | jq -r '.CertificateArn' 2>/dev/null); then
-        # 備用解析方法
-        client_cert_arn=$(echo "$client_cert" | grep -o '"CertificateArn":"arn:aws:acm:[^"]*"' | sed 's/"CertificateArn":"//g' | sed 's/"//g' | head -1)
-    fi
-    
-    # 驗證解析結果
-    if ! validate_json_parse_result "$client_cert_arn" "客戶端證書ARN" "validate_certificate_arn"; then
-        echo -e "${RED}無法獲取客戶端證書 ARN${NC}"
-        log_team_setup_message "無法獲取客戶端證書 ARN"
-        return 1
-    fi
-    
-    echo -e "${GREEN}✓ 證書導入完成${NC}"
-    echo -e "證書 ARN: ${BLUE}$client_cert_arn${NC}"
-    
-    # 更新配置文件
-    if ! update_config "$USER_CONFIG_FILE" "CLIENT_CERT_ARN" "$client_cert_arn"; then
-        echo -e "${YELLOW}⚠ 更新配置文件失敗，但證書已成功導入${NC}"
-    fi
-    
-    log_team_setup_message "證書已導入到 ACM: $client_cert_arn"
-}
-
-# 設置 VPN 客戶端
-setup_vpn_client() {
-    echo -e "\\n${YELLOW}[7/7] 設置 VPN 客戶端...${NC}"
-    
-    # 載入配置
-    if ! source "$USER_CONFIG_FILE"; then
-        echo -e "${RED}載入配置文件失敗${NC}"
-        return 1
-    fi
-    
-    local cert_dir="$USER_CERT_DIR"
-    
-    # 下載 VPN 配置
-    echo -e "${BLUE}下載 VPN 配置文件...${NC}"
-    local config_dir="$USER_VPN_CONFIG_DIR"
-    mkdir -p "$config_dir"
-    chmod 700 "$config_dir"
-    
-    if ! aws ec2 export-client-vpn-client-configuration \
-      --client-vpn-endpoint-id "$ENDPOINT_ID" \
-      --region "$AWS_REGION" \
-      --profile "$AWS_PROFILE" \
-      --output text > "$config_dir/client-config-base.ovpn"; then
-        echo -e "${RED}下載 VPN 配置失敗${NC}"
-        log_team_setup_message "下載 VPN 配置失敗"
-        return 1
-    fi
-    
-    # 創建個人配置文件
-    echo -e "${BLUE}建立個人配置文件...${NC}"
-    if ! cp "$config_dir/client-config-base.ovpn" "$config_dir/${USERNAME}-config.ovpn"; then
-        echo -e "${RED}建立個人配置文件失敗${NC}"
-        return 1
-    fi
-    
-    # 添加配置選項
-    echo "reneg-sec 0" >> "$config_dir/${USERNAME}-config.ovpn"
-    
-    # 添加進階 AWS 域名分割 DNS 和路由配置
-    # 這個配置確保 AWS 服務能夠正確通過 VPN 連接存取，同時保持本地網路流量的正常路由
-    echo -e "${BLUE}配置 AWS 域名分割 DNS 和進階路由...${NC}"
-    {
-        echo ""
-        echo "# ========================================"
-        echo "# AWS 進階 DNS 分流與路由配置"
-        echo "# 由 team_member_setup.sh 自動生成"
-        echo "# ========================================"
-        echo ""
-        echo "# DNS 優先級設定：確保 AWS 域名查詢優先使用 VPN DNS"
-        echo "dhcp-option DNS-priority 1"
-        echo ""
-        echo "# AWS 內部域名配置：以下域名將通過 VPC DNS 解析"
-        echo "dhcp-option DOMAIN internal                      # 一般內部域名"
-        echo "dhcp-option DOMAIN $AWS_REGION.compute.internal  # EC2 私有 DNS 名稱 (區域特定)"
-        echo "dhcp-option DOMAIN ec2.internal                  # EC2 一般內部域名"
-        echo "dhcp-option DOMAIN $AWS_REGION.elb.amazonaws.com # Elastic Load Balancer 服務"
-        echo "dhcp-option DOMAIN $AWS_REGION.rds.amazonaws.com # RDS 資料庫服務"
-        echo "dhcp-option DOMAIN $AWS_REGION.s3.amazonaws.com  # S3 儲存服務"
-        echo "dhcp-option DOMAIN *.amazonaws.com               # 所有 AWS 服務域名"
-        echo ""
-        echo "# ========================================"
-        echo "# AWS 核心服務路由配置"
-        echo "# 確保關鍵 AWS 服務能夠正確存取"
-        echo "# ========================================"
-        echo ""
-        echo "# EC2 Instance Metadata Service (IMDS) - 應用程式取得實例資訊和 IAM 角色憑證"
-        echo "route 169.254.169.254 255.255.255.255"
-        echo ""
-        echo "# VPC DNS Resolver - 確保所有 AWS 內部 DNS 查詢正確路由"
-        echo "route 169.254.169.253 255.255.255.255"
-        echo ""
-        echo "# 注意：這些設定啟用以下功能："
-        echo "# - EC2 私有 DNS 名稱解析"
-        echo "# - AWS 服務內部端點存取"
-        echo "# - 應用程式 IAM 角色整合"
-        echo "# - VPC 內部服務發現"
-        echo "# - 最佳化的 AWS 服務連接路徑"
-        echo ""
-    } >> "$config_dir/${USERNAME}-config.ovpn"
-    
-    # 添加客戶端證書和密鑰
-    {
-        echo "<cert>"
-        cat "$cert_dir/${USERNAME}.crt"
-        echo "</cert>"
-        echo "<key>"
-        cat "$cert_dir/${USERNAME}.key"
-        echo "</key>"
-    } >> "$config_dir/${USERNAME}-config.ovpn"
-    
-    # 設置配置文件權限
-    chmod 600 "$config_dir/${USERNAME}-config.ovpn"
-    
-    echo -e "${GREEN}✓ 個人配置文件已建立${NC}"
-    
-    # 詢問用戶是否要安裝 AWS VPN 客戶端
-    echo -e "\n${CYAN}========================================${NC}"
-    echo -e "${CYAN}AWS VPN 客戶端安裝${NC}"
-    echo -e "${CYAN}========================================${NC}"
-    echo -e "您需要安裝 AWS VPN 客戶端來連接到 VPN。"
-    echo -e "您可以選擇現在自動安裝，或稍後手動安裝。"
-    echo
-    
-    local install_client
-    if read_secure_input "是否要現在安裝 AWS VPN 客戶端？(y/n): " install_client "validate_yes_no"; then
-        if [[ "$install_client" =~ ^[Yy]$ ]]; then
-            # 下載並安裝 AWS VPN 客戶端（跨平台）
-            echo -e "${BLUE}設置 AWS VPN 客戶端...${NC}"
-            
-            local os_type=$(uname -s)
-            case "$os_type" in
-                "Darwin")
-                    setup_vpn_client_macos
-                    ;;
-                "Linux")
-                    setup_vpn_client_linux
-                    ;;
-                *)
-                    echo -e "${YELLOW}⚠ 未支援的作業系統自動安裝 VPN 客戶端${NC}"
-                    echo -e "${BLUE}請手動下載並安裝 AWS VPN 客戶端：${NC}"
-                    echo -e "  macOS: https://d20adtppz83p9s.cloudfront.net/OSX/latest/AWS_VPN_Client.pkg"
-                    echo -e "  Windows: https://d20adtppz83p9s.cloudfront.net/WIN/latest/AWS_VPN_Client.msi"
-                    echo -e "  Linux: 請使用 OpenVPN 客戶端"
-                    ;;
-            esac
-            
-            # 顯示如何啟動客戶端的說明
-            show_vpn_client_launch_instructions
-        else
-            echo -e "${YELLOW}跳過 AWS VPN 客戶端安裝${NC}"
-            echo -e "${BLUE}您可以稍後從以下連結手動下載安裝：${NC}"
-            echo -e "  • macOS: https://d20adtppz83p9s.cloudfront.net/OSX/latest/AWS_VPN_Client.pkg"
-            echo -e "  • Windows: https://d20adtppz83p9s.cloudfront.net/WIN/latest/AWS_VPN_Client.msi"
-            echo -e "  • Linux: 請使用 OpenVPN 客戶端"
-            echo
-            echo -e "${BLUE}安裝完成後，請使用以下配置文件：${NC}"
-            echo -e "  ${CYAN}$config_dir/${USERNAME}-config.ovpn${NC}"
-        fi
-    else
-        echo -e "${YELLOW}跳過 AWS VPN 客戶端安裝${NC}"
-    fi
-    
-    echo -e "${GREEN}VPN 客戶端設置完成！${NC}"
-    echo -e "您的配置文件: ${BLUE}$config_dir/${USERNAME}-config.ovpn${NC}"
-    
-    log_team_setup_message "VPN 客戶端設置完成"
-}
-
-# 顯示 VPN 客戶端啟動說明
-show_vpn_client_launch_instructions() {
-    echo -e "\n${CYAN}========================================${NC}"
-    echo -e "${CYAN}如何啟動 AWS VPN 客戶端${NC}"
-    echo -e "${CYAN}========================================${NC}"
-    
-    local os_type=$(uname -s)
-    case "$os_type" in
-        "Darwin")
-            echo -e "${BLUE}macOS 用戶：${NC}"
-            echo -e "1. 開啟 Finder"
-            echo -e "2. 前往「應用程式」資料夾"
-            echo -e "3. 找到並雙擊「AWS VPN Client」"
-            echo -e "4. 或者在 Spotlight 搜尋中輸入「AWS VPN Client」"
-            echo
-            echo -e "${BLUE}使用 Launchpad：${NC}"
-            echo -e "• 按 F4 或點擊 Dock 中的 Launchpad 圖示"
-            echo -e "• 搜尋「AWS VPN Client」並點擊"
-            ;;
-        "Linux")
-            echo -e "${BLUE}Linux 用戶：${NC}"
-            echo -e "請使用 OpenVPN 客戶端："
-            echo -e "sudo openvpn --config $USER_VPN_CONFIG_DIR/${USERNAME}-config.ovpn"
-            echo
-            echo -e "${BLUE}或使用 Network Manager (GUI)：${NC}"
-            echo -e "1. 打開網路設定"
-            echo -e "2. 點擊「+」新增連接"
-            echo -e "3. 選擇「匯入 VPN 連接」"
-            echo -e "4. 選擇您的 .ovpn 文件"
-            ;;
-        *)
-            echo -e "${BLUE}其他作業系統：${NC}"
-            echo -e "請下載並安裝適合您作業系統的 VPN 客戶端"
-            echo -e "• Windows: 下載並安裝 .msi 文件後，在開始選單中搜尋「AWS VPN Client」"
-            echo -e "• 其他系統: 使用支援 OpenVPN 的客戶端"
-            ;;
-    esac
-    
-    echo
-    echo -e "${GREEN}配置文件位置：${NC}"
-    echo -e "  ${CYAN}$USER_VPN_CONFIG_DIR/${USERNAME}-config.ovpn${NC}"
-    echo
-    echo -e "${YELLOW}提示：${NC}"
-    echo -e "• 首次連接時，VPN 客戶端會要求您匯入配置文件"
-    echo -e "• 選擇上述路徑中的 .ovpn 文件"
-    echo -e "• 連接後，您就可以安全地訪問內部資源"
-    echo
-}
-
-# macOS VPN 客戶端安裝
-setup_vpn_client_macos() {
-    # 檢查是否已安裝
-    if [ ! -d "/Applications/AWS VPN Client.app" ]; then
-        echo -e "${BLUE}下載 AWS VPN 客戶端...${NC}"
-        local vpn_client_url="https://d20adtppz83p9s.cloudfront.net/OSX/latest/AWS_VPN_Client.pkg"
-        
-        # 確保 Downloads 目錄存在
-        mkdir -p ~/Downloads
-
-        if ! curl -L -o ~/Downloads/AWS_VPN_Client.pkg "$vpn_client_url"; then
-            echo -e "${RED}下載 AWS VPN 客戶端失敗${NC}"
-            log_team_setup_message "下載 AWS VPN 客戶端失敗"
-            return 1
-        fi
-        
-        echo -e "${YELLOW}安裝 AWS VPN 客戶端需要管理員權限，請輸入密碼...${NC}"
-        if ! sudo installer -pkg ~/Downloads/AWS_VPN_Client.pkg -target /; then
-            echo -e "${RED}安裝失敗。請檢查權限或手動安裝。${NC}"
-            echo -e "${BLUE}您也可以從以下位置手動安裝：~/Downloads/AWS_VPN_Client.pkg${NC}"
-            return 1
-        fi
-        
-        echo -e "${GREEN}✓ AWS VPN 客戶端已安裝${NC}"
-    else
-        echo -e "${GREEN}✓ AWS VPN 客戶端已存在${NC}"
-    fi
-}
-
-# Linux VPN 客戶端設置
-setup_vpn_client_linux() {
-    echo -e "${BLUE}設置 OpenVPN 客戶端...${NC}"
-    
-    # 檢查 OpenVPN 是否已安裝
-    if ! command -v openvpn &> /dev/null; then
-        echo -e "${YELLOW}正在安裝 OpenVPN...${NC}"
-        
-        if command -v apt-get &> /dev/null; then
-            sudo apt-get update
-            sudo apt-get install -y openvpn
-        elif command -v yum &> /dev/null; then
-            sudo yum install -y openvpn
-        else
-            echo -e "${RED}無法自動安裝 OpenVPN。請手動安裝後重新執行腳本。${NC}"
-            return 1
-        fi
-    fi
-    
-    echo -e "${GREEN}✓ OpenVPN 客戶端已準備就緒${NC}"
-    echo -e "${BLUE}Linux 用戶可以使用以下命令連接 VPN：${NC}"
-    echo -e "${YELLOW}sudo openvpn --config $config_dir/${USERNAME}-config.ovpn${NC}"
-}
-
-# 顯示連接指示
+# 顯示 VPN 連接指示
 show_connection_instructions() {
-    # 載入配置
-    source "$USER_CONFIG_FILE"
-    
-    echo -e "\\n${GREEN}=============================================${NC}"
-    echo -e "${GREEN}       AWS Client VPN 設置完成！      ${NC}"
-    echo -e "${GREEN}=============================================${NC}"
-    echo -e ""
-    echo -e "${CYAN}環境資訊：${NC}"
-    echo -e "  目標環境: $(get_env_display_name "$TARGET_ENVIRONMENT")"
-    echo -e "  AWS Profile: ${AWS_PROFILE}"
-    echo -e "  AWS Region: ${AWS_REGION}"
-    echo -e "  用戶名稱: ${USERNAME}"
-    echo -e "  配置文件: ${USER_VPN_CONFIG_DIR}/${USERNAME}-config.ovpn"
+    echo -e "\n${GREEN}========================================${NC}"
+    echo -e "${GREEN}   VPN 設定完成！   ${NC}"
+    echo -e "${GREEN}========================================${NC}"
     echo -e ""
     
+    echo -e "${CYAN}📋 您的 VPN 配置已準備就緒${NC}"
+    echo -e ""
+    echo -e "${BLUE}💻 配置文件位置：${NC}"
+    if [ -n "$USER_VPN_CONFIG_DIR" ] && [ -n "$USERNAME" ]; then
+        echo -e "  ${YELLOW}$USER_VPN_CONFIG_DIR/${USERNAME}-config.ovpn${NC}"
+    else
+        echo -e "  ${YELLOW}配置文件已生成在用戶配置目錄${NC}"
+    fi
+    echo -e ""
+    
+    echo -e "${BLUE}🔗 下一步：連接到 VPN${NC}"
+    echo -e ""
+    
+    # 顯示特定於操作系統的說明
     local os_type=$(uname -s)
     case "$os_type" in
         "Darwin")
@@ -1819,24 +1497,12 @@ show_connection_instructions() {
     esac
     
     echo -e ""
-    echo -e "${CYAN}測試連接：${NC}"
-    echo -e "連接成功後，嘗試 ping $(get_env_display_name "$TARGET_ENVIRONMENT")中的某個私有 IP："
-    echo -e "  ${YELLOW}ping 10.0.x.x${NC}  # 請向管理員詢問測試 IP"
+    echo -e "${YELLOW}💡 提示：${NC}"
+    echo -e "• 首次連接可能需要幾秒鐘時間"
+    echo -e "• 連接成功後您可以訪問內部資源"
+    echo -e "• 如有問題請聯繫系統管理員"
     echo -e ""
-    echo -e "${CYAN}故障排除：${NC}"
-    echo -e "如果連接失敗，請："
-    echo -e "${BLUE}1.${NC} 檢查您的網路連接"
-    echo -e "${BLUE}2.${NC} 確認配置文件路徑正確"
-    echo -e "${BLUE}3.${NC} 聯繫管理員檢查授權設置"
-    echo -e "${BLUE}4.${NC} 查看 VPN 客戶端的連接日誌"
-    echo -e ""
-    echo -e "${CYAN}重要提醒：${NC}"
-    echo -e "${RED}•${NC} 僅在需要時連接 VPN"
-    echo -e "${RED}•${NC} 使用完畢後請立即斷開連接"
-    echo -e "${RED}•${NC} 請勿分享您的配置文件或證書"
-    echo -e "${RED}•${NC} 如有問題請聯繫 IT 管理員"
-    echo -e ""
-    echo -e "${GREEN}設置完成！祝您除錯順利！${NC}"
+    echo -e "${GREEN}🎉 恭喜！VPN 設定已完成${NC}"
 }
 
 # macOS 連接指示
@@ -1982,6 +1648,9 @@ check_permissions_mode() {
     # 設置用戶信息
     setup_user_information
     
+    # 確保使用正確的存儲桶名稱
+    update_s3_bucket_name
+
     echo -e "\n${CYAN}========================================${NC}"
     echo -e "${CYAN}     權限檢查結果     ${NC}"
     echo -e "${CYAN}========================================${NC}"
@@ -2055,10 +1724,11 @@ parse_arguments() {
     INIT_MODE=false
     RESUME_MODE=false
     CHECK_PERMISSIONS_MODE=false
-    S3_BUCKET="vpn-csr-exchange"
+    S3_BUCKET="vpn-csr-exchange"  # 將在運行時更新為環境特定名稱
     DISABLE_S3=false
     CA_PATH=""
     ENDPOINT_ID=""
+    ACCOUNT_ID=""  # 將在運行時設置
     
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -2160,8 +1830,430 @@ show_usage() {
     echo "  3. 執行 '$0 --resume' 下載證書並完成設定"
 }
 
-# 只有在腳本直接執行時才執行主程序（不是被 source 時）
+# 導入證書到 ACM
+import_certificate() {
+    echo -e "\\n${YELLOW}[6/6] 導入證書到 AWS Certificate Manager...${NC}"
+    
+    # 載入配置
+    if ! source "$USER_CONFIG_FILE"; then
+        echo -e "${RED}載入配置文件失敗${NC}"
+        return 1
+    fi
+    
+    # 檢查是否已經有有效的證書 ARN
+    if [[ -n "$CLIENT_CERT_ARN" ]]; then
+        echo -e "${BLUE}檢查現有證書...${NC}"
+        
+        # 驗證證書是否仍然存在且有效
+        if aws acm describe-certificate --certificate-arn "$CLIENT_CERT_ARN" --region "$AWS_REGION" --profile "$AWS_PROFILE" &>/dev/null; then
+            echo -e "${GREEN}✓ 使用現有的證書${NC}"
+            echo -e "證書 ARN: ${BLUE}$CLIENT_CERT_ARN${NC}"
+            log_team_setup_message "使用現有證書: $CLIENT_CERT_ARN"
+            return 0
+        else
+            echo -e "${YELLOW}現有證書無效，將重新導入${NC}"
+        fi
+    fi
+    
+    # 確保環境配置已載入，特別是 AWS_REGION
+    local endpoint_config="$TEAM_SCRIPT_DIR/configs/$TARGET_ENVIRONMENT/vpn_endpoint.conf"
+    if [ -f "$endpoint_config" ]; then
+        source "$endpoint_config"
+    fi
+    
+    local env_config="$TEAM_SCRIPT_DIR/configs/$TARGET_ENVIRONMENT/${TARGET_ENVIRONMENT}.env"
+    if [ -f "$env_config" ]; then
+        source "$env_config"
+    fi
+    
+    # 驗證 AWS_REGION 是否有效
+    if [[ -z "$AWS_REGION" ]]; then
+        echo -e "${RED}AWS_REGION 未設定，無法繼續${NC}"
+        return 1
+    fi
+    
+    local cert_dir="$USER_CERT_DIR"
+    
+    # 檢查證書文件
+    local required_files=(
+        "$cert_dir/${USERNAME}.crt"
+        "$cert_dir/${USERNAME}.key"
+        "$cert_dir/ca.crt"
+    )
+    
+    for file in "${required_files[@]}"; do
+        if [ ! -f "$file" ]; then
+            echo -e "${RED}找不到必要的證書文件: $file${NC}"
+            return 1
+        fi
+    done
+    
+    # 導入客戶端證書
+    echo -e "${BLUE}導入客戶端證書到 ACM...${NC}"
+    local client_cert
+    if ! client_cert=$(aws acm import-certificate \
+    --certificate "fileb://$cert_dir/${USERNAME}.crt" \
+    --private-key "fileb://$cert_dir/${USERNAME}.key" \
+    --certificate-chain "fileb://$cert_dir/ca.crt" \
+    --region "$AWS_REGION" \
+    --profile "$AWS_PROFILE" \
+    --tags Key=Name,Value="VPN-Client-${USERNAME}" Key=Purpose,Value="ClientVPN" Key=User,Value="$USERNAME"); then
+        echo -e "${RED}導入證書失敗${NC}"
+        return 1
+    fi
+    
+    local client_cert_arn
+    if ! client_cert_arn=$(echo "$client_cert" | jq -r '.CertificateArn' 2>/dev/null); then
+        # 備用解析方法
+        client_cert_arn=$(echo "$client_cert" | grep -o '"CertificateArn":"arn:aws:acm:[^"]*"' | sed 's/"CertificateArn":"//g' | sed 's/"//g' | head -1)
+    fi
+    
+    # 驗證解析結果
+    if ! validate_json_parse_result "$client_cert_arn" "客戶端證書ARN" "validate_certificate_arn"; then
+        echo -e "${RED}無法獲取客戶端證書 ARN${NC}"
+        log_team_setup_message "無法獲取客戶端證書 ARN"
+        return 1
+    fi
+    
+    echo -e "${GREEN}✓ 證書導入完成${NC}"
+    echo -e "證書 ARN: ${BLUE}$client_cert_arn${NC}"
+    
+    # 更新配置文件
+    if ! update_config "$USER_CONFIG_FILE" "CLIENT_CERT_ARN" "$client_cert_arn"; then
+        echo -e "${YELLOW}⚠ 更新配置文件失敗，但證書已成功導入${NC}"
+    fi
+    
+    log_team_setup_message "證書已導入到 ACM: $client_cert_arn"
+}
+
+# 設置 VPN 客戶端
+setup_vpn_client() {
+    echo -e "\n${YELLOW}[7/7] 設置 VPN 客戶端...${NC}"
+    
+    # 下載 VPN 配置文件
+    echo -e "${BLUE}下載 VPN 配置文件...${NC}"
+    
+    # 檢查 VPN 端點配置是否存在
+    if [ -z "$ENDPOINT_ID" ]; then
+        echo -e "${RED}VPN 端點 ID 未設置${NC}"
+        echo -e "${YELLOW}請檢查配置文件中的 ENDPOINT_ID 設置${NC}"
+        return 1
+    fi
+    
+    echo -e "${GREEN}✓ 使用 VPN 端點: $ENDPOINT_ID${NC}"
+    
+    local config_dir="$USER_VPN_CONFIG_DIR"
+    mkdir -p "$config_dir"
+    
+    local vpn_config_file="$config_dir/${USERNAME}-config.ovpn"
+    
+    # 下載基礎配置
+    if ! aws ec2 export-client-vpn-client-configuration \
+        --client-vpn-endpoint-id "$ENDPOINT_ID" \
+        --output text \
+        --query 'ClientConfiguration' \
+        --profile "$SELECTED_AWS_PROFILE" > "$vpn_config_file"; then
+        echo -e "${RED}下載 VPN 配置失敗${NC}"
+        return 1
+    fi
+    
+    echo -e "${BLUE}建立個人配置文件...${NC}"
+    
+    # 建立個人配置文件
+    echo -e "${BLUE}配置 AWS 域名分割 DNS 和進階路由...${NC}"
+    
+    # 添加客戶端證書和私鑰到配置
+    {
+        echo ""
+        echo "<cert>"
+        cat "$USER_CERT_DIR/${USERNAME}.crt"
+        echo "</cert>"
+        echo ""
+        echo "<key>"
+        cat "$USER_CERT_DIR/${USERNAME}.key"
+        echo "</key>"
+    } >> "$vpn_config_file"
+    
+    chmod 600 "$vpn_config_file"
+    echo -e "${GREEN}✓ 個人配置文件已建立${NC}"
+    
+    # 安裝 VPN 客戶端
+    install_vpn_client
+    
+    # 更新配置文件
+    if ! update_config "$USER_CONFIG_FILE" "VPN_CONFIG_FILE" "$vpn_config_file"; then
+        echo -e "${YELLOW}⚠ 更新配置文件失敗${NC}"
+    fi
+    
+    echo -e "${GREEN}VPN 客戶端設置完成！${NC}"
+    echo -e "您的配置文件: ${BLUE}$vpn_config_file${NC}"
+}
+
+# 安裝 VPN 客戶端
+install_vpn_client() {
+    echo -e "\n${CYAN}========================================${NC}"
+    echo -e "${CYAN}AWS VPN 客戶端安裝${NC}"
+    echo -e "${CYAN}========================================${NC}"
+    echo -e "您需要安裝 AWS VPN 客戶端來連接到 VPN。"
+    echo -e "您可以選擇現在自動安裝，或稍後手動安裝。"
+    echo -e ""
+    
+    local install_choice
+    if read_secure_input "是否要現在安裝 AWS VPN 客戶端？(y/n): " install_choice "validate_yes_no"; then
+        if [[ "$install_choice" =~ ^[Yy]$ ]]; then
+            if [[ "$OSTYPE" == "darwin"* ]]; then
+                # macOS
+                echo -e "${BLUE}正在下載並安裝 AWS VPN 客戶端 (macOS)...${NC}"
+                local temp_pkg="/tmp/AWS_VPN_Client.pkg"
+                if curl -o "$temp_pkg" "https://d20adtppz83p9s.cloudfront.net/OSX/latest/AWS_VPN_Client.pkg"; then
+                    echo -e "${BLUE}正在安裝... (可能需要管理員權限)${NC}"
+                    sudo installer -pkg "$temp_pkg" -target /
+                    rm -f "$temp_pkg"
+                    echo -e "${GREEN}✓ AWS VPN 客戶端安裝完成${NC}"
+                else
+                    echo -e "${RED}下載失敗，請手動安裝${NC}"
+                fi
+            else
+                echo -e "${YELLOW}自動安裝僅支援 macOS，請手動安裝${NC}"
+            fi
+        else
+            echo -e "${BLUE}跳過 AWS VPN 客戶端安裝${NC}"
+        fi
+    else
+        echo -e "${BLUE}跳過 AWS VPN 客戶端安裝${NC}"
+    fi
+    
+    echo -e "您可以稍後從以下連結手動下載安裝："
+    echo -e "  • macOS: https://d20adtppz83p9s.cloudfront.net/OSX/latest/AWS_VPN_Client.pkg"
+    echo -e "  • Windows: https://d20adtppz83p9s.cloudfront.net/WIN/latest/AWS_VPN_Client.msi"
+    echo -e "  • Linux: 請使用 OpenVPN 客戶端"
+    echo -e ""
+    echo -e "安裝完成後，請使用以下配置文件："
+    echo -e "  ${BLUE}$USER_CONFIG_DIR/users/${USERNAME}-config.ovpn${NC}"
+}
+
+# 顯示連接指示
+show_connection_instructions() {
+    echo -e "\n${GREEN}========================================${NC}"
+    echo -e "${GREEN}     VPN 連接指示     ${NC}"
+    echo -e "${GREEN}========================================${NC}"
+    echo -e ""
+    echo -e "${CYAN}📋 您的 VPN 配置：${NC}"
+    echo -e "  用戶名: ${YELLOW}$USERNAME${NC}"
+    echo -e "  環境: ${YELLOW}$(get_env_display_name "$TARGET_ENVIRONMENT")${NC}"
+    echo -e "  配置文件: ${YELLOW}$USER_CONFIG_DIR/users/${USERNAME}-config.ovpn${NC}"
+    
+    if [ -n "$CLIENT_CERT_ARN" ]; then
+        echo -e "  證書 ARN: ${YELLOW}$CLIENT_CERT_ARN${NC}"
+    fi
+    
+    echo -e ""
+    echo -e "${CYAN}🚀 連接步驟：${NC}"
+    echo -e "1. 啟動 AWS VPN 客戶端"
+    echo -e "2. 點擊 'Add Profile'"
+    echo -e "3. 選擇您的配置文件:"
+    echo -e "   ${BLUE}$USER_CONFIG_DIR/users/${USERNAME}-config.ovpn${NC}"
+    echo -e "4. 點擊 'Connect'"
+    echo -e ""
+    echo -e "${YELLOW}💡 提示：${NC}"
+    echo -e "• 首次連接可能需要幾秒鐘建立"
+    echo -e "• 連接後您可以訪問內部資源"
+    echo -e "• 如有問題，請檢查證書是否有效"
+    echo -e ""
+}
+
+# 測試連接
+test_connection() {
+    echo -e "${BLUE}VPN 連接測試功能將在未來版本中提供${NC}"
+}
+
+# 主函數
+main() {
+    # 全域變數初始化
+    ZERO_TOUCH_INIT_MODE=false
+    ZERO_TOUCH_RESUME_MODE=false
+    CHECK_PERMISSIONS_MODE=false
+    DISABLE_S3=false
+    VERBOSE=false
+    
+    # S3 相關變數
+    S3_BUCKET="vpn-csr-exchange"  # 將在運行時更新為環境特定名稱
+    SELECTED_AWS_PROFILE=""
+    
+    # 解析命令行參數
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --init)
+                ZERO_TOUCH_INIT_MODE=true
+                shift
+                ;;
+            --resume)
+                ZERO_TOUCH_RESUME_MODE=true
+                shift
+                ;;
+            --check-permissions)
+                CHECK_PERMISSIONS_MODE=true
+                shift
+                ;;
+            -b|--bucket)
+                S3_BUCKET="$2"
+                shift 2
+                ;;
+            --no-s3)
+                DISABLE_S3=true
+                shift
+                ;;
+            -v|--verbose)
+                VERBOSE=true
+                shift
+                ;;
+            -h|--help)
+                show_usage
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}未知參數: $1${NC}"
+                show_usage
+                exit 1
+                ;;
+        esac
+    done
+    
+    # 設置全域變數
+    TEAM_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    
+    # 執行對應模式
+    if [ "$ZERO_TOUCH_INIT_MODE" = true ]; then
+        # 零接觸初始化模式
+        zero_touch_init_mode
+    elif [ "$ZERO_TOUCH_RESUME_MODE" = true ]; then
+        # 零接觸恢復模式
+        zero_touch_resume_mode
+    elif [ "$CHECK_PERMISSIONS_MODE" = true ]; then
+        # 權限檢查模式
+        check_permissions_mode
+    else
+        # 傳統完整模式（向後相容）
+        show_welcome
+        check_team_prerequisites
+        init_environment_and_aws
+        setup_ca_cert_and_environment
+        setup_vpn_endpoint_info
+        setup_user_info
+        generate_client_certificate
+        import_certificate
+        setup_vpn_client
+        show_connection_instructions
+        test_connection
+    fi
+    
+    if [ -n "$LOG_FILE" ]; then
+        log_team_setup_message "團隊成員 VPN 設定完成"
+    fi
+}
+
+# 權限檢查模式
+check_permissions_mode() {
+    show_team_env_header "VPN S3 權限檢查工具"
+    echo -e ""
+    echo -e "${BLUE}此工具將檢查您的 AWS 用戶是否具有 VPN CSR 上傳權限${NC}"
+    echo -e ""
+    
+    # 檢查必要工具
+    check_team_prerequisites
+    
+    # 初始化 AWS 配置
+    init_environment_and_aws
+    
+    # 設置用戶信息
+    setup_user_information
+    
+    # 確保使用正確的存儲桶名稱
+    update_s3_bucket_name
+
+    echo -e "\n${CYAN}========================================${NC}"
+    echo -e "${CYAN}     權限檢查結果     ${NC}"
+    echo -e "${CYAN}========================================${NC}"
+    echo -e ""
+    
+    # 顯示當前 AWS 用戶信息
+    echo -e "${BLUE}當前 AWS 用戶信息：${NC}"
+    local user_arn
+    user_arn=$(aws sts get-caller-identity --query 'Arn' --output text --profile "$SELECTED_AWS_PROFILE" 2>/dev/null || echo "未知")
+    local account_id
+    account_id=$(aws sts get-caller-identity --query 'Account' --output text --profile "$SELECTED_AWS_PROFILE" 2>/dev/null || echo "未知")
+    local user_name
+    user_name=$(aws sts get-caller-identity --query 'UserName' --output text --profile "$SELECTED_AWS_PROFILE" 2>/dev/null || echo "未知")
+    
+    echo -e "  用戶 ARN: ${YELLOW}$user_arn${NC}"
+    echo -e "  帳戶 ID: ${YELLOW}$account_id${NC}"
+    echo -e "  用戶名: ${YELLOW}$user_name${NC}"
+    echo -e "  S3 存儲桶: ${YELLOW}$S3_BUCKET${NC}"
+    echo -e ""
+    
+    # 檢查 S3 存儲桶訪問
+    echo -e "${BLUE}檢查 S3 存儲桶訪問權限...${NC}"
+    if aws s3 ls "s3://$S3_BUCKET" --profile "$SELECTED_AWS_PROFILE" &>/dev/null; then
+        echo -e "${GREEN}✓ 可以訪問 S3 存儲桶${NC}"
+    else
+        echo -e "${RED}✗ 無法訪問 S3 存儲桶${NC}"
+        echo -e "${YELLOW}這可能表示存儲桶不存在或您沒有訪問權限${NC}"
+    fi
+    
+    # 檢查 CSR 上傳權限
+    echo -e "${BLUE}檢查 CSR 上傳權限...${NC}"
+    if check_s3_csr_permissions "$USERNAME"; then
+        echo -e "${GREEN}✓ CSR 上傳權限正常${NC}"
+        echo -e "${GREEN}您可以使用零接觸工作流程${NC}"
+    else
+        echo -e "${RED}✗ CSR 上傳權限不足${NC}"
+        show_permission_help "$USERNAME"
+        return 1
+    fi
+    
+    # 檢查證書下載權限
+    echo -e "${BLUE}檢查證書下載權限...${NC}"
+    local test_cert_key="cert/${USERNAME}.crt"
+    if aws s3api head-object --bucket "$S3_BUCKET" --key "$test_cert_key" --profile "$SELECTED_AWS_PROFILE" &>/dev/null; then
+        echo -e "${GREEN}✓ 證書下載權限正常 (文件已存在)${NC}"
+    else
+        echo -e "${YELLOW}? 證書下載權限測試 (證書文件不存在，這是正常的)${NC}"
+        echo -e "${CYAN}當管理員簽署您的證書後，您將能夠下載它${NC}"
+    fi
+    
+    echo -e "\n${GREEN}========================================${NC}"
+    echo -e "${GREEN}     權限檢查完成     ${NC}"
+    echo -e "${GREEN}========================================${NC}"
+    echo -e ""
+    echo -e "${BLUE}如果所有檢查都通過，您可以：${NC}"
+    echo -e "  1. 執行 ${CYAN}$0 --init${NC} 來初始化 VPN 設定"
+    echo -e "  2. 等待管理員簽署您的證書"
+    echo -e "  3. 執行 ${CYAN}$0 --resume${NC} 來完成設定"
+}
+
+# 顯示權限幫助信息
+show_permission_help() {
+    local username="$1"
+    
+    echo -e "\n${YELLOW}權限問題解決方案：${NC}"
+    echo -e ""
+    echo -e "${BLUE}請聯繫系統管理員為您的 AWS 用戶添加以下權限：${NC}"
+    echo -e ""
+    echo -e "${CYAN}1. 附加 IAM 政策：${NC}"
+    echo -e "   政策名稱: ${YELLOW}VPN-CSR-TeamMember-Policy${NC}"
+    echo -e ""
+    echo -e "${CYAN}2. 或手動執行以下命令：${NC}"
+    echo -e "   ${YELLOW}aws iam attach-user-policy \\${NC}"
+    echo -e "   ${YELLOW}  --user-name $username \\${NC}"
+    echo -e "   ${YELLOW}  --policy-arn arn:aws:iam::\$(aws sts get-caller-identity --query Account --output text):policy/VPN-CSR-TeamMember-Policy${NC}"
+    echo -e ""
+    echo -e "${CYAN}3. 政策內容應包含：${NC}"
+    echo -e "   • S3 上傳權限到 ${YELLOW}s3://$S3_BUCKET/csr/$username.csr${NC}"
+    echo -e "   • S3 下載權限從 ${YELLOW}s3://$S3_BUCKET/cert/$username.crt${NC}"
+    echo -e ""
+}
+
+# 只有在腳本直接執行時才執行主程序
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    parse_arguments "$@"
-    main
+    main "$@"
 fi

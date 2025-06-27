@@ -79,15 +79,34 @@ NC='\033[0m' # No Color
 
 # 預設配置 (環境感知)
 get_default_bucket_name() {
-    echo "vpn-csr-exchange"
+    # 使用環境和帳戶ID來確保存儲桶名稱唯一性
+    local env_suffix=""
+    if [[ -n "$CURRENT_ENVIRONMENT" ]]; then
+        env_suffix="-${CURRENT_ENVIRONMENT}"
+    fi
+    
+    # 如果有帳戶ID，使用它來確保唯一性
+    if [[ -n "$ACCOUNT_ID" ]]; then
+        echo "vpn-csr-exchange${env_suffix}-${ACCOUNT_ID}"
+    else
+        # 備用方案：使用隨機數
+        local random_suffix=$(date +%s | tail -c 6)
+        echo "vpn-csr-exchange${env_suffix}-${random_suffix}"
+    fi
 }
 
-# VPN 管理員用戶列表 (可根據需要修改)
-VPN_ADMIN_USERS=(
-    "ct"
-    # 添加新管理員時，請在此處添加用戶名
-    # "new-admin-username"
-)
+# VPN 管理員用戶列表 (環境感知)
+if [[ "$CURRENT_ENVIRONMENT" == "staging" ]]; then
+    VPN_ADMIN_USERS=(
+        "ct"  # staging 環境使用小寫用戶名
+        # 添加新管理員時，請在此處添加用戶名
+    )
+else
+    VPN_ADMIN_USERS=(
+        "CT"  # production 環境使用大寫用戶名
+        # 添加新管理員時，請在此處添加用戶名
+    )
+fi
 
 DEFAULT_BUCKET_NAME="$(get_default_bucket_name)"
 DEFAULT_REGION="$AWS_REGION"
@@ -148,18 +167,25 @@ check_aws_config() {
     fi
     
     # 檢查 AWS 憑證
-    if ! aws_with_profile sts get-caller-identity --profile "$AWS_PROFILE" &>/dev/null; then
+    if ! aws sts get-caller-identity --profile "$AWS_PROFILE" &>/dev/null; then
         echo -e "${RED}AWS 憑證無效或未設置 (profile: $AWS_PROFILE)${NC}"
         return 1
     fi
     
     # 獲取帳戶資訊
-    ACCOUNT_ID=$(aws_with_profile sts get-caller-identity --profile "$AWS_PROFILE" --query 'Account' --output text)
-    USER_ARN=$(aws_with_profile sts get-caller-identity --profile "$AWS_PROFILE" --query 'Arn' --output text)
+    ACCOUNT_ID=$(aws sts get-caller-identity --profile "$AWS_PROFILE" --query 'Account' --output text)
+    USER_ARN=$(aws sts get-caller-identity --profile "$AWS_PROFILE" --query 'Arn' --output text)
+    
+    # 如果存儲桶名稱是預設值，重新生成以包含帳戶ID
+    if [[ "$BUCKET_NAME" == "vpn-csr-exchange" ]]; then
+        BUCKET_NAME=$(get_default_bucket_name)
+        echo -e "${BLUE}使用環境特定的存儲桶名稱: $BUCKET_NAME${NC}"
+    fi
     
     echo -e "${GREEN}✓ AWS 配置有效${NC}"
     echo -e "${GREEN}✓ 帳戶 ID: $ACCOUNT_ID${NC}"
     echo -e "${GREEN}✓ 用戶: $USER_ARN${NC}"
+    echo -e "${GREEN}✓ 存儲桶名稱: $BUCKET_NAME${NC}"
     
     return 0
 }
@@ -223,6 +249,41 @@ setup_bucket_policy() {
     
     local policy_file="/tmp/bucket-policy-$$.json"
     
+    # 構建管理員用戶 ARN 列表
+    local admin_arns=""
+    local first_admin=true
+    
+    # 構建管理員 ARN 陣列
+    local admin_arns_array=()
+    
+    # 添加當前用戶 ARN
+    admin_arns_array+=("\"$USER_ARN\"")
+    
+    # 添加配置的管理員用戶（避免重複，並驗證用戶存在）
+    local current_user=$(echo "$USER_ARN" | sed 's/.*user\///')
+    for admin in "${VPN_ADMIN_USERS[@]}"; do
+        # 跳過當前用戶（避免重複）
+        if [[ "$admin" != "$current_user" ]]; then
+            # 檢查用戶是否存在（可選，為安全起見）
+            if aws iam get-user --user-name "$admin" --profile "$AWS_PROFILE" &>/dev/null; then
+                admin_arns_array+=("\"arn:aws:iam::$ACCOUNT_ID:user/$admin\"")
+            else
+                echo -e "${YELLOW}警告: 用戶 $admin 不存在，跳過${NC}"
+            fi
+        fi
+    done
+    
+    # 使用 printf 正確格式化 JSON 陣列
+    local admin_arns=""
+    for i in "${!admin_arns_array[@]}"; do
+        if [[ $i -eq 0 ]]; then
+            admin_arns="${admin_arns_array[$i]}"
+        else
+            admin_arns="$admin_arns,
+                    ${admin_arns_array[$i]}"
+        fi
+    done
+    
     cat > "$policy_file" << EOF
 {
     "Version": "2012-10-17",
@@ -251,11 +312,20 @@ setup_bucket_policy() {
             "Resource": "arn:aws:s3:::$BUCKET_NAME/cert/*"
         },
         {
+            "Sid": "AllowPublicAssetDownload",
+            "Effect": "Allow",
+            "Principal": {
+                "AWS": "arn:aws:iam::$ACCOUNT_ID:root"
+            },
+            "Action": "s3:GetObject",
+            "Resource": "arn:aws:s3:::$BUCKET_NAME/public/*"
+        },
+        {
             "Sid": "AllowAdminFullAccess",
             "Effect": "Allow",
             "Principal": {
                 "AWS": [
-                    "$USER_ARN"$(for admin in "${VPN_ADMIN_USERS[@]}"; do echo ","; echo "                    \"arn:aws:iam::$ACCOUNT_ID:user/$admin\""; done)
+                    $admin_arns
                 ]
             },
             "Action": "s3:*",
@@ -280,13 +350,22 @@ setup_bucket_policy() {
 }
 EOF
     
-    if aws_with_profile s3api put-bucket-policy \
+    # 驗證政策格式
+    if [ "$VERBOSE" = true ]; then
+        echo -e "${BLUE}生成的存儲桶政策：${NC}"
+        cat "$policy_file"
+        echo -e ""
+    fi
+    
+    if aws s3api put-bucket-policy \
         --bucket "$BUCKET_NAME" \
         --policy "file://$policy_file" \
         --profile "$AWS_PROFILE"; then
         echo -e "${GREEN}✓ 存儲桶政策已設置${NC}"
     else
         echo -e "${RED}設置存儲桶政策失敗${NC}"
+        echo -e "${YELLOW}政策內容：${NC}"
+        cat "$policy_file"
         rm -f "$policy_file"
         return 1
     fi
@@ -661,7 +740,7 @@ show_completion_info() {
 # 主函數
 main() {
     # 預設值
-    BUCKET_NAME="$DEFAULT_BUCKET_NAME"
+    BUCKET_NAME="vpn-csr-exchange"  # 將在 check_aws_config 中重新生成
     REGION="$DEFAULT_REGION"
     # Get AWS profile from environment manager
     AWS_PROFILE="$(env_get_profile "$CURRENT_ENVIRONMENT" 2>/dev/null || echo default)"

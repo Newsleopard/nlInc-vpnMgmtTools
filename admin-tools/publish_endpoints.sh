@@ -72,12 +72,24 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
-# 預設配置 (固定桶名稱)
+# 預設配置 (環境感知)
 get_default_bucket_name() {
-    echo "vpn-csr-exchange"
+    # 使用環境和帳戶ID來確保存儲桶名稱唯一性，與 setup_csr_s3_bucket.sh 保持一致
+    local env_suffix=""
+    if [[ -n "$CURRENT_ENVIRONMENT" ]]; then
+        env_suffix="-${CURRENT_ENVIRONMENT}"
+    fi
+    
+    # 如果有帳戶ID，使用它來確保唯一性
+    if [[ -n "$ACCOUNT_ID" ]]; then
+        echo "vpn-csr-exchange${env_suffix}-${ACCOUNT_ID}"
+    else
+        # 備用方案：使用基本名稱
+        echo "vpn-csr-exchange${env_suffix}"
+    fi
 }
 
-DEFAULT_BUCKET_NAME="$(get_default_bucket_name)"
+DEFAULT_BUCKET_NAME="vpn-csr-exchange"  # 將在檢查 AWS 配置後重新生成
 
 # 使用說明
 show_usage() {
@@ -123,12 +135,22 @@ check_aws_config() {
         return 1
     fi
     
-    if ! aws_with_profile sts get-caller-identity --profile "$AWS_PROFILE" &>/dev/null; then
+    if ! aws sts get-caller-identity --profile "$AWS_PROFILE" &>/dev/null; then
         echo -e "${RED}AWS 憑證無效或未設置 (profile: $AWS_PROFILE)${NC}"
         return 1
     fi
     
+    # 獲取帳戶ID以生成正確的存儲桶名稱
+    ACCOUNT_ID=$(aws sts get-caller-identity --profile "$AWS_PROFILE" --query 'Account' --output text)
+    
+    # 如果存儲桶名稱是預設值，重新生成以包含帳戶ID
+    if [[ "$BUCKET_NAME" == "vpn-csr-exchange" ]]; then
+        BUCKET_NAME=$(get_default_bucket_name)
+        echo -e "${BLUE}使用環境特定的存儲桶名稱: $BUCKET_NAME${NC}"
+    fi
+    
     echo -e "${GREEN}✓ AWS 配置有效${NC}"
+    echo -e "${GREEN}✓ 存儲桶名稱: $BUCKET_NAME${NC}"
     return 0
 }
 
@@ -368,7 +390,7 @@ show_publication_summary() {
 # 主函數
 main() {
     # 預設值
-    BUCKET_NAME="$DEFAULT_BUCKET_NAME"
+    BUCKET_NAME="vpn-csr-exchange"  # 將在 check_aws_config 中重新生成
     ENVIRONMENT="$CURRENT_ENVIRONMENT"  # 使用當前環境而不是 all
     # Get AWS profile from environment manager
     AWS_PROFILE="$(env_get_profile "$CURRENT_ENVIRONMENT" 2>/dev/null || echo default)"
@@ -378,6 +400,7 @@ main() {
     VERBOSE=false
     CA_CERT=""
     ENDPOINTS_JSON=""
+    ACCOUNT_ID=""  # 將在 check_aws_config 中設置
     
     # 解析命令行參數
     while [[ $# -gt 0 ]]; do
@@ -493,14 +516,19 @@ main() {
     echo -e "  AWS Profile: $AWS_PROFILE"
     echo -e ""
     
-    # 檢查前置條件
+    # 檢查前置條件 (這裡會重新生成存儲桶名稱)
     if ! check_aws_config; then
         exit 1
     fi
     
-    if ! check_s3_bucket; then
-        exit 1
-    fi
+    # 更新顯示的存儲桶名稱
+    echo -e "${BLUE}更新後的發布配置:${NC}"
+    echo -e "  存儲桶: $BUCKET_NAME"
+    echo -e "  環境: $ENVIRONMENT"
+    echo -e "  AWS Profile: $AWS_PROFILE"
+    echo -e ""
+    
+    # ...existing code...
     
     # 執行發布操作
     if [ "$ENDPOINTS_ONLY" = false ]; then

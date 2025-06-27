@@ -113,6 +113,46 @@ show_usage() {
 # S3 零接觸功能
 # =====================================
 
+# 生成環境特定的存儲桶名稱
+get_default_bucket_name() {
+    # 使用環境和帳戶ID來確保存儲桶名稱唯一性，與 setup_csr_s3_bucket.sh 保持一致
+    local env_suffix=""
+    if [[ -n "$CURRENT_ENVIRONMENT" ]]; then
+        env_suffix="-${CURRENT_ENVIRONMENT}"
+    fi
+    
+    # 如果有帳戶ID，使用它來確保唯一性
+    if [[ -n "$ACCOUNT_ID" ]]; then
+        echo "vpn-csr-exchange${env_suffix}-${ACCOUNT_ID}"
+    else
+        # 備用方案：嘗試從 AWS 獲取帳戶ID
+        local account_id
+        if [[ -n "$AWS_PROFILE" ]]; then
+            account_id=$(aws sts get-caller-identity --query 'Account' --output text --profile "$AWS_PROFILE" 2>/dev/null)
+            if [[ -n "$account_id" ]]; then
+                echo "vpn-csr-exchange${env_suffix}-${account_id}"
+                return 0
+            fi
+        fi
+        # 最後備用方案：使用基本名稱
+        echo "vpn-csr-exchange${env_suffix}"
+    fi
+}
+
+# 更新 S3 存儲桶名稱
+update_s3_bucket_name() {
+    # 獲取帳戶ID
+    if [[ -z "$ACCOUNT_ID" ]] && [[ -n "$AWS_PROFILE" ]]; then
+        ACCOUNT_ID=$(aws sts get-caller-identity --query 'Account' --output text --profile "$AWS_PROFILE" 2>/dev/null)
+    fi
+    
+    # 如果 S3_BUCKET 是預設值，重新生成
+    if [[ "$S3_BUCKET" == "vpn-csr-exchange" ]]; then
+        S3_BUCKET=$(get_default_bucket_name)
+        echo -e "${BLUE}使用環境特定的存儲桶名稱: $S3_BUCKET${NC}"
+    fi
+}
+
 # 檢查 S3 存儲桶訪問權限
 check_s3_access() {
     if [ "$DISABLE_S3" = true ]; then
@@ -121,7 +161,10 @@ check_s3_access() {
     
     echo -e "${BLUE}檢查 S3 存儲桶訪問權限...${NC}"
     
-    if ! aws_with_profile s3 ls "s3://$S3_BUCKET/" --profile "$AWS_PROFILE" &>/dev/null; then
+    # 更新存儲桶名稱
+    update_s3_bucket_name
+    
+    if ! aws s3 ls "s3://$S3_BUCKET/" --profile "$AWS_PROFILE" &>/dev/null; then
         echo -e "${RED}無法訪問 S3 存儲桶: $S3_BUCKET${NC}"
         echo -e "${YELLOW}請檢查：${NC}"
         echo -e "  • 存儲桶是否存在"
@@ -145,9 +188,12 @@ upload_certificate_to_s3() {
     
     echo -e "${BLUE}上傳證書到 S3...${NC}"
     
+    # 確保存儲桶名稱是最新的
+    update_s3_bucket_name
+    
     local s3_cert_path="s3://$S3_BUCKET/cert/${username}.crt"
     
-    if aws_with_profile s3 cp "$cert_file" "$s3_cert_path" \
+    if aws s3 cp "$cert_file" "$s3_cert_path" \
         --sse AES256 \
         --acl bucket-owner-full-control \
         --profile "$AWS_PROFILE"; then
@@ -172,9 +218,12 @@ download_csr_from_s3() {
     
     echo -e "${BLUE}從 S3 下載 CSR...${NC}"
     
+    # 確保存儲桶名稱是最新的
+    update_s3_bucket_name
+    
     local s3_csr_path="s3://$S3_BUCKET/csr/${username}.csr"
     
-    if aws_with_profile s3 cp "$s3_csr_path" "$output_file" --profile "$AWS_PROFILE"; then
+    if aws s3 cp "$s3_csr_path" "$output_file" --profile "$AWS_PROFILE"; then
         echo -e "${GREEN}✓ CSR 已從 S3 下載${NC}"
         return 0
     else
@@ -241,10 +290,24 @@ find_ca_files() {
     
     echo -e "${BLUE}查找 CA 證書和私鑰...${NC}"
     
+    # 映射環境名稱到實際文件夾名稱
+    local env_folder
+    case "$environment" in
+        "production")
+            env_folder="prod"
+            ;;
+        "staging")
+            env_folder="staging"
+            ;;
+        *)
+            env_folder="$environment"
+            ;;
+    esac
+    
     # 查找 CA 證書
     local ca_cert_paths=(
-        "$PARENT_DIR/certs/$environment/pki/ca.crt"
-        "$PARENT_DIR/certs/$environment/ca.crt"
+        "$PARENT_DIR/certs/$env_folder/pki/ca.crt"
+        "$PARENT_DIR/certs/$env_folder/ca.crt"
         "$PARENT_DIR/certs/ca.crt"
     )
     
@@ -267,8 +330,8 @@ find_ca_files() {
     
     # 查找 CA 私鑰
     local ca_key_paths=(
-        "$PARENT_DIR/certs/$environment/pki/private/ca.key"
-        "$PARENT_DIR/certs/$environment/ca.key"
+        "$PARENT_DIR/certs/$env_folder/pki/private/ca.key"
+        "$PARENT_DIR/certs/$env_folder/ca.key"
         "$PARENT_DIR/certs/ca.key"
     )
     
@@ -462,11 +525,12 @@ main() {
     CSR_USERNAME=""
     CA_CERT=""
     CA_KEY=""
-    S3_BUCKET="vpn-csr-exchange"
+    S3_BUCKET="vpn-csr-exchange"  # 將在運行時更新為環境特定名稱
     # Get AWS profile from environment manager
     AWS_PROFILE="$(env_get_profile "$CURRENT_ENVIRONMENT" 2>/dev/null || echo default)"
     UPLOAD_S3=false
     DISABLE_S3=false
+    ACCOUNT_ID=""  # 將在運行時設置
     
     # 解析命令行參數
     while [[ $# -gt 0 ]]; do
@@ -586,11 +650,16 @@ main() {
     echo -e "  AWS Profile: $AWS_PROFILE"
     echo -e ""
     
-    # 檢查 S3 訪問（如果需要）
+    # 檢查 S3 訪問（如果需要）- 這裡會更新存儲桶名稱
     if [ "$UPLOAD_S3" = true ]; then
         if ! check_s3_access; then
             echo -e "${YELLOW}S3 訪問失敗，將跳過 S3 上傳${NC}"
             UPLOAD_S3=false
+        else
+            # 更新顯示的存儲桶名稱
+            echo -e "${BLUE}更新後的簽署配置:${NC}"
+            echo -e "  S3 存儲桶: $S3_BUCKET"
+            echo -e ""
         fi
     fi
     
@@ -612,7 +681,7 @@ main() {
             csr_file="$temp_csr_file"
             # 同時更新輸出目錄到原始位置（而非臨時目錄）
             if [ "$output_dir" = "$(dirname "$1")" ]; then
-                output_dir="$(dirname "$1")"  # 保持原始輸出目錄
+                output_dir="$(dirname "$1")"  # 保持原始輸output_dir
             fi
         else
             echo -e "${RED}無法從 S3 下載 CSR: ${temp_username}.csr${NC}"

@@ -671,11 +671,17 @@ init_team_member_environment() {
     local detected_env
     detected_env=$(detect_environment_from_profile "$SELECTED_AWS_PROFILE")
     
-    local env_name="未知"
+    # 設置環境變數
     if [ "$detected_env" != "unknown" ]; then
-        env_name="$(get_env_display_name "$detected_env")"
+        export TARGET_ENVIRONMENT="$detected_env"
+        echo -e "\n${GREEN}✓ 設置目標環境: $(get_env_display_name "$detected_env")${NC}"
+    else
+        export TARGET_ENVIRONMENT="unknown"
+        echo -e "\n${YELLOW}⚠ 無法從 AWS profile 偵測環境，設置為 unknown${NC}"
     fi
-    echo -e "\n${BLUE}根據 AWS profile '$SELECTED_AWS_PROFILE' 推測環境: $env_name${NC}"
+    
+    local env_name="$(get_env_display_name "$TARGET_ENVIRONMENT")"
+    echo -e "${BLUE}根據 AWS profile '$SELECTED_AWS_PROFILE' 推測環境: $env_name${NC}"
     
     return 0
 }
