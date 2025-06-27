@@ -116,6 +116,31 @@ create_dedicated_client_vpn_security_group() {
         echo -e "${YELLOW}警告: 配置出站規則時出現問題: $egress_result${NC}" >&2
     fi
     
+    # 添加入站規則以允許雙向通信 - 修復 VPN 連接性問題
+    echo -e "${BLUE}正在配置入站規則以支援雙向通信...${NC}" >&2
+    
+    # 允許來自 VPN CIDR 的所有入站流量（用於 AWS 資源主動連接 VPN 用戶）
+    local vpc_cidr
+    vpc_cidr=$(aws ec2 describe-vpcs --vpc-ids "$vpc_id" --region "$aws_region" --query 'Vpcs[0].CidrBlock' --output text 2>/dev/null)
+    
+    if [ -n "$vpc_cidr" ] && [ "$vpc_cidr" != "None" ]; then
+        local ingress_result
+        ingress_result=$(aws ec2 authorize-security-group-ingress \
+            --group-id "$new_sg_id" \
+            --protocol -1 \
+            --cidr "$vpc_cidr" \
+            --region "$aws_region" 2>&1)
+        
+        if [ $? -eq 0 ]; then
+            echo -e "${GREEN}✓ 入站規則配置成功 (VPC CIDR: $vpc_cidr)${NC}" >&2
+            log_message_core "VPN 安全群組入站規則已添加: VPC CIDR $vpc_cidr -> $new_sg_id"
+        else
+            echo -e "${YELLOW}警告: 配置入站規則時出現問題: $ingress_result${NC}" >&2
+        fi
+    else
+        echo -e "${YELLOW}警告: 無法獲取 VPC CIDR，跳過入站規則配置${NC}" >&2
+    fi
+    
     log_message_core "專用 Client VPN 安全群組創建成功: $new_sg_id (環境: $environment)"
     echo "$new_sg_id"
     return 0
