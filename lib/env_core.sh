@@ -97,11 +97,15 @@ detect_environment_from_profile() {
         *prod*|*production*)
             echo "production"
             ;;
-        *stg*|*staging*|default)
+        *stg*|*staging*)
             echo "staging"
             ;;
+        default)
+            echo "staging"  # default profile 通常用於 staging
+            ;;
         *)
-            echo "unknown"
+            # 對於無法識別的 profile，預設為 staging 而不是 unknown
+            echo "staging"
             ;;
     esac
 }
@@ -246,11 +250,15 @@ setup_team_member_paths() {
     export USER_VPN_CONFIG_FILE="$config_dir/user_vpn_config.env"
     export TEAM_SETUP_LOG_FILE="$log_dir/team_setup.log"
     
-    # 創建必要目錄
-    mkdir -p "$USER_CERT_DIR" "$USER_VPN_CONFIG_DIR" "$(dirname "$USER_VPN_CONFIG_FILE")" "$(dirname "$TEAM_SETUP_LOG_FILE")"
-    
-    # 設定權限
-    chmod 700 "$USER_CERT_DIR" "$USER_VPN_CONFIG_DIR"
+    # 創建必要目錄 (但不為 unknown 環境創建)
+    if [[ "$environment" != "unknown" ]]; then
+        mkdir -p "$USER_CERT_DIR" "$USER_VPN_CONFIG_DIR" "$(dirname "$USER_VPN_CONFIG_FILE")" "$(dirname "$TEAM_SETUP_LOG_FILE")"
+        
+        # 設定權限
+        chmod 700 "$USER_CERT_DIR" "$USER_VPN_CONFIG_DIR"
+    else
+        echo -e "${YELLOW}⚠ 環境未知，跳過目錄創建。請先設定正確的環境。${NC}" >&2
+    fi
 }
 
 # 顯示環境感知標頭
@@ -671,13 +679,13 @@ init_team_member_environment() {
     local detected_env
     detected_env=$(detect_environment_from_profile "$SELECTED_AWS_PROFILE")
     
-    # 設置環境變數
-    if [ "$detected_env" != "unknown" ]; then
-        export TARGET_ENVIRONMENT="$detected_env"
-        echo -e "\n${GREEN}✓ 設置目標環境: $(get_env_display_name "$detected_env")${NC}"
+    # 設置環境變數 (避免設置為 unknown)
+    export TARGET_ENVIRONMENT="$detected_env"
+    if [ "$detected_env" != "staging" ] && [[ "$detected_env" != *"prod"* ]]; then
+        echo -e "\n${YELLOW}⚠ 無法明確偵測環境，使用預設的 staging 環境${NC}"
+        echo -e "${BLUE}如需使用其他環境，請使用環境切換工具${NC}"
     else
-        export TARGET_ENVIRONMENT="unknown"
-        echo -e "\n${YELLOW}⚠ 無法從 AWS profile 偵測環境，設置為 unknown${NC}"
+        echo -e "\n${GREEN}✓ 設置目標環境: $(get_env_display_name "$detected_env")${NC}"
     fi
     
     local env_name="$(get_env_display_name "$TARGET_ENVIRONMENT")"

@@ -55,7 +55,7 @@ Click **Save Changes**.
 | Command      | `/vpn`                                                           |
 | Request URL  | `https://{api-id}.execute-api.{region}.amazonaws.com/prod/slack` (from CDK output) |
 | Short Desc   | “Manage AWS VPN”                                                 |
-| Usage Hint   | `open|close|check <stage|prod>`                                  |
+| Usage Hint   | <code>open&#124;close&#124;check &lt;stage&#124;prod&gt;</code>  |
 
 Save.
 
