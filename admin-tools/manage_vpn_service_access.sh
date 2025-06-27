@@ -82,8 +82,13 @@ VPN_DISCOVERY_FAST_MODE="${VPN_DISCOVERY_FAST_MODE:-true}"
 VPN_USE_CACHED_DISCOVERY="${VPN_USE_CACHED_DISCOVERY:-false}"
 VPN_DISCOVERY_CACHE_TTL="${VPN_DISCOVERY_CACHE_TTL:-3600}"  # 1 hour default cache
 
-# Persistent discovery data storage
-DISCOVERY_DATA_DIR="/tmp/vpn-discovery-cache"
+# Account-specific discovery data storage and temporary files with AWS account isolation
+AWS_ACCOUNT_ID=$(aws_with_profile sts get-caller-identity --query Account --output text 2>/dev/null || echo "unknown")
+ACCOUNT_TEMP_DIR="/tmp/vpn-discovery-cache-${AWS_ACCOUNT_ID}-${AWS_REGION}"
+mkdir -p "$ACCOUNT_TEMP_DIR"
+
+# Persistent discovery data storage files (using account-specific directory)
+DISCOVERY_DATA_DIR="$ACCOUNT_TEMP_DIR"
 DISCOVERY_PERSISTENT_FILE="$DISCOVERY_DATA_DIR/last_discovery_results.txt"
 DISCOVERY_METADATA_FILE="$DISCOVERY_DATA_DIR/discovery_metadata.conf"
 
@@ -170,16 +175,16 @@ load_cached_discovery() {
     log_info "📦 Loading cached discovery data..."
     
     # Copy cached data to working files
-    cp "$DISCOVERY_PERSISTENT_FILE" /tmp/final_discoveries.txt
+    cp "$DISCOVERY_PERSISTENT_FILE" "$ACCOUNT_TEMP_DIR/final_discoveries.txt"
     
     # Verify the cached data is not empty
-    if [[ ! -s /tmp/final_discoveries.txt ]]; then
+    if [[ ! -s "$ACCOUNT_TEMP_DIR/final_discoveries.txt" ]]; then
         log_warning "Cached discovery data is empty"
         return 1
     fi
     
     local cached_count
-    cached_count=$(wc -l < /tmp/final_discoveries.txt)
+    cached_count=$(wc -l < "$ACCOUNT_TEMP_DIR/final_discoveries.txt")
     log_info "✅ Loaded $cached_count cached services"
     
     return 0
@@ -194,8 +199,8 @@ save_discovery_cache() {
     mkdir -p "$DISCOVERY_DATA_DIR"
     
     # Save discovery results
-    if [[ -f /tmp/final_discoveries.txt ]] && [[ -s /tmp/final_discoveries.txt ]]; then
-        cp /tmp/final_discoveries.txt "$DISCOVERY_PERSISTENT_FILE"
+    if [[ -f "$ACCOUNT_TEMP_DIR/final_discoveries.txt" ]] && [[ -s "$ACCOUNT_TEMP_DIR/final_discoveries.txt" ]]; then
+        cp "$ACCOUNT_TEMP_DIR/final_discoveries.txt" "$DISCOVERY_PERSISTENT_FILE"
         
         # Create metadata file
         cat > "$DISCOVERY_METADATA_FILE" << EOF
@@ -212,9 +217,9 @@ DISCOVERY_MIN_CONFIDENCE="$VPN_DISCOVERY_MIN_CONFIDENCE"
 DISCOVERY_FAST_MODE="$VPN_DISCOVERY_FAST_MODE"
 
 # Statistics
-TOTAL_SERVICES="$(wc -l < /tmp/final_discoveries.txt)"
-HIGH_CONFIDENCE_SERVICES="$(grep -c ":HIGH$" /tmp/final_discoveries.txt 2>/dev/null || echo "0")"
-MEDIUM_CONFIDENCE_SERVICES="$(grep -c ":MEDIUM$" /tmp/final_discoveries.txt 2>/dev/null || echo "0")"
+TOTAL_SERVICES="$(wc -l < "$ACCOUNT_TEMP_DIR/final_discoveries.txt")"
+HIGH_CONFIDENCE_SERVICES="$(grep -c ":HIGH$" "$ACCOUNT_TEMP_DIR/final_discoveries.txt" 2>/dev/null || echo "0")"
+MEDIUM_CONFIDENCE_SERVICES="$(grep -c ":MEDIUM$" "$ACCOUNT_TEMP_DIR/final_discoveries.txt" 2>/dev/null || echo "0")"
 EOF
         
         local cached_count
@@ -295,7 +300,7 @@ discover_services_by_tags() {
         "EKS:EKS_API:443"
     )
     
-    > /tmp/tag_based_discoveries.txt
+    > "$ACCOUNT_TEMP_DIR/tag_based_discoveries.txt"
     
     for mapping in "${service_mappings[@]}"; do
         IFS=':' read -r tag_value service_name port <<< "$mapping"
@@ -331,7 +336,7 @@ discover_services_by_tags() {
         if [[ $(echo "$tagged_sgs" | jq '. | length') -gt 0 ]]; then
             local best_sg_id
             best_sg_id=$(echo "$tagged_sgs" | jq -r '.[0].GroupId')
-            echo "$service_name:$port:$best_sg_id:tag-based" >> /tmp/tag_based_discoveries.txt
+            echo "$service_name:$port:$best_sg_id:tag-based" >> "$ACCOUNT_TEMP_DIR/tag_based_discoveries.txt"
             log_info "  ✓ Found tagged security group: $best_sg_id"
         else
             log_info "  ⚠️ No tagged security groups found for $service_name"
@@ -344,8 +349,8 @@ discover_services_by_resource_verification() {
     local vpc_id="$1"
     log_info "🔍 Enhanced Resource-to-SecurityGroup Mapping for VPC: $vpc_id"
     
-    > /tmp/resource_verified_discoveries.txt
-    > /tmp/resource_sg_mapping.json
+    > "$ACCOUNT_TEMP_DIR/resource_verified_discoveries.txt"
+    > "$ACCOUNT_TEMP_DIR/resource_sg_mapping.json"
     
     # RDS Instance Security Groups (Enhanced with detailed analysis)
     log_info "  Analyzing RDS instances and their actual security groups..."
@@ -363,7 +368,7 @@ discover_services_by_resource_verification() {
             port: .[2],
             security_group: .[3],
             engine: .[4]
-        }' >> /tmp/resource_sg_mapping.json
+        }' >> "$ACCOUNT_TEMP_DIR/resource_sg_mapping.json"
         
         # Extract unique security groups used by RDS
         local rds_sgs
@@ -371,7 +376,7 @@ discover_services_by_resource_verification() {
         
         for sg_id in $rds_sgs; do
             if [[ -n "$sg_id" && "$sg_id" != "None" && "$sg_id" != "null" ]]; then
-                echo "MySQL_RDS:3306:$sg_id:resource-verified" >> /tmp/resource_verified_discoveries.txt
+                echo "MySQL_RDS:3306:$sg_id:resource-verified" >> "$ACCOUNT_TEMP_DIR/resource_verified_discoveries.txt"
                 log_info "  ✓ Found RDS security group: $sg_id"
             fi
         done
@@ -396,7 +401,7 @@ discover_services_by_resource_verification() {
                     --query 'SecurityGroups[0].VpcId' --output text 2>/dev/null)
                 
                 if [[ "$sg_vpc" == "$vpc_id" ]]; then
-                    echo "EKS_API:443:$sg_id:resource-verified" >> /tmp/resource_verified_discoveries.txt
+                    echo "EKS_API:443:$sg_id:resource-verified" >> "$ACCOUNT_TEMP_DIR/resource_verified_discoveries.txt"
                     log_info "  ✓ Found EKS security group: $sg_id (cluster: $cluster)"
                 fi
             fi
@@ -420,7 +425,7 @@ discover_services_by_resource_verification() {
             port: .[2],
             security_group: .[3],
             engine: .[4]
-        }' >> /tmp/resource_sg_mapping.json
+        }' >> "$ACCOUNT_TEMP_DIR/resource_sg_mapping.json"
         
         # Extract unique security groups and verify VPC
         local cache_sgs
@@ -435,7 +440,7 @@ discover_services_by_resource_verification() {
                     --query 'SecurityGroups[0].VpcId' --output text 2>/dev/null)
                 
                 if [[ "$sg_vpc" == "$vpc_id" ]]; then
-                    echo "Redis:6379:$sg_id:resource-verified" >> /tmp/resource_verified_discoveries.txt
+                    echo "Redis:6379:$sg_id:resource-verified" >> "$ACCOUNT_TEMP_DIR/resource_verified_discoveries.txt"
                     log_info "  ✓ Found ElastiCache security group: $sg_id"
                 fi
             fi
@@ -450,7 +455,7 @@ discover_services_by_resource_verification() {
         --query 'Clusters[].[Id,Name]' --output json 2>/dev/null || echo "[]")
     
     if [[ $(echo "$emr_clusters" | jq '. | length') -gt 0 ]]; then
-        echo "$emr_clusters" | jq -c '.[] | {service: "EMR", cluster_id: .[0], cluster_name: .[1]}' >> /tmp/resource_sg_mapping.json
+        echo "$emr_clusters" | jq -c '.[] | {service: "EMR", cluster_id: .[0], cluster_name: .[1]}' >> "$ACCOUNT_TEMP_DIR/resource_sg_mapping.json"
         
         while IFS=$'\t' read -r cluster_id cluster_name; do
             if [[ -n "$cluster_id" && "$cluster_id" != "None" && "$cluster_id" != "null" ]]; then
@@ -483,13 +488,13 @@ discover_services_by_resource_verification() {
                             
                             # Add both master and slave security groups
                             if [[ -n "$master_sg" && "$master_sg" != "null" ]]; then
-                                echo "HBase_Master:16010:$master_sg:resource-verified" >> /tmp/resource_verified_discoveries.txt
-                                echo "HBase_Custom:8765:$master_sg:resource-verified" >> /tmp/resource_verified_discoveries.txt
+                                echo "HBase_Master:16010:$master_sg:resource-verified" >> "$ACCOUNT_TEMP_DIR/resource_verified_discoveries.txt"
+                                echo "HBase_Custom:8765:$master_sg:resource-verified" >> "$ACCOUNT_TEMP_DIR/resource_verified_discoveries.txt"
                                 log_info "  ✓ Found EMR Master security group: $master_sg (cluster: $cluster_id)"
                             fi
                             
                             if [[ -n "$slave_sg" && "$slave_sg" != "null" ]]; then
-                                echo "HBase_RegionServer:16020:$slave_sg:resource-verified" >> /tmp/resource_verified_discoveries.txt
+                                echo "HBase_RegionServer:16020:$slave_sg:resource-verified" >> "$ACCOUNT_TEMP_DIR/resource_verified_discoveries.txt"
                                 log_info "  ✓ Found EMR Slave security group: $slave_sg (cluster: $cluster_id)"
                             fi
                         fi
@@ -507,7 +512,7 @@ discover_services_by_enhanced_patterns() {
     local vpc_id="$1"
     log_info "🔤 Enhanced pattern matching for VPC: $vpc_id"
     
-    > /tmp/pattern_based_discoveries.txt
+    > "$ACCOUNT_TEMP_DIR/pattern_based_discoveries.txt"
     
     for service_def in $SERVICES; do
         IFS=':' read -r service_name port <<< "$service_def"
@@ -547,7 +552,7 @@ discover_services_by_enhanced_patterns() {
             if [[ $(echo "$matches" | jq '. | length') -gt 0 ]]; then
                 local best_sg_id
                 best_sg_id=$(echo "$matches" | jq -r '.[0].GroupId')
-                echo "$service_name:$port:$best_sg_id:pattern-based" >> /tmp/pattern_based_discoveries.txt
+                echo "$service_name:$port:$best_sg_id:pattern-based" >> "$ACCOUNT_TEMP_DIR/pattern_based_discoveries.txt"
                 log_info "  ✓ Found by pattern '$pattern': $best_sg_id"
                 found=true
                 break
@@ -563,7 +568,7 @@ discover_services_by_enhanced_patterns() {
 # Discovery result validation and scoring
 validate_and_score_discoveries() {
     local discoveries_file="$1"
-    local output_file="${2:-/tmp/scored_discoveries.txt}"
+    local output_file="${2:-$ACCOUNT_TEMP_DIR/scored_discoveries.txt}"
     
     log_info "📊 Validating and scoring discovery results..."
     
@@ -646,8 +651,8 @@ discover_services_by_actual_rules() {
     local vpc_id="$1"
     log_info "🔍 Actual Security Group Rules Analysis for VPC: $vpc_id"
     
-    > /tmp/actual_rules_discoveries.txt
-    > /tmp/port_rule_analysis.json
+    > "$ACCOUNT_TEMP_DIR/actual_rules_discoveries.txt"
+    > "$ACCOUNT_TEMP_DIR/port_rule_analysis.json"
     
     # Get all security groups in the VPC
     local all_sgs
@@ -699,14 +704,14 @@ discover_services_by_actual_rules() {
                         has_any_access: ((.IpRanges | length > 0) or (.UserIdGroupPairs | length > 0))
                     })')
                 
-                echo "$rule_analysis" | jq -c '.[]' >> /tmp/port_rule_analysis.json
+                echo "$rule_analysis" | jq -c '.[]' >> "$ACCOUNT_TEMP_DIR/port_rule_analysis.json"
                 
                 # If this SG has actual access rules (not just placeholder), consider it a candidate
                 local has_access_rules
                 has_access_rules=$(echo "$rule_analysis" | jq -r '.[0].has_any_access')
                 
                 if [[ "$has_access_rules" == "true" ]]; then
-                    echo "$service_name:$port:$sg_id:actual-rules" >> /tmp/actual_rules_discoveries.txt
+                    echo "$service_name:$port:$sg_id:actual-rules" >> "$ACCOUNT_TEMP_DIR/actual_rules_discoveries.txt"
                     log_info "      ✓ Found $sg_id with actual rules for port $port"
                 fi
             fi
@@ -720,10 +725,10 @@ discover_services_by_actual_rules() {
 cross_validate_discoveries_with_resources() {
     log_info "🔄 Cross-validating discoveries with actual resource usage..."
     
-    > /tmp/validated_discoveries.txt
+    > "$ACCOUNT_TEMP_DIR/validated_discoveries.txt"
     
     # If we have resource mapping, use it to validate discoveries
-    if [[ -f /tmp/resource_sg_mapping.json ]]; then
+    if [[ -f "$ACCOUNT_TEMP_DIR/resource_sg_mapping.json" ]]; then
         log_info "  Using resource mapping for validation..."
         
         # For each discovered service, check if it matches actual resource usage
@@ -735,22 +740,22 @@ cross_validate_discoveries_with_resources() {
                 "MySQL_RDS")
                     resource_match=$(jq -r --arg sg "$sg_id" '
                         select(.service == "RDS" and (.security_group == $sg or (.security_groups[]? == $sg))) | "true"
-                    ' /tmp/resource_sg_mapping.json | head -1)
+                    ' "$ACCOUNT_TEMP_DIR/resource_sg_mapping.json" | head -1)
                     ;;
                 "Redis")
                     resource_match=$(jq -r --arg sg "$sg_id" '
                         select(.service == "ElastiCache" and (.security_group == $sg or (.security_groups[]? == $sg))) | "true"
-                    ' /tmp/resource_sg_mapping.json | head -1)
+                    ' "$ACCOUNT_TEMP_DIR/resource_sg_mapping.json" | head -1)
                     ;;
                 "HBase_Master"|"HBase_RegionServer"|"HBase_Custom")
                     resource_match=$(jq -r --arg sg "$sg_id" '
                         select(.service == "EMR") | "true"
-                    ' /tmp/resource_sg_mapping.json | head -1)
+                    ' "$ACCOUNT_TEMP_DIR/resource_sg_mapping.json" | head -1)
                     ;;
                 "EKS_API")
                     resource_match=$(jq -r --arg sg "$sg_id" '
                         select(.service == "EKS" and (.security_groups[]? == $sg)) | "true"
-                    ' /tmp/resource_sg_mapping.json | head -1)
+                    ' "$ACCOUNT_TEMP_DIR/resource_sg_mapping.json" | head -1)
                     ;;
             esac
             
@@ -763,12 +768,12 @@ cross_validate_discoveries_with_resources() {
                 log_warning "    ⚠️  $service:$port:$sg_id not confirmed by resource usage"
             fi
             
-            echo "$service:$port:$sg_id:$validation_method" >> /tmp/validated_discoveries.txt
+            echo "$service:$port:$sg_id:$validation_method" >> "$ACCOUNT_TEMP_DIR/validated_discoveries.txt"
             
-        done < /tmp/combined_discoveries.txt
+        done < "$ACCOUNT_TEMP_DIR/combined_discoveries.txt"
     else
         # Fallback to original discoveries if no resource mapping
-        cp /tmp/combined_discoveries.txt /tmp/validated_discoveries.txt
+        cp "$ACCOUNT_TEMP_DIR/combined_discoveries.txt" "$ACCOUNT_TEMP_DIR/validated_discoveries.txt"
     fi
     
     log_info "  ✅ Cross-validation completed"
@@ -795,7 +800,7 @@ perform_fast_discovery() {
     local vpc_id="$1"
     
     # Clear any existing discovery files
-    rm -f /tmp/*_discoveries.txt /tmp/scored_discoveries.txt /tmp/final_discoveries.txt /tmp/resource_sg_mapping.json /tmp/port_rule_analysis.json
+    rm -f "$ACCOUNT_TEMP_DIR"/*_discoveries.txt "$ACCOUNT_TEMP_DIR"/scored_discoveries.txt "$ACCOUNT_TEMP_DIR"/final_discoveries.txt "$ACCOUNT_TEMP_DIR"/resource_sg_mapping.json "$ACCOUNT_TEMP_DIR"/port_rule_analysis.json
     
     # Fast discovery methods (proven most effective)
     local fast_methods=("actual-rules" "resource-verified")
@@ -828,7 +833,7 @@ perform_comprehensive_discovery() {
     local vpc_id="$1"
     
     # Clear any existing discovery files
-    rm -f /tmp/*_discoveries.txt /tmp/scored_discoveries.txt /tmp/final_discoveries.txt /tmp/resource_sg_mapping.json /tmp/port_rule_analysis.json
+    rm -f "$ACCOUNT_TEMP_DIR"/*_discoveries.txt "$ACCOUNT_TEMP_DIR"/scored_discoveries.txt "$ACCOUNT_TEMP_DIR"/final_discoveries.txt "$ACCOUNT_TEMP_DIR"/resource_sg_mapping.json "$ACCOUNT_TEMP_DIR"/port_rule_analysis.json
     
     # All discovery methods
     local comprehensive_methods=("tag-based" "resource-verified" "actual-rules" "pattern-based" "port-based")
@@ -870,54 +875,54 @@ process_discovery_results() {
     local methods_used="$1"
     
     # Combine all discoveries and remove duplicates (keeping highest priority)
-    > /tmp/combined_discoveries.txt
+    > "$ACCOUNT_TEMP_DIR/combined_discoveries.txt"
     
     # Process in priority order (higher priority methods override lower ones)
     for method in "port-based" "pattern-based" "actual-rules" "resource-verified" "tag-based"; do
-        local method_file="/tmp/${method//-/_}_discoveries.txt"
+        local method_file="$ACCOUNT_TEMP_DIR/${method//-/_}_discoveries.txt"
         if [[ -f "$method_file" ]]; then
-            cat "$method_file" >> /tmp/combined_discoveries.txt
+            cat "$method_file" >> "$ACCOUNT_TEMP_DIR/combined_discoveries.txt"
         fi
     done
     
     # Remove duplicates (keep last occurrence which has highest priority)
-    awk -F: '!seen[$1]++' /tmp/combined_discoveries.txt > /tmp/unique_discoveries.txt
+    awk -F: '!seen[$1]++' "$ACCOUNT_TEMP_DIR/combined_discoveries.txt" > "$ACCOUNT_TEMP_DIR/unique_discoveries.txt"
     
     # Cross-validate with actual resource usage
     cross_validate_discoveries_with_resources
     
     # Validate and score all discoveries (use validated discoveries if available)
-    local discovery_input="/tmp/validated_discoveries.txt"
+    local discovery_input="$ACCOUNT_TEMP_DIR/validated_discoveries.txt"
     if [[ ! -f "$discovery_input" ]]; then
-        discovery_input="/tmp/unique_discoveries.txt"
+        discovery_input="$ACCOUNT_TEMP_DIR/unique_discoveries.txt"
     fi
-    validate_and_score_discoveries "$discovery_input" /tmp/scored_discoveries.txt
+    validate_and_score_discoveries "$discovery_input" "$ACCOUNT_TEMP_DIR/scored_discoveries.txt"
     
     # Filter by minimum confidence level
     echo -e "📊 Filtering by confidence level: $VPN_DISCOVERY_MIN_CONFIDENCE..." > /dev/tty 2>/dev/null || true
-    > /tmp/final_discoveries.txt
+    > "$ACCOUNT_TEMP_DIR/final_discoveries.txt"
     while IFS=':' read -r service port sg_id method score confidence; do
         case "$VPN_DISCOVERY_MIN_CONFIDENCE" in
             "HIGH")
-                [[ "$confidence" == "HIGH" ]] && echo "$service:$port:$sg_id:$method:$score:$confidence" >> /tmp/final_discoveries.txt
+                [[ "$confidence" == "HIGH" ]] && echo "$service:$port:$sg_id:$method:$score:$confidence" >> "$ACCOUNT_TEMP_DIR/final_discoveries.txt"
                 ;;
             "MEDIUM")
-                [[ "$confidence" =~ ^(HIGH|MEDIUM)$ ]] && echo "$service:$port:$sg_id:$method:$score:$confidence" >> /tmp/final_discoveries.txt
+                [[ "$confidence" =~ ^(HIGH|MEDIUM)$ ]] && echo "$service:$port:$sg_id:$method:$score:$confidence" >> "$ACCOUNT_TEMP_DIR/final_discoveries.txt"
                 ;;
             "LOW")
-                [[ "$confidence" =~ ^(HIGH|MEDIUM|LOW)$ ]] && echo "$service:$port:$sg_id:$method:$score:$confidence" >> /tmp/final_discoveries.txt
+                [[ "$confidence" =~ ^(HIGH|MEDIUM|LOW)$ ]] && echo "$service:$port:$sg_id:$method:$score:$confidence" >> "$ACCOUNT_TEMP_DIR/final_discoveries.txt"
                 ;;
             *)
-                echo "$service:$port:$sg_id:$method:$score:$confidence" >> /tmp/final_discoveries.txt
+                echo "$service:$port:$sg_id:$method:$score:$confidence" >> "$ACCOUNT_TEMP_DIR/final_discoveries.txt"
                 ;;
         esac
-    done < /tmp/scored_discoveries.txt
+    done < "$ACCOUNT_TEMP_DIR/scored_discoveries.txt"
     
     log_info "✅ Discovery completed using methods: $methods_used"
     
     # Display summary
     local total_discoveries
-    total_discoveries=$(wc -l < /tmp/final_discoveries.txt 2>/dev/null | xargs || echo "0")
+    total_discoveries=$(wc -l < "$ACCOUNT_TEMP_DIR/final_discoveries.txt" 2>/dev/null | xargs || echo "0")
     log_info "✅ Discovery completed: $total_discoveries services found"
     
     return 0
@@ -942,11 +947,11 @@ auto_confirm_discovered_services() {
     
     # Save confirmed services for processing
     if [[ ${#confirmed_services[@]} -gt 0 ]]; then
-        printf '%s\n' "${confirmed_services[@]}" > /tmp/confirmed_services.txt
+        printf '%s\n' "${confirmed_services[@]}" > "$ACCOUNT_TEMP_DIR/confirmed_services.txt"
         log_info "Auto-confirmed services: ${#confirmed_services[@]}"
     else
         log_warning "No services to auto-confirm"
-        echo "" > /tmp/confirmed_services.txt
+        echo "" > "$ACCOUNT_TEMP_DIR/confirmed_services.txt"
     fi
     return 0
 }
@@ -1045,7 +1050,7 @@ manual_service_addition() {
 }
 
 # Save discovery results to .conf file for tracking and audit purposes
-# Parameters: discovery_file (e.g., /tmp/final_discoveries.txt)
+# Parameters: discovery_file (e.g., $ACCOUNT_TEMP_DIR/final_discoveries.txt)
 save_discovery_results_to_conf() {
     local discovery_file="$1"
     
@@ -1352,25 +1357,25 @@ create_rules() {
     local vpn_sg="$1"
     
     # Check multiple possible service files for backward compatibility
-    local services_file="/tmp/discovered_services.txt"
+    local services_file="$ACCOUNT_TEMP_DIR/discovered_services.txt"
     
     if [[ ! -s "$services_file" ]]; then
         # Try confirmed services first
-        if [[ -s /tmp/confirmed_services.txt ]]; then
-            services_file="/tmp/confirmed_services.txt"
+        if [[ -s "$ACCOUNT_TEMP_DIR/confirmed_services.txt" ]]; then
+            services_file="$ACCOUNT_TEMP_DIR/confirmed_services.txt"
             log_info "Using confirmed services file: $services_file"
         # Fallback to final discoveries
-        elif [[ -s /tmp/final_discoveries.txt ]]; then
+        elif [[ -s "$ACCOUNT_TEMP_DIR/final_discoveries.txt" ]]; then
             # Convert final discoveries to expected format
-            > /tmp/discovered_services.txt
+            > "$ACCOUNT_TEMP_DIR/discovered_services.txt"
             while IFS=':' read -r service port sg_id method score confidence; do
-                echo "$service:$port:$sg_id" >> /tmp/discovered_services.txt
-            done < /tmp/final_discoveries.txt
-            services_file="/tmp/discovered_services.txt"
+                echo "$service:$port:$sg_id" >> "$ACCOUNT_TEMP_DIR/discovered_services.txt"
+            done < "$ACCOUNT_TEMP_DIR/final_discoveries.txt"
+            services_file="$ACCOUNT_TEMP_DIR/discovered_services.txt"
             log_info "Converted final discoveries to services file: $services_file"
         else
             log_error "No services discovered. Available files:"
-            ls -la /tmp/*services* /tmp/*discoveries* 2>/dev/null || echo "  No discovery files found"
+            ls -la "$ACCOUNT_TEMP_DIR"/*services* "$ACCOUNT_TEMP_DIR"/*discoveries* 2>/dev/null || echo "  No discovery files found"
             exit 1
         fi
     fi
@@ -1695,18 +1700,18 @@ main() {
             ;;
         "display-services")
             # Display discovered services - run discovery if no data exists
-            if [[ -f /tmp/final_discoveries.txt && -s /tmp/final_discoveries.txt ]]; then
+            if [[ -f "$ACCOUNT_TEMP_DIR/final_discoveries.txt" && -s "$ACCOUNT_TEMP_DIR/final_discoveries.txt" ]]; then
                 log_info "Using existing discovery data for display"
-                display_services_and_ask_confirmation /tmp/final_discoveries.txt
-            elif [[ -f /tmp/confirmed_services.txt && -s /tmp/confirmed_services.txt ]]; then
+                display_services_and_ask_confirmation "$ACCOUNT_TEMP_DIR/final_discoveries.txt"
+            elif [[ -f "$ACCOUNT_TEMP_DIR/confirmed_services.txt" && -s "$ACCOUNT_TEMP_DIR/confirmed_services.txt" ]]; then
                 log_info "Using existing confirmed services for display"
-                display_services_and_ask_confirmation /tmp/confirmed_services.txt
+                display_services_and_ask_confirmation "$ACCOUNT_TEMP_DIR/confirmed_services.txt"
             else
                 log_info "No discovery data found, running discovery first..."
                 echo -e "🔍 Running discovery to find services..." > /dev/tty 2>/dev/null || true
                 if discover_services; then
-                    if [[ -f /tmp/final_discoveries.txt && -s /tmp/final_discoveries.txt ]]; then
-                        display_services_and_ask_confirmation /tmp/final_discoveries.txt
+                    if [[ -f "$ACCOUNT_TEMP_DIR/final_discoveries.txt" && -s "$ACCOUNT_TEMP_DIR/final_discoveries.txt" ]]; then
+                        display_services_and_ask_confirmation "$ACCOUNT_TEMP_DIR/final_discoveries.txt"
                     else
                         echo -e "${YELLOW}⚠️ No services were discovered.${NC}"
                         exit 1
@@ -1719,7 +1724,7 @@ main() {
             ;;
         "create")
             # Only run discovery if we don't have recent cached data
-            if [[ "$VPN_USE_CACHED_DISCOVERY" == "true" ]] && [[ -f /tmp/final_discoveries.txt ]] && [[ -s /tmp/final_discoveries.txt ]]; then
+            if [[ "$VPN_USE_CACHED_DISCOVERY" == "true" ]] && [[ -f "$ACCOUNT_TEMP_DIR/final_discoveries.txt" ]] && [[ -s "$ACCOUNT_TEMP_DIR/final_discoveries.txt" ]]; then
                 log_info "Using existing discovery data from this session"
             else
                 discover_services
@@ -1729,7 +1734,7 @@ main() {
             ;;
         "remove")
             # Only run discovery if we don't have recent cached data
-            if [[ "$VPN_USE_CACHED_DISCOVERY" == "true" ]] && [[ -f /tmp/final_discoveries.txt ]] && [[ -s /tmp/final_discoveries.txt ]]; then
+            if [[ "$VPN_USE_CACHED_DISCOVERY" == "true" ]] && [[ -f "$ACCOUNT_TEMP_DIR/final_discoveries.txt" ]] && [[ -s "$ACCOUNT_TEMP_DIR/final_discoveries.txt" ]]; then
                 log_info "Using existing discovery data from this session"
             else
                 discover_services
@@ -1769,7 +1774,7 @@ main() {
     esac
     
     # Cleanup
-    rm -f /tmp/discovered_services.txt
+    rm -f "$ACCOUNT_TEMP_DIR/discovered_services.txt"
     
     echo
     log_info "✅ Operation completed!"
@@ -1810,14 +1815,14 @@ discover_services() {
             
             # Display summary from cache
             local discovery_count
-            discovery_count=$(wc -l < /tmp/final_discoveries.txt)
+            discovery_count=$(wc -l < "$ACCOUNT_TEMP_DIR/final_discoveries.txt")
             log_info "📦 Loaded $discovery_count cached services"
             
             if [[ "$discovery_count" -gt 0 ]]; then
                 log_info "Cached services:"
                 while IFS=':' read -r service port sg_id method score confidence; do
                     log_info "  📦 $service (port $port) - Security Group: $sg_id [$confidence confidence]"
-                done < /tmp/final_discoveries.txt
+                done < "$ACCOUNT_TEMP_DIR/final_discoveries.txt"
             fi
             
             return 0
@@ -1833,7 +1838,7 @@ discover_services() {
     fi
     
     # Check if any services were discovered
-    if [[ ! -f /tmp/final_discoveries.txt ]] || [[ ! -s /tmp/final_discoveries.txt ]]; then
+    if [[ ! -f "$ACCOUNT_TEMP_DIR/final_discoveries.txt" ]] || [[ ! -s "$ACCOUNT_TEMP_DIR/final_discoveries.txt" ]]; then
         log_warning "No services discovered in VPC $vpc_id"
         log_info "This could mean:"
         log_info "  - No AWS services are running in this VPC"
@@ -1843,7 +1848,7 @@ discover_services() {
     fi
     
     local discovery_count
-    discovery_count=$(wc -l < /tmp/final_discoveries.txt)
+    discovery_count=$(wc -l < "$ACCOUNT_TEMP_DIR/final_discoveries.txt")
     log_info "✅ Discovery completed: $discovery_count services found"
     
     # Save discovery data to cache for future use
@@ -1856,7 +1861,7 @@ discover_services() {
         log_info "Discovered services:"
         while IFS=':' read -r service port sg_id method score confidence; do
             log_info "  📦 $service (port $port) - Security Group: $sg_id [$confidence confidence]"
-        done < /tmp/final_discoveries.txt
+        done < "$ACCOUNT_TEMP_DIR/final_discoveries.txt"
     fi
     
     return 0
