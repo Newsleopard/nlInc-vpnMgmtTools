@@ -241,15 +241,15 @@ export class VpnAutomationStack extends cdk.Stack {
     });
 
     // vpn-monitor Lambda function (for scheduled monitoring)
-    // VPN Monitor only needs read access for parameter validation
-    const vpnMonitorRole = secureParameterStack?.vpnParameterReadRole || vpnControlRole;
+    // VPN Monitor needs write access to disassociate idle connections
+    const vpnMonitorRole = secureParameterStack?.vpnParameterWriteRole || vpnControlRole;
     
     const vpnMonitor = new lambda.Function(this, 'VpnMonitor', {
       runtime: lambda.Runtime.NODEJS_18_X,
       handler: 'index.handler',
       code: lambda.Code.fromAsset(path.resolve(__dirname, '../../lambda/vpn-monitor/dist')),
       layers: [sharedLayer],
-      role: vpnMonitorRole, // Use read role for parameter validation
+      role: vpnMonitorRole, // Use write role for VPN management operations
       timeout: cdk.Duration.seconds(60),
       memorySize: 256, // Optimized for performance
       environment: commonEnvironment,

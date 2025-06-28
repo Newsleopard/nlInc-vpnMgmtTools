@@ -84,7 +84,7 @@ export class SecureParameterManagementStack extends cdk.Stack {
                 `arn:aws:ssm:${this.region}:${this.account}:parameter/vpn/slack/*`
               ]
             }),
-            // KMS decrypt access for encrypted parameters
+            // KMS decrypt access for encrypted parameters (via SSM)
             new iam.PolicyStatement({
               effect: iam.Effect.ALLOW,
               actions: [
@@ -98,11 +98,29 @@ export class SecureParameterManagementStack extends cdk.Stack {
                 }
               }
             }),
+            // KMS describe access for direct KMS validation calls
+            new iam.PolicyStatement({
+              effect: iam.Effect.ALLOW,
+              actions: [
+                'kms:DescribeKey'
+              ],
+              resources: [this.parameterKmsKey.keyArn]
+            }),
             // CloudWatch metrics access for performance monitoring
             new iam.PolicyStatement({
               effect: iam.Effect.ALLOW,
               actions: [
                 'cloudwatch:PutMetricData'
+              ],
+              resources: ['*']
+            }),
+            // EC2 VPN read permissions for endpoint validation
+            new iam.PolicyStatement({
+              effect: iam.Effect.ALLOW,
+              actions: [
+                'ec2:DescribeClientVpnEndpoints',
+                'ec2:DescribeClientVpnConnections',
+                'ec2:DescribeClientVpnTargetNetworks'
               ],
               resources: ['*']
             })
@@ -134,7 +152,10 @@ export class SecureParameterManagementStack extends cdk.Stack {
                 `arn:aws:ssm:${this.region}:${this.account}:parameter/vpn/${environment}/*`,
                 // Legacy parameter paths for backward compatibility
                 `arn:aws:ssm:${this.region}:${this.account}:parameter/vpn/endpoint/conf`,
-                `arn:aws:ssm:${this.region}:${this.account}:parameter/vpn/endpoint/state`
+                `arn:aws:ssm:${this.region}:${this.account}:parameter/vpn/endpoint/state`,
+                `arn:aws:ssm:${this.region}:${this.account}:parameter/vpn/cost/*`,
+                `arn:aws:ssm:${this.region}:${this.account}:parameter/vpn/admin/*`,
+                `arn:aws:ssm:${this.region}:${this.account}:parameter/vpn/logging/*`
               ]
             }),
             // KMS encrypt/decrypt access for encrypted parameters
@@ -153,6 +174,14 @@ export class SecureParameterManagementStack extends cdk.Stack {
                   'kms:ViaService': `ssm.${this.region}.amazonaws.com`
                 }
               }
+            }),
+            // KMS describe access for direct KMS validation calls
+            new iam.PolicyStatement({
+              effect: iam.Effect.ALLOW,
+              actions: [
+                'kms:DescribeKey'
+              ],
+              resources: [this.parameterKmsKey.keyArn]
             }),
             // EC2 VPN permissions for VPN control operations
             new iam.PolicyStatement({

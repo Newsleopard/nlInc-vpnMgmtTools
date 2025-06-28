@@ -2,6 +2,7 @@
 import 'source-map-support/register';
 import * as cdk from 'aws-cdk-lib';
 import { VpnAutomationStack } from '../lib/vpn-automation-stack';
+import { SecureParameterManagementStack } from '../lib/secure-parameter-management-stack';
 
 const app = new cdk.App();
 
@@ -30,8 +31,16 @@ const stackProps: cdk.StackProps = {
   }
 };
 
-// Create the stack
-new VpnAutomationStack(app, stackName, {
+// Create the secure parameter management stack first
+const secureParameterStackName = `VpnSecureParameters-${environment}`;
+const secureParameterStack = new SecureParameterManagementStack(app, secureParameterStackName, {
   ...stackProps,
   environment: environment
+});
+
+// Create the main VPN automation stack with secure parameter stack reference
+new VpnAutomationStack(app, stackName, {
+  ...stackProps,
+  environment: environment,
+  secureParameterStack: secureParameterStack
 });

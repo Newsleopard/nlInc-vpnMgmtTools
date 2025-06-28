@@ -84,7 +84,8 @@ export async function readSlackWebhook(): Promise<string> {
 export async function readSlackSigningSecret(): Promise<string> {
   try {
     // Use environment-specific parameter path
-    const parameterName = process.env.SIGNING_SECRET_PARAM || '/vpn/slack/signing_secret';
+    const environment = process.env.ENVIRONMENT || 'staging';
+    const parameterName = process.env.SIGNING_SECRET_PARAM || `/vpn/${environment}/slack/signing_secret`;
     
     // Direct SSM call to ensure we get the raw string value
     const result = await ssm.send(new GetParameterCommand({

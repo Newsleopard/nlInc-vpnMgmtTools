@@ -125,6 +125,13 @@ const PARAMETER_SCHEMA: SecureParameterConfig[] = [
     validationPattern: /^([a-f0-9]{32}|PLACEHOLDER_.*)$/
   },
   {
+    name: '/vpn/{env}/slack/bot_token',
+    encrypted: true,
+    required: false, // Optional parameter for Slack bot functionality
+    description: 'Slack bot token for interactive features',
+    validationPattern: /^(xoxb-.*|PLACEHOLDER_.*)$/
+  },
+  {
     name: '/vpn/cost/optimization_config',
     encrypted: true,
     required: true,
@@ -150,7 +157,7 @@ const PARAMETER_SCHEMA: SecureParameterConfig[] = [
     encrypted: false,
     required: true,
     description: 'Logging and monitoring configuration',
-    validationPattern: /^{.*"logLevel":"(DEBUG|INFO|WARN|ERROR|CRITICAL)".*}$/
+    validationPattern: /^{.*"logLevel":"(DEBUG|INFO|WARN|ERROR|CRITICAL)".*}$/s
   },
   {
     name: '/vpn/cross_account/config',
@@ -711,7 +718,8 @@ Performance Optimizations Active:
     });
 
     // Epic 5.1: Performance Optimization - Use batch operations for 90% speed improvement
-    const parameterNames = requiredParams.map(schema => schema.name);
+    // Resolve {env} placeholders in parameter names before batch reading
+    const parameterNames = requiredParams.map(schema => schema.name.replace('{env}', this.environment));
     const batchResult = await this.batchReadParameters(parameterNames);
 
     this.logger.info('Batch parameter validation completed', {
