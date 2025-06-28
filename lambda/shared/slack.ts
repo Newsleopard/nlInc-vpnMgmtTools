@@ -121,37 +121,37 @@ export function parseSlackCommand(slackCommand: SlackCommand): VpnCommandRequest
 
 // Get help message for VPN commands
 function getHelpMessage(): string {
-  return `**VPN Automation Commands:**
+  return `*VPN Automation Commands:*
 
-**Basic Usage:** \`/vpn <action> <environment>\`
+*Basic Usage:* \`/vpn <action> <environment>\`
 
-**Core Actions:**
+*Core Actions:*
 • \`open\` (aliases: start, enable, on) - Associate VPN subnets
 • \`close\` (aliases: stop, disable, off) - Disassociate VPN subnets  
 • \`check\` (aliases: status, state, info) - Check VPN status
 
-**Cost Optimization (Epic 3.2):**
+*Cost Optimization (Epic 3.2):*
 • \`/vpn savings <environment>\` - Show cost savings report
 • \`/vpn costs daily\` - Show daily cost analysis
 • \`/vpn costs cumulative\` - Show total savings
 
-**Administrative Controls:**
+*Administrative Controls:*
 • \`/vpn admin override <env>\` - Disable auto-close (24h)
 • \`/vpn admin clear-override <env>\` - Re-enable auto-close
 • \`/vpn admin cooldown <env>\` - Check cooldown status
 • \`/vpn admin force-close <env>\` - Bypass safety mechanisms
 
-**Environments:**
+*Environments:*
 • \`staging\` (aliases: stage, dev) - Staging environment 🟡
 • \`production\` (aliases: prod) - Production environment 🔴
 
-**Examples:**
+*Examples:*
 • \`/vpn open staging\` - Open staging VPN
 • \`/vpn savings production\` - View production cost savings
 • \`/vpn admin override staging\` - Disable auto-close for 24h
 • \`/vpn costs daily\` - Daily cost breakdown
 
-**Auto-Cost Optimization:**
+*Auto-Cost Optimization:*
 - Idle VPNs auto-close after 60 minutes (configurable)
 - Business hours protection (9 AM - 6 PM)
 - 30-minute cooldown prevents rapid cycling
@@ -517,9 +517,8 @@ export async function sendSlackAlert(
   const emoji = severity === 'critical' ? '🚨' : '⚠️';
   const environmentEmoji = environment === 'production' ? '🚀' : '🔧';
   
-  // Convert UTC time to Taiwan timezone (UTC+8)
-  const taiwanTime = new Date(new Date().getTime() + (8 * 60 * 60 * 1000));
-  const formattedTime = taiwanTime.toLocaleString('zh-TW', {
+  // Convert UTC time to Taiwan timezone (UTC+8) - use proper timezone conversion
+  const formattedTime = new Date().toLocaleString('zh-TW', {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -534,11 +533,11 @@ export async function sendSlackAlert(
   const environmentName = environment === 'production' ? '正式環境' : '測試環境';
   const severityName = severity === 'critical' ? '緊急' : '警告';
   
-  const alertMessage = `${emoji} **VPN 系統警報** ${environmentEmoji}\n` +
-                      `**環境：** ${environmentName} (${environment})\n` +
-                      `**嚴重程度：** ${severityName}\n` +
-                      `**訊息：** ${userFriendlyMessage}\n` +
-                      `**時間：** ${formattedTime} (台灣時間)`;
+  const alertMessage = `${emoji} *VPN 系統警報* ${environmentEmoji}\n` +
+                      `*環境：* ${environmentName} (${environment})\n` +
+                      `*嚴重程度：* ${severityName}\n` +
+                      `*訊息：* ${userFriendlyMessage}\n` +
+                      `*時間：* ${formattedTime} (台灣時間)`;
   
   await sendSlackNotification(alertMessage);
 }
