@@ -201,13 +201,19 @@ export class SecureParameterManager {
   private initializeSchemaCache(): void {
     if (!SecureParameterManager.schemaCacheInitialized) {
       PARAMETER_SCHEMA.forEach(schema => {
+        // Resolve {env} placeholder in schema names
+        const resolvedName = schema.name.replace('{env}', this.environment);
+        SecureParameterManager.schemaCache.set(resolvedName, schema);
+        
+        // Also store the original template name for backward compatibility
         SecureParameterManager.schemaCache.set(schema.name, schema);
       });
       SecureParameterManager.schemaCacheInitialized = true;
       
       this.logger.debug('Schema cache initialized', {
         schemaCount: PARAMETER_SCHEMA.length,
-        cacheSize: SecureParameterManager.schemaCache.size
+        cacheSize: SecureParameterManager.schemaCache.size,
+        environment: this.environment
       });
     }
   }
