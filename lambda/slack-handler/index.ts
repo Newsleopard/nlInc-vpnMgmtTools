@@ -427,8 +427,28 @@ async function invokeProductionViaAPIGateway(command: VpnCommandRequest, logger:
   
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const productionAPIEndpoint = process.env.PRODUCTION_API_ENDPOINT;
-      const apiKey = process.env.PRODUCTION_API_KEY || '';
+      let productionAPIEndpoint = process.env.PRODUCTION_API_ENDPOINT;
+      let apiKey = process.env.PRODUCTION_API_KEY || '';
+      
+      // If environment variables are not set, try to read from parameter store
+      if (!productionAPIEndpoint) {
+        try {
+          const crossAccountConfig = await stateStore.readParameter('/vpn/staging/cross_account/config');
+          if (crossAccountConfig) {
+            const config = JSON.parse(crossAccountConfig);
+            productionAPIEndpoint = config.productionApiEndpoint;
+            apiKey = config.productionApiKey || '';
+            childLogger.info('Loaded cross-account configuration from parameter store', {
+              hasEndpoint: !!productionAPIEndpoint,
+              hasApiKey: !!apiKey
+            });
+          }
+        } catch (paramError) {
+          childLogger.warn('Failed to read cross-account configuration from parameter store', {
+            error: paramError.message
+          });
+        }
+      }
       
       if (!productionAPIEndpoint) {
         throw new Error('Production API endpoint not configured');

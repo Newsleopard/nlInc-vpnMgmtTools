@@ -51,7 +51,16 @@ export class VpnAutomationStack extends cdk.Stack {
                 'ssm:GetParameter'
               ],
               resources: [
-                `arn:aws:ssm:${region}:${account}:parameter/vpn/slack/*`
+                `arn:aws:ssm:${region}:${account}:parameter/vpn/*`
+              ]
+            }),
+            new iam.PolicyStatement({
+              effect: iam.Effect.ALLOW,
+              actions: [
+                'kms:Decrypt'
+              ],
+              resources: [
+                secureParameterStack?.parameterKmsKey.keyArn || `arn:aws:kms:${region}:${account}:key/*`
               ]
             })
           ]
@@ -64,7 +73,7 @@ export class VpnAutomationStack extends cdk.Stack {
                 'lambda:InvokeFunction'
               ],
               resources: [
-                `arn:aws:lambda:${region}:${account}:function:VpnAutomationStack-${environment}-VpnControl*`
+                `arn:aws:lambda:${region}:${account}:function:VpnAutomation-${environment}-*`
               ]
             })
           ]
@@ -138,6 +147,15 @@ export class VpnAutomationStack extends cdk.Stack {
                   ]
                 }
               }
+            }),
+            new iam.PolicyStatement({
+              effect: iam.Effect.ALLOW,
+              actions: [
+                'kms:Decrypt'
+              ],
+              resources: [
+                secureParameterStack?.parameterKmsKey.keyArn || `arn:aws:kms:${region}:${account}:key/*`
+              ]
             })
           ]
         })
