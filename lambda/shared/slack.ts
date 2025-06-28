@@ -467,7 +467,7 @@ export function formatSlackResponse(
   
   return {
     response_type: 'in_channel',
-    text: `${statusEmoji} VPN ${command.action} completed for ${environmentEmoji} ${environmentName}`,
+    text: `📶 VPN ${command.action} completed for ${environmentEmoji} ${environmentName}`,
     attachments: [{
       color: response.success ? 'good' : 'danger',
       fields: fields,
