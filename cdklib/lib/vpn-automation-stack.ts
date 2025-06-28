@@ -160,8 +160,8 @@ export class VpnAutomationStack extends cdk.Stack {
       
       // Enhanced idle detection configuration
       COOLDOWN_MINUTES: '30',
-      BUSINESS_HOURS_PROTECTION: 'true',
-      BUSINESS_HOURS_TIMEZONE: 'UTC',
+      BUSINESS_HOURS_PROTECTION: 'false',
+      BUSINESS_HOURS_TIMEZONE: 'Asia/Taipei',
       
       // Epic 3.2: Authorization configuration
       PRODUCTION_AUTHORIZED_USERS: '*',

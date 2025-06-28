@@ -307,7 +307,9 @@ function isBusinessHours(): boolean {
       'PST': -8, 'PDT': -7,  // US Pacific  
       'CST': -6, 'CDT': -5,  // US Central
       'MST': -7, 'MDT': -6,  // US Mountain
-      'GMT': 0, 'UTC': 0     // GMT/UTC
+      'GMT': 0, 'UTC': 0,    // GMT/UTC
+      'Asia/Taipei': 8,      // Taiwan Standard Time (UTC+8)
+      'TST': 8, 'Taiwan': 8  // Alternative Taiwan timezone names
     };
     
     const offset = timezoneOffsets[BUSINESS_HOURS_TIMEZONE] || 0;

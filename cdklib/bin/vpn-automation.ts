@@ -16,7 +16,7 @@ if (!account) {
 }
 
 // Environment-specific configuration
-const stackName = `VpnAutomationStack-${environment}`;
+const stackName = `VpnAutomation-${environment}`;
 const stackProps: cdk.StackProps = {
   env: {
     account: account,
