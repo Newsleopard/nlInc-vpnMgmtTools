@@ -174,6 +174,7 @@ export class VpnAutomationStack extends cdk.Stack {
       // Epic 5.1: Secure parameter management configuration
       SECURE_PARAMETER_ENABLED: 'true',
       KMS_KEY_ID: secureParameterStack?.parameterKmsKey.keyId || '',
+      VPN_PARAMETER_KMS_KEY_ID: secureParameterStack?.parameterKmsKey.keyId || '', // Add missing KMS key ID
       PARAMETER_VALIDATION_ENABLED: 'true',
       
       // Enhanced idle detection configuration
