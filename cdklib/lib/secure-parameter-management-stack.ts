@@ -153,11 +153,23 @@ export class SecureParameterManagementStack extends cdk.Stack {
             new iam.PolicyStatement({
               effect: iam.Effect.ALLOW,
               actions: [
+                // VPN endpoint management (read operations)
                 'ec2:DescribeClientVpnEndpoints',
                 'ec2:DescribeClientVpnConnections',
                 'ec2:DescribeClientVpnTargetNetworks',
                 'ec2:DescribeClientVpnAuthorizationRules',
-                'ec2:DescribeClientVpnRoutes'
+                'ec2:DescribeClientVpnRoutes',
+                // VPN endpoint management (write operations)
+                'ec2:AssociateClientVpnTargetNetwork',
+                'ec2:DisassociateClientVpnTargetNetwork',
+                'ec2:CreateClientVpnEndpoint',
+                'ec2:DeleteClientVpnEndpoint',
+                'ec2:ModifyClientVpnEndpoint',
+                // VPN authorization and routing management
+                'ec2:AuthorizeClientVpnIngress',
+                'ec2:RevokeClientVpnIngress',
+                'ec2:CreateClientVpnRoute',
+                'ec2:DeleteClientVpnRoute'
               ],
               resources: ['*']
             }),
