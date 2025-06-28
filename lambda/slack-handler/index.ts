@@ -368,7 +368,8 @@ async function invokeLocalVpnControl(command: VpnCommandRequest, logger: any): P
       throw new Error('No response from vpn-control Lambda');
     }
 
-    const payloadString = result.Payload.toString();
+    // Convert Uint8Array to string properly
+    const payloadString = new TextDecoder().decode(result.Payload);
     childLogger.debug('Raw Lambda response payload', {
       payloadLength: payloadString.length,
       payloadStart: payloadString.substring(0, 100),

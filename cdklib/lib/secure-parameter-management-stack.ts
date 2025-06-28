@@ -145,6 +145,26 @@ export class SecureParameterManagementStack extends cdk.Stack {
                   'kms:ViaService': `ssm.${this.region}.amazonaws.com`
                 }
               }
+            }),
+            // EC2 VPN permissions for VPN control operations
+            new iam.PolicyStatement({
+              effect: iam.Effect.ALLOW,
+              actions: [
+                'ec2:DescribeClientVpnEndpoints',
+                'ec2:DescribeClientVpnConnections',
+                'ec2:DescribeClientVpnTargetNetworks',
+                'ec2:DescribeClientVpnAuthorizationRules',
+                'ec2:DescribeClientVpnRoutes'
+              ],
+              resources: ['*']
+            }),
+            // CloudWatch metrics access for performance monitoring
+            new iam.PolicyStatement({
+              effect: iam.Effect.ALLOW,
+              actions: [
+                'cloudwatch:PutMetricData'
+              ],
+              resources: ['*']
             })
           ]
         })
