@@ -1009,10 +1009,10 @@ curl -X POST https://your-api-gateway-url/slack \
 
 2. **獲取正確的 Slack 配置**
    - **Slack Webhook URL**: 從 Slack App 設定中取得
-   - **Slack Signing Secret**: **必須是 64 字元的十六進位字串**
+   - **Slack Signing Secret**: **必須是 32 字元的十六進位字串**
      - 前往 https://api.slack.com/apps
      - 選擇您的 App → Basic Information → App Credentials
-     - 複製 "Signing Secret"（應該是 64 個字元）
+     - 複製 "Signing Secret"（應該是 32 個字元）
    - **Slack Bot Token**: 格式為 `xoxb-XXXXXXXX-XXXXXXXX-XXXXXXXXXXXXXXXX`
 
 #### **一鍵部署命令**
@@ -1066,10 +1066,10 @@ curl -X POST YOUR_STAGING_API_URL/slack \
 
 1. **Slack Signing Secret 格式錯誤**
    ```bash
-   # 錯誤範例（32 字元）
+   # 正確範例（32 字元）
    c9c157368cbc83e2feeff2e774219fe4
    
-   # 正確範例（64 字元）
+   # 錯誤範例（64 字元 - 太長）
    a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2
    ```
 

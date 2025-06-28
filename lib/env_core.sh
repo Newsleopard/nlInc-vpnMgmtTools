@@ -334,16 +334,16 @@ get_env_profile() {
         fi
     fi
     
-    # Fallback to default mapping
+    # Fallback to default mapping (standardized environment names)
     case "$environment" in
         staging)
             echo "default"
             ;;
         production)
-            echo "production"
+            echo "prod"  # Use 'prod' profile for 'production' environment
             ;;
         prod)
-            echo "prod"
+            echo "prod"  # Support legacy 'prod' environment name
             ;;
         *)
             echo "default"

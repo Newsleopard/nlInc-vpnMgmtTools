@@ -1,4 +1,5 @@
-import { SSM, KMS } from 'aws-sdk';
+import { SSMClient, GetParameterCommand, PutParameterCommand, GetParametersCommand } from '@aws-sdk/client-ssm';
+import { KMSClient, DescribeKeyCommand, GetKeyRotationStatusCommand } from '@aws-sdk/client-kms';
 import { createLogger, extractLogContext } from './logger';
 
 /**
@@ -6,40 +7,34 @@ import { createLogger, extractLogContext } from './logger';
  * Reduces connection overhead and improves performance through client reuse
  */
 class OptimizedAWSClients {
-  private static ssmClient: SSM;
-  private static kmsClient: KMS;
+  private static ssmClient: SSMClient;
+  private static kmsClient: KMSClient;
 
-  static getSSMClient(): SSM {
+  static getSSMClient(): SSMClient {
     if (!this.ssmClient) {
-      this.ssmClient = new SSM({
+      this.ssmClient = new SSMClient({
         region: process.env.AWS_REGION || 'us-east-1',
-        httpOptions: {
-          timeout: 5000,
-          connectTimeout: 1000,
-          agent: require('https').globalAgent
+        requestHandler: {
+          requestTimeout: 5000,
+          connectionTimeout: 1000
         },
-        maxRetries: 3,
-        retryDelayOptions: {
-          customBackoff: (retryCount: number) => Math.pow(2, retryCount) * 100
-        }
+        maxAttempts: 3,
+        retryMode: 'adaptive'
       });
     }
     return this.ssmClient;
   }
 
-  static getKMSClient(): KMS {
+  static getKMSClient(): KMSClient {
     if (!this.kmsClient) {
-      this.kmsClient = new KMS({
+      this.kmsClient = new KMSClient({
         region: process.env.AWS_REGION || 'us-east-1',
-        httpOptions: {
-          timeout: 5000,
-          connectTimeout: 1000,
-          agent: require('https').globalAgent
+        requestHandler: {
+          requestTimeout: 5000,
+          connectionTimeout: 1000
         },
-        maxRetries: 3,
-        retryDelayOptions: {
-          customBackoff: (retryCount: number) => Math.pow(2, retryCount) * 100
-        }
+        maxAttempts: 3,
+        retryMode: 'adaptive'
       });
     }
     return this.kmsClient;
@@ -116,14 +111,14 @@ const PARAMETER_SCHEMA: SecureParameterConfig[] = [
     validationPattern: /^{.*"ENDPOINT_ID":"(cvpn-endpoint-[a-f0-9]+|PLACEHOLDER_.+)".*"SUBNET_ID":"(subnet-[a-f0-9]+|PLACEHOLDER_.+)".*}$/
   },
   {
-    name: '/vpn/slack/webhook',
+    name: '/vpn/{env}/slack/webhook',
     encrypted: true,
     required: true,
     description: 'Slack webhook URL for notifications',
     validationPattern: /^(https:\/\/hooks\.slack\.com\/.*|PLACEHOLDER_.*)$/
   },
   {
-    name: '/vpn/slack/signing_secret',
+    name: '/vpn/{env}/slack/signing_secret',
     encrypted: true,
     required: true,
     description: 'Slack app signing secret for request verification',
@@ -303,10 +298,10 @@ Performance Optimizations Active:
       }
 
       // Get parameter with automatic decryption if encrypted
-      const getParameterRequest: SSM.GetParameterRequest = {
+      const getParameterCommand = new GetParameterCommand({
         Name: parameterName,
         WithDecryption: schema?.encrypted || false
-      };
+      });
 
       this.logger.debug('Reading parameter', {
         parameterName,
@@ -314,7 +309,7 @@ Performance Optimizations Active:
         environment: this.environment
       });
 
-      const response = await ssm.getParameter(getParameterRequest).promise();
+      const response = await ssm.send(getParameterCommand);
 
       if (!response.Parameter?.Value) {
         result.errors.push(`Parameter ${parameterName} exists but has no value`);
@@ -417,7 +412,7 @@ Performance Optimizations Active:
       // Epic 5.1.1: Determine parameter type based on schema
       const parameterType = schema?.encrypted ? 'SecureString' : 'String';
 
-      const putParameterRequest: SSM.PutParameterRequest = {
+      const putParameterInput: any = {
         Name: parameterName,
         Value: stringValue,
         Type: parameterType,
@@ -427,7 +422,7 @@ Performance Optimizations Active:
 
       // Add KMS key if encrypted
       if (schema?.encrypted && process.env.VPN_PARAMETER_KMS_KEY_ID) {
-        putParameterRequest.KeyId = process.env.VPN_PARAMETER_KMS_KEY_ID;
+        putParameterInput.KeyId = process.env.VPN_PARAMETER_KMS_KEY_ID;
       }
 
       this.logger.debug('Writing parameter', {
@@ -437,7 +432,8 @@ Performance Optimizations Active:
         environment: this.environment
       });
 
-      await ssm.putParameter(putParameterRequest).promise();
+      const putParameterCommand = new PutParameterCommand(putParameterInput);
+      await ssm.send(putParameterCommand);
 
       result.isValid = true;
       result.parameter = value;
@@ -586,10 +582,11 @@ Performance Optimizations Active:
       const batch = parameterNames.slice(i, i + batchSize);
       
       try {
-        const response = await ssm.getParameters({
+        const getParametersCommand = new GetParametersCommand({
           Names: batch,
           WithDecryption: false
-        }).promise();
+        });
+        const response = await ssm.send(getParametersCommand);
 
         totalApiCalls++;
 
@@ -796,17 +793,19 @@ Performance Optimizations Active:
 
     try {
       // Check KMS key accessibility
-      await kms.describeKey({
+      const describeKeyCommand = new DescribeKeyCommand({
         KeyId: process.env.VPN_PARAMETER_KMS_KEY_ID
-      }).promise();
+      });
+      await kms.send(describeKeyCommand);
 
       result.parameter.keyAccessible = true;
       
       // Check key rotation status separately
       try {
-        const rotationStatus = await kms.getKeyRotationStatus({
+        const getKeyRotationStatusCommand = new GetKeyRotationStatusCommand({
           KeyId: process.env.VPN_PARAMETER_KMS_KEY_ID
-        }).promise();
+        });
+        const rotationStatus = await kms.send(getKeyRotationStatusCommand);
         result.parameter.keyRotationEnabled = rotationStatus.KeyRotationEnabled || false;
       } catch (rotationError) {
         result.warnings.push('Unable to check KMS key rotation status');

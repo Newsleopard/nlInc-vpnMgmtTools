@@ -2,11 +2,11 @@ import { APIGatewayProxyEvent, APIGatewayProxyResult, Context } from 'aws-lambda
 import { CloudWatchClient, PutMetricDataCommand, StandardUnit } from '@aws-sdk/client-cloudwatch';
 
 // Import shared utilities from Lambda Layer
-import { VpnCommandRequest, VpnCommandResponse, CrossAccountRequest } from '/opt/types';
-import * as vpnManager from '/opt/vpnManager';
-import * as stateStore from '/opt/stateStore';
-import * as slack from '/opt/slack';
-import { createLogger, extractLogContext, withPerformanceLogging } from '/opt/logger';
+import { VpnCommandRequest, VpnCommandResponse, CrossAccountRequest } from '/opt/nodejs/types';
+import * as vpnManager from '/opt/nodejs/vpnManager';
+import * as stateStore from '/opt/nodejs/stateStore';
+import * as slack from '/opt/nodejs/slack';
+import { createLogger, extractLogContext, withPerformanceLogging } from '/opt/nodejs/logger';
 
 const cloudwatch = new CloudWatchClient({});
 const ENVIRONMENT = process.env.ENVIRONMENT || 'staging';
@@ -22,9 +22,9 @@ export const handler = async (
   logger.info('VPN Control Lambda invoked', {
     httpMethod: event.httpMethod,
     path: event.path,
-    userAgent: event.headers['User-Agent'] || event.headers['user-agent'],
+    userAgent: event.headers?.['User-Agent'] || event.headers?.['user-agent'],
     sourceIP: event.requestContext?.identity?.sourceIp,
-    correlationId: event.headers['X-Correlation-ID']
+    correlationId: event.headers?.['X-Correlation-ID']
   });
 
   try {

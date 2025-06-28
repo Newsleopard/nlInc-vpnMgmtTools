@@ -1,8 +1,8 @@
-import { SSM } from 'aws-sdk';
+import { SSMClient, GetParameterCommand, PutParameterCommand } from '@aws-sdk/client-ssm';
 import { VpnConfig, VpnState } from './types';
 import { SecureParameterManager, readSecureParameter, writeSecureParameter } from './secureParameterManager';
 
-const ssm = new SSM();
+const ssm = new SSMClient({});
 
 /**
  * Epic 5.1: Enhanced State Store with Secure Parameter Management
@@ -61,7 +61,8 @@ export async function writeConfig(config: VpnConfig): Promise<void> {
 // Epic 5.1.1: Read Slack webhook URL (encrypted parameter with KMS)
 export async function readSlackWebhook(): Promise<string> {
   try {
-    const webhook = await readSecureParameter('/vpn/slack/webhook');
+    const environment = process.env.ENVIRONMENT || 'staging';
+    const webhook = await readSecureParameter(`/vpn/${environment}/slack/webhook`);
     
     if (typeof webhook !== 'string') {
       throw new Error('Slack webhook parameter is not a string');
@@ -82,7 +83,20 @@ export async function readSlackWebhook(): Promise<string> {
 // Epic 5.1.1: Read Slack signing secret (encrypted parameter with KMS)
 export async function readSlackSigningSecret(): Promise<string> {
   try {
-    const secret = await readSecureParameter('/vpn/slack/signing_secret');
+    // Use environment-specific parameter path
+    const parameterName = process.env.SIGNING_SECRET_PARAM || '/vpn/slack/signing_secret';
+    
+    // Direct SSM call to ensure we get the raw string value
+    const result = await ssm.send(new GetParameterCommand({
+      Name: parameterName,
+      WithDecryption: true
+    }));
+    
+    const secret = result.Parameter?.Value;
+    
+    if (!secret) {
+      throw new Error('Slack signing secret not found');
+    }
     
     if (typeof secret !== 'string') {
       throw new Error('Slack signing secret parameter is not a string');
@@ -103,7 +117,8 @@ export async function readSlackSigningSecret(): Promise<string> {
 // Epic 5.1.1: Read Slack bot token (encrypted parameter with KMS)
 export async function readSlackBotToken(): Promise<string> {
   try {
-    const token = await readSecureParameter('/vpn/slack/bot_token');
+    const environment = process.env.ENVIRONMENT || 'staging';
+    const token = await readSecureParameter(`/vpn/${environment}/slack/bot_token`);
     
     if (typeof token !== 'string') {
       throw new Error('Slack bot token parameter is not a string');
@@ -260,7 +275,7 @@ export async function readParameter(paramName: string, encrypted: boolean = fals
       return typeof result === 'string' ? result : JSON.stringify(result);
     } else {
       // Use direct SSM for non-encrypted parameters
-      const result = await ssm.getParameter({ Name: paramName }).promise();
+      const result = await ssm.send(new GetParameterCommand({ Name: paramName }));
       return result.Parameter?.Value || null;
     }
   } catch (error: any) {
@@ -279,12 +294,12 @@ export async function writeParameter(paramName: string, value: string, encrypted
       await writeSecureParameter(paramName, value);
     } else {
       // Use direct SSM for non-encrypted parameters
-      await ssm.putParameter({
+      await ssm.send(new PutParameterCommand({
         Name: paramName,
         Value: value,
         Type: 'String',
         Overwrite: true
-      }).promise();
+      }));
     }
     console.log(`Successfully wrote parameter ${paramName}`);
   } catch (error) {

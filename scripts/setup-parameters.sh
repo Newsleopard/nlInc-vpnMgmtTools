@@ -248,6 +248,12 @@ read_environment_config() {
     
     # Set ENDPOINT_ID_FROM_CONFIG from either command line or configuration
     if [ -n "$ENDPOINT_ID_FROM_CONFIG" ]; then
+        # Validate endpoint ID is not a placeholder or fake value
+        if [[ "$ENDPOINT_ID_FROM_CONFIG" =~ ^(PLACEHOLDER_|cvpn-endpoint-fake|fake-|test-|TEMPLATE_) ]]; then
+            print_error "檢測到占位符或假的 ENDPOINT_ID: $ENDPOINT_ID_FROM_CONFIG"
+            print_error "請使用真實的 AWS Client VPN Endpoint ID (格式: cvpn-endpoint-xxxxxxxxxxxxxxxxx)"
+            return 1
+        fi
         print_status "從配置檔案讀取 ENDPOINT_ID: $ENDPOINT_ID_FROM_CONFIG"
     else
         print_error "無法從 $env_name 配置檔案中找到 ENDPOINT_ID"
@@ -255,6 +261,12 @@ read_environment_config() {
     fi
     
     if [ -n "$SUBNET_ID" ]; then
+        # Validate subnet ID is not a placeholder or fake value
+        if [[ "$SUBNET_ID" =~ ^(PLACEHOLDER_|subnet-fake|fake-|test-|TEMPLATE_) ]]; then
+            print_error "檢測到占位符或假的 SUBNET_ID: $SUBNET_ID"
+            print_error "請使用真實的 AWS Subnet ID (格式: subnet-xxxxxxxxxxxxxxxxx)"
+            return 1
+        fi
         print_status "從配置檔案讀取 SUBNET_ID: $SUBNET_ID"
     else
         print_error "無法從 $env_name 配置檔案中找到 SUBNET_ID"
@@ -310,13 +322,13 @@ elif [ -n "$TARGET_ENVIRONMENT" ]; then
         exit 1
     fi
     
-    # Normalize environment name and get AWS profile
+    # Normalize environment name - keep original names consistent
     case "$TARGET_ENVIRONMENT" in
-        production)
-            TARGET_ENVIRONMENT="prod"  # Map to actual directory name
-            CURRENT_ENVIRONMENT="prod"
+        prod)
+            TARGET_ENVIRONMENT="production"  # Standardize to "production"
+            CURRENT_ENVIRONMENT="production"
             ;;
-        prod|staging)
+        production|staging)
             # Already correct
             ;;
         *)
@@ -441,13 +453,9 @@ validate_slack_parameters() {
 
 # Function to map environment short names to CDK full names
 get_cdk_environment_name() {
-    local env_short="$1"
-    case "$env_short" in
-        "prod") echo "production" ;;
-        "production") echo "production" ;;
-        "staging") echo "staging" ;;
-        *) echo "$env_short" ;;
-    esac
+    local env_name="$1"
+    # Environment names are now standardized, so just return as-is
+    echo "$env_name"
 }
 
 # Function to set secure parameter (Epic 5.1)
@@ -565,12 +573,12 @@ configure_environment_parameters() {
     
     print_status "🔧 配置 $env_name 環境參數..."
     
-    # VPN endpoint configuration for this environment (single line JSON to avoid pattern issues)
-    VPN_CONFIG="{\"ENDPOINT_ID\": \"$env_endpoint_id\", \"SUBNET_ID\": \"$env_subnet_id\", \"ENVIRONMENT\": \"$env_name\", \"REGION\": \"$aws_region\"}"
+    # VPN endpoint configuration for this environment (compact JSON without spaces for validation)
+    VPN_CONFIG="{\"ENDPOINT_ID\":\"$env_endpoint_id\",\"SUBNET_ID\":\"$env_subnet_id\",\"ENVIRONMENT\":\"$env_name\",\"REGION\":\"$aws_region\"}"
 
-    # Set parameters using the provided AWS profile with environment-specific path
+    # Set parameters using the provided AWS profile
     AWS_PROFILE="$aws_profile" aws ssm put-parameter \
-        --name "/vpn/$env_name/endpoint/conf" \
+        --name "/vpn/endpoint/conf" \
         --value "$VPN_CONFIG" \
         --type "String" \
         --description "VPN endpoint configuration for $env_name environment (endpoint ID, subnet ID, region)" \
@@ -584,11 +592,11 @@ configure_environment_parameters() {
         return 1
     fi
 
-    # VPN state (initial state) for this environment (single line JSON to avoid pattern issues)
-    VPN_STATE="{\"associated\": false, \"lastActivity\": \"$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")\", \"environment\": \"$env_name\"}"
+    # VPN state (initial state) for this environment (compact JSON without spaces for validation)
+    VPN_STATE="{\"associated\":false,\"lastActivity\":\"$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")\",\"environment\":\"$env_name\"}"
 
     AWS_PROFILE="$aws_profile" aws ssm put-parameter \
-        --name "/vpn/$env_name/endpoint/state" \
+        --name "/vpn/endpoint/state" \
         --value "$VPN_STATE" \
         --type "String" \
         --description "VPN endpoint state for $env_name environment (associated status and last activity)" \
@@ -626,20 +634,20 @@ set_slack_parameters() {
     
     # Slack webhook (encrypted)
     if [ "$USE_SECURE_PARAMETERS" = "true" ]; then
-        set_secure_parameter_with_profile "/vpn/$env_name/slack/webhook" "$SLACK_WEBHOOK" \
+        set_secure_parameter_with_profile "/vpn/slack/webhook" "$SLACK_WEBHOOK" \
             "Slack webhook URL for VPN automation notifications ($env_name environment)" \
             "$aws_profile" "$aws_region" "$env_name"
         
-        set_secure_parameter_with_profile "/vpn/$env_name/slack/signing_secret" "$SLACK_SECRET" \
+        set_secure_parameter_with_profile "/vpn/slack/signing_secret" "$SLACK_SECRET" \
             "Slack signing secret for request verification ($env_name environment)" \
             "$aws_profile" "$aws_region" "$env_name"
         
-        set_secure_parameter_with_profile "/vpn/$env_name/slack/bot_token" "$SLACK_BOT_TOKEN" \
+        set_secure_parameter_with_profile "/vpn/slack/bot_token" "$SLACK_BOT_TOKEN" \
             "Slack bot OAuth token for posting messages ($env_name environment)" \
             "$aws_profile" "$aws_region" "$env_name"
     else
         AWS_PROFILE="$aws_profile" aws ssm put-parameter \
-            --name "/vpn/$env_name/slack/webhook" \
+            --name "/vpn/slack/webhook" \
             --value "$SLACK_WEBHOOK" \
             --type "SecureString" \
             --description "Slack webhook URL for VPN automation notifications ($env_name environment)" \
@@ -654,7 +662,7 @@ set_slack_parameters() {
         fi
 
         AWS_PROFILE="$aws_profile" aws ssm put-parameter \
-            --name "/vpn/$env_name/slack/signing_secret" \
+            --name "/vpn/slack/signing_secret" \
             --value "$SLACK_SECRET" \
             --type "SecureString" \
             --description "Slack signing secret for request verification ($env_name environment)" \
@@ -669,7 +677,7 @@ set_slack_parameters() {
         fi
 
         AWS_PROFILE="$aws_profile" aws ssm put-parameter \
-            --name "/vpn/$env_name/slack/bot_token" \
+            --name "/vpn/slack/bot_token" \
             --value "$SLACK_BOT_TOKEN" \
             --type "SecureString" \
             --description "Slack bot OAuth token for posting messages ($env_name environment)" \

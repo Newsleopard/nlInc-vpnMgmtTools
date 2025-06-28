@@ -4,7 +4,11 @@
   "description": "Shared utilities for VPN management Lambda functions",
   "main": "index.js",
   "dependencies": {
-    "aws-sdk": "^2.1490.0",
+    "@aws-sdk/client-ssm": "^3.350.0",
+    "@aws-sdk/client-ec2": "^3.350.0", 
+    "@aws-sdk/client-acm": "^3.350.0",
+    "@aws-sdk/client-kms": "^3.350.0",
+    "@aws-sdk/client-cloudwatch": "^3.350.0",
     "@types/aws-lambda": "^8.10.119",
     "querystring": "^0.2.1"
   },

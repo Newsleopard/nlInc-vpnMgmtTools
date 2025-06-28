@@ -2,11 +2,11 @@ import { ScheduledEvent, Context } from 'aws-lambda';
 import { CloudWatchClient, PutMetricDataCommand, StandardUnit } from '@aws-sdk/client-cloudwatch';
 
 // Import shared utilities from Lambda Layer
-import { VpnState } from '/opt/types';
-import * as vpnManager from '/opt/vpnManager';
-import * as stateStore from '/opt/stateStore';
-import * as slack from '/opt/slack';
-import { createLogger, withPerformanceLogging } from '/opt/logger';
+import { VpnState } from '/opt/nodejs/types';
+import * as vpnManager from '/opt/nodejs/vpnManager';
+import * as stateStore from '/opt/nodejs/stateStore';
+import * as slack from '/opt/nodejs/slack';
+import { createLogger, withPerformanceLogging } from '/opt/nodejs/logger';
 
 const cloudwatch = new CloudWatchClient({});
 

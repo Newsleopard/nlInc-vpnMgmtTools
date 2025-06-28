@@ -1,8 +1,15 @@
-import { EC2 } from 'aws-sdk';
+import { 
+  EC2Client, 
+  AssociateClientVpnTargetNetworkCommand,
+  DisassociateClientVpnTargetNetworkCommand,
+  DescribeClientVpnTargetNetworksCommand,
+  DescribeClientVpnConnectionsCommand,
+  DescribeClientVpnEndpointsCommand
+} from '@aws-sdk/client-ec2';
 import { VpnConfig, VpnState, VpnStatus } from './types';
 import * as stateStore from './stateStore';
 
-const ec2 = new EC2();
+const ec2 = new EC2Client({});
 
 // Associate subnets with VPN endpoint
 export async function associateSubnets(): Promise<void> {
@@ -23,10 +30,10 @@ export async function associateSubnets(): Promise<void> {
     // Associate subnet with VPN endpoint
     console.log(`Associating subnet ${config.SUBNET_ID} with endpoint ${config.ENDPOINT_ID}`);
     
-    await ec2.associateClientVpnTargetNetwork({
+    await ec2.send(new AssociateClientVpnTargetNetworkCommand({
       ClientVpnEndpointId: config.ENDPOINT_ID,
       SubnetId: config.SUBNET_ID
-    }).promise();
+    }));
     
     console.log('Successfully associated subnet with VPN endpoint');
     
@@ -63,9 +70,9 @@ export async function disassociateSubnets(): Promise<void> {
     }
     
     // Get association ID for disassociation
-    const associations = await ec2.describeClientVpnTargetNetworks({
+    const associations = await ec2.send(new DescribeClientVpnTargetNetworksCommand({
       ClientVpnEndpointId: config.ENDPOINT_ID
-    }).promise();
+    }));
     
     const targetAssociation = associations.ClientVpnTargetNetworks?.find(
       assoc => assoc.TargetNetworkId === config.SUBNET_ID && assoc.Status?.Code !== 'disassociated'
@@ -84,10 +91,10 @@ export async function disassociateSubnets(): Promise<void> {
     console.log(`Disassociating subnet ${config.SUBNET_ID} from endpoint ${config.ENDPOINT_ID}`);
     
     // Disassociate subnet from VPN endpoint
-    await ec2.disassociateClientVpnTargetNetwork({
+    await ec2.send(new DisassociateClientVpnTargetNetworkCommand({
       ClientVpnEndpointId: config.ENDPOINT_ID,
       AssociationId: targetAssociation.AssociationId
-    }).promise();
+    }));
     
     console.log('Successfully disassociated subnet from VPN endpoint');
     
@@ -123,12 +130,12 @@ export async function fetchStatus(): Promise<VpnStatus> {
     
     // Query EC2 for current connection status
     const [connections, associations] = await Promise.all([
-      ec2.describeClientVpnConnections({
+      ec2.send(new DescribeClientVpnConnectionsCommand({
         ClientVpnEndpointId: config.ENDPOINT_ID
-      }).promise(),
-      ec2.describeClientVpnTargetNetworks({
+      })),
+      ec2.send(new DescribeClientVpnTargetNetworksCommand({
         ClientVpnEndpointId: config.ENDPOINT_ID
-      }).promise()
+      }))
     ]);
     
     // Count active connections
@@ -192,9 +199,9 @@ export async function validateEndpoint(): Promise<boolean> {
   try {
     const config = await stateStore.readConfig();
     
-    const endpoints = await ec2.describeClientVpnEndpoints({
+    const endpoints = await ec2.send(new DescribeClientVpnEndpointsCommand({
       ClientVpnEndpointIds: [config.ENDPOINT_ID]
-    }).promise();
+    }));
     
     if (!endpoints.ClientVpnEndpoints || endpoints.ClientVpnEndpoints.length === 0) {
       console.error(`VPN endpoint ${config.ENDPOINT_ID} not found`);

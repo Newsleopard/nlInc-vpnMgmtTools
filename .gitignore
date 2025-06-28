@@ -135,6 +135,15 @@ lambda/template-generated.yaml
 lambda/samconfig.toml
 lambda/.aws-sam/
 
+# Lambda build artifacts
+layer-package/
+layer-new.zip
+slack-handler-new.zip
+test-lambda-direct.json
+response-lambda*.json
+lambda/shared/layer.zip
+lambda/shared/nodejs/
+
 # 測試報告和快照
 lambda/test-results.xml
 lambda/*/test-results.xml

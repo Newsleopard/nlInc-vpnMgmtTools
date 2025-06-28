@@ -30,7 +30,7 @@ export class VpnAutomationStack extends cdk.Stack {
 
     // Create shared Lambda layer
     const sharedLayer = new lambda.LayerVersion(this, 'VpnSharedLayer', {
-      code: lambda.Code.fromAsset(path.resolve(__dirname, '../../lambda/shared')),
+      code: lambda.Code.fromAsset(path.resolve(__dirname, '../../lambda/shared/layer-package')),
       compatibleRuntimes: [lambda.Runtime.NODEJS_18_X],
       description: 'Shared utilities for VPN Cost Automation',
       layerVersionName: `vpn-shared-layer-${environment}`
@@ -51,7 +51,7 @@ export class VpnAutomationStack extends cdk.Stack {
                 'ssm:GetParameter'
               ],
               resources: [
-                `arn:aws:ssm:${region}:${account}:parameter/vpn/${environment}/slack/*`
+                `arn:aws:ssm:${region}:${account}:parameter/vpn/slack/*`
               ]
             })
           ]
@@ -120,7 +120,7 @@ export class VpnAutomationStack extends cdk.Stack {
                 'ssm:PutParameter'
               ],
               resources: [
-                `arn:aws:ssm:${region}:${account}:parameter/vpn/${environment}/*`
+                `arn:aws:ssm:${region}:${account}:parameter/vpn/*`
               ]
             }),
             new iam.PolicyStatement({
@@ -187,16 +187,31 @@ export class VpnAutomationStack extends cdk.Stack {
       VERBOSE_LOGGING: 'false'
     };
 
+    // vpn-control Lambda function (define first so we can reference its name)
+    const vpnControl = new lambda.Function(this, 'VpnControl', {
+      runtime: lambda.Runtime.NODEJS_18_X,
+      handler: 'index.handler',
+      code: lambda.Code.fromAsset(path.resolve(__dirname, '../../lambda/vpn-control/dist')),
+      layers: [sharedLayer],
+      role: vpnControlRole,
+      timeout: cdk.Duration.seconds(30),
+      memorySize: 256, // Optimized for performance
+      environment: commonEnvironment,
+      description: `VPN control function for ${environment} environment`
+    });
+
     // slack-handler Lambda function
     const slackHandler = new lambda.Function(this, 'SlackHandler', {
       runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'dist/index.handler',
-      code: lambda.Code.fromAsset(path.resolve(__dirname, '../../lambda/slack-handler')),
+      handler: 'index.handler',
+      code: lambda.Code.fromAsset(path.resolve(__dirname, '../../lambda/slack-handler/dist')),
       layers: [sharedLayer],
       role: slackHandlerRole,
-      timeout: cdk.Duration.seconds(3),
+      timeout: cdk.Duration.seconds(15), // Reduced timeout for Slack's 3-second requirement
+      memorySize: 256, // Optimized for performance to avoid Slack timeouts
       environment: {
         ...commonEnvironment,
+        VPN_CONTROL_FUNCTION_NAME: vpnControl.functionName,
         // Production API endpoint will be set during deployment
         ...(environment === 'staging' ? {
           PRODUCTION_API_ENDPOINT: '',
@@ -206,26 +221,15 @@ export class VpnAutomationStack extends cdk.Stack {
       description: `Slack command handler for ${environment} environment`
     });
 
-    // vpn-control Lambda function
-    const vpnControl = new lambda.Function(this, 'VpnControl', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'dist/index.handler',
-      code: lambda.Code.fromAsset(path.resolve(__dirname, '../../lambda/vpn-control')),
-      layers: [sharedLayer],
-      role: vpnControlRole,
-      timeout: cdk.Duration.seconds(30),
-      environment: commonEnvironment,
-      description: `VPN control function for ${environment} environment`
-    });
-
     // vpn-monitor Lambda function (for scheduled monitoring)
     const vpnMonitor = new lambda.Function(this, 'VpnMonitor', {
       runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'dist/index.handler',
-      code: lambda.Code.fromAsset(path.resolve(__dirname, '../../lambda/vpn-monitor')),
+      handler: 'index.handler',
+      code: lambda.Code.fromAsset(path.resolve(__dirname, '../../lambda/vpn-monitor/dist')),
       layers: [sharedLayer],
       role: vpnControlRole, // Same role as vpn-control
       timeout: cdk.Duration.seconds(60),
+      memorySize: 256, // Optimized for performance
       environment: commonEnvironment,
       description: `VPN monitoring function for ${environment} environment`
     });

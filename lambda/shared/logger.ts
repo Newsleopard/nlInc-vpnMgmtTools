@@ -156,10 +156,10 @@ class VpnLogger {
   private async reportErrorMetric(level: LogLevel, message: string, error?: any): Promise<void> {
     try {
       // Import CloudWatch only when needed to avoid cold start delays
-      const { CloudWatch } = await import('aws-sdk');
-      const cloudwatch = new CloudWatch();
+      const { CloudWatchClient, PutMetricDataCommand } = await import('@aws-sdk/client-cloudwatch');
+      const cloudwatch = new CloudWatchClient({});
 
-      await cloudwatch.putMetricData({
+      await cloudwatch.send(new PutMetricDataCommand({
         Namespace: 'VPN/Logging',
         MetricData: [{
           MetricName: `${level}Errors`,
@@ -172,7 +172,7 @@ class VpnLogger {
           ],
           Timestamp: new Date()
         }]
-      }).promise();
+      }));
     } catch (metricError) {
       // Fallback: don't fail the original operation due to metric reporting issues
       console.error('Failed to report error metric:', metricError);

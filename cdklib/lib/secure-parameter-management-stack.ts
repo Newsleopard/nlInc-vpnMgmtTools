@@ -62,6 +62,9 @@ export class SecureParameterManagementStack extends cdk.Stack {
     this.vpnParameterReadRole = new iam.Role(this, 'VpnParameterReadRole', {
       assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
       description: 'Minimal role for reading VPN parameters from Parameter Store',
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole')
+      ],
       inlinePolicies: {
         VpnParameterRead: new iam.PolicyDocument({
           statements: [
@@ -89,6 +92,14 @@ export class SecureParameterManagementStack extends cdk.Stack {
                   'kms:ViaService': `ssm.${this.region}.amazonaws.com`
                 }
               }
+            }),
+            // CloudWatch metrics access for performance monitoring
+            new iam.PolicyStatement({
+              effect: iam.Effect.ALLOW,
+              actions: [
+                'cloudwatch:PutMetricData'
+              ],
+              resources: ['*']
             })
           ]
         })
@@ -99,6 +110,9 @@ export class SecureParameterManagementStack extends cdk.Stack {
     this.vpnParameterWriteRole = new iam.Role(this, 'VpnParameterWriteRole', {
       assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
       description: 'Role for writing VPN parameters to Parameter Store',
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole')
+      ],
       inlinePolicies: {
         VpnParameterWrite: new iam.PolicyDocument({
           statements: [

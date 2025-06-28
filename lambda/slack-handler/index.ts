@@ -4,10 +4,10 @@ import { CloudWatchClient, PutMetricDataCommand, StandardUnit } from '@aws-sdk/c
 import * as querystring from 'querystring';
 
 // Import shared utilities from Lambda Layer
-import { SlackCommand, VpnCommandRequest, VpnCommandResponse, CrossAccountRequest } from '/opt/types';
-import * as slack from '/opt/slack';
-import * as stateStore from '/opt/stateStore';
-import { createLogger, extractLogContext, withPerformanceLogging } from '/opt/logger';
+import { SlackCommand, VpnCommandRequest, VpnCommandResponse, CrossAccountRequest } from '/opt/nodejs/types';
+import * as slack from '/opt/nodejs/slack';
+import * as stateStore from '/opt/nodejs/stateStore';
+import { createLogger, extractLogContext, withPerformanceLogging } from '/opt/nodejs/logger';
 
 const lambda = new LambdaClient({});
 const cloudwatch = new CloudWatchClient({});
@@ -63,6 +63,15 @@ export const handler = async (
         logger
       )();
       
+      // Debug: Log what we got from parameter store
+      console.log('DEBUG: Signing secret from parameter store:', {
+        type: typeof signingSecret,
+        length: signingSecret.length,
+        value: signingSecret.substring(0, 10) + '...',
+        isObject: typeof signingSecret === 'object',
+        stringified: JSON.stringify(signingSecret).substring(0, 50) + '...'
+      });
+      
       const isValidSignature = slack.verifySlackSignature(body, signature, timestamp, signingSecret);
       
       if (!isValidSignature) {
@@ -76,10 +85,31 @@ export const handler = async (
           timestampPresent: !!timestamp
         });
         
+        // Debug: Add signature info to response (remove in production)
+        const crypto = require('crypto');
+        const baseString = `v0:${timestamp}:${body}`;
+        const expectedSig = 'v0=' + crypto
+          .createHmac('sha256', signingSecret)
+          .update(baseString)
+          .digest('hex');
+        
+        const debugInfo = {
+          receivedSig: signature.substring(0, 20) + '...',
+          expectedSig: expectedSig.substring(0, 20) + '...',
+          timestamp: timestamp,
+          bodyLength: body.length,
+          bodyStart: body.substring(0, 100) + '...',
+          signingSecretLen: signingSecret.length,
+          match: signature === expectedSig
+        };
+        
         return {
-          statusCode: 401,
+          statusCode: 200,
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ error: 'Unauthorized' })
+          body: JSON.stringify({
+            response_type: 'ephemeral',
+            text: `❌ Invalid Slack signature. Debug: ${JSON.stringify(debugInfo)}`
+          })
         };
       }
       
@@ -95,9 +125,12 @@ export const handler = async (
       });
       
       return {
-        statusCode: 500,
+        statusCode: 200,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ error: 'Authentication configuration error' })
+        body: JSON.stringify({
+          response_type: 'ephemeral',
+          text: '❌ Authentication configuration error. Please contact your administrator.'
+        })
       };
     }
 
@@ -297,9 +330,11 @@ export const handler = async (
 async function invokeLocalVpnControl(command: VpnCommandRequest, logger: any): Promise<VpnCommandResponse> {
   const childLogger = logger.child({ operation: 'invokeLocalVpnControl' });
   
+  const vpnControlFunctionName = process.env.VPN_CONTROL_FUNCTION_NAME || `VpnAutomationStack-${ENVIRONMENT}-VpnControl`;
+  
   try {
     childLogger.info('Invoking local vpn-control Lambda', {
-      functionName: `VpnAutomationStack-${ENVIRONMENT}-VpnControl`,
+      functionName: vpnControlFunctionName,
       command: command.action,
       environment: command.environment
     });
@@ -307,7 +342,7 @@ async function invokeLocalVpnControl(command: VpnCommandRequest, logger: any): P
     const invocationStart = Date.now();
     
     const result = await lambda.send(new InvokeCommand({
-      FunctionName: `VpnAutomationStack-${ENVIRONMENT}-VpnControl`,
+      FunctionName: vpnControlFunctionName,
       InvocationType: 'RequestResponse',
       Payload: JSON.stringify({
         httpMethod: 'POST',
@@ -325,7 +360,7 @@ async function invokeLocalVpnControl(command: VpnCommandRequest, logger: any): P
       duration: invocationTime,
       apiCalls: 1
     }, {
-      functionName: `VpnAutomationStack-${ENVIRONMENT}-VpnControl`,
+      functionName: vpnControlFunctionName,
       payloadSize: result.Payload ? result.Payload.toString().length : 0
     });
 
@@ -333,11 +368,20 @@ async function invokeLocalVpnControl(command: VpnCommandRequest, logger: any): P
       throw new Error('No response from vpn-control Lambda');
     }
 
-    const lambdaResponse = JSON.parse(result.Payload.toString());
+    const payloadString = result.Payload.toString();
+    childLogger.debug('Raw Lambda response payload', {
+      payloadLength: payloadString.length,
+      payloadStart: payloadString.substring(0, 100),
+      payloadEnd: payloadString.substring(Math.max(0, payloadString.length - 100))
+    });
+    
+    const lambdaResponse = JSON.parse(payloadString);
     
     childLogger.debug('Lambda response received', {
       statusCode: lambdaResponse.statusCode,
       hasBody: !!lambdaResponse.body,
+      bodyLength: lambdaResponse.body ? lambdaResponse.body.length : 0,
+      bodyStart: lambdaResponse.body ? lambdaResponse.body.substring(0, 50) : 'no body',
       logResult: result.LogResult ? 'present' : 'absent'
     });
     
@@ -362,7 +406,7 @@ async function invokeLocalVpnControl(command: VpnCommandRequest, logger: any): P
     childLogger.error('Failed to invoke local vpn-control', error, {
       command: command.action,
       environment: command.environment,
-      functionName: `VpnAutomationStack-${ENVIRONMENT}-VpnControl`
+      functionName: vpnControlFunctionName
     });
     
     return {

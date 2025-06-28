@@ -12,7 +12,13 @@
     "forceConsistentCasingInFileNames": true,
     "baseUrl": ".",
     "paths": {
-      "/opt/*": ["../shared/*"]
+      "/opt/nodejs/logger": ["../shared/logger"],
+      "/opt/nodejs/slack": ["../shared/slack"],
+      "/opt/nodejs/stateStore": ["../shared/stateStore"],
+      "/opt/nodejs/types": ["../shared/types"],
+      "/opt/nodejs/vpnManager": ["../shared/vpnManager"],
+      "/opt/nodejs/configurationValidator": ["../shared/configurationValidator"],
+      "/opt/nodejs/secureParameterManager": ["../shared/secureParameterManager"]
     }
   },
   "include": [

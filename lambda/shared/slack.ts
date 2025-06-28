@@ -28,6 +28,18 @@ export function verifySlackSignature(
       .update(baseString)
       .digest('hex');
     
+    // Debug logging (remove in production)
+    console.log('Slack signature verification:', {
+      receivedSignature: signature,
+      expectedSignature: expectedSignature,
+      timestamp: timestamp,
+      bodyLength: body.length,
+      signingSecretLength: signingSecret.length,
+      match: signature === expectedSignature,
+      baseString: baseString.substring(0, 100) + '...',
+      bodyPreview: body.substring(0, 100) + '...'
+    });
+    
     // Compare signatures using timing-safe comparison
     return crypto.timingSafeEqual(
       Buffer.from(signature),

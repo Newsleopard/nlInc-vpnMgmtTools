@@ -512,6 +512,8 @@ For large teams, use batch operations:
 - All scripts use bash and include Chinese language prompts and documentation
 - Configuration issues (especially fake endpoint IDs) can be resolved using tools in `admin-tools/tools/`
 - Zero-touch workflow requires proper S3 bucket setup and IAM policies
+- **Parameter Format**: All JSON parameters must be compact (no spaces) to pass validation patterns (e.g., `{"key":"value"}` not `{"key": "value"}`)
+- **Parameter Setup**: The `setup-parameters.sh` script automatically creates parameters in the correct format
 - **Profile Troubleshooting**: If profile detection fails, see `docs/DUAL_AWS_PROFILE_SETUP_GUIDE.md` for troubleshooting steps
 
 ## Quick Profile Setup Commands
@@ -583,3 +585,51 @@ The new admin now has full access to:
 - Sign and upload certificates via S3
 - Manage VPN user permissions
 - All environment switching and management operations
+
+## Lambda Function Development
+
+### TypeScript Compilation for CDK
+
+All Lambda functions use TypeScript and require proper compilation for CDK deployment:
+
+**Build Process:**
+```bash
+# Manual build (if needed)
+cd lambda/slack-handler && ./build.sh
+cd lambda/vpn-control && ./build.sh
+cd lambda/vpn-monitor && ./build.sh
+cd lambda/shared && npx tsc
+
+# Automatic build during deployment
+./scripts/deploy.sh staging  # Automatically builds all Lambda functions and shared layer
+```
+
+**Important Notes:**
+- Each Lambda function has a `build.sh` script that ensures TypeScript compiles to the correct directory structure for CDK
+- CDK expects `dist/index.js` but TypeScript creates nested directories like `dist/slack-handler/index.js`
+- The shared layer compiles correctly to `dist/` without needing a build script
+- The deploy script now automatically builds all Lambda functions and the shared layer before CDK deployment
+- Always use the deploy script rather than manual CDK commands to ensure proper compilation
+
+**File Structure After Build:**
+```
+lambda/
+├── slack-handler/dist/
+│   ├── index.js          # Main handler (required by CDK)
+│   ├── index.d.ts        # TypeScript declarations
+│   └── shared/           # Compiled shared modules
+├── vpn-control/dist/
+│   ├── index.js          # Main handler (required by CDK)
+│   ├── index.d.ts        # TypeScript declarations
+│   └── shared/           # Compiled shared modules
+├── vpn-monitor/dist/
+│   ├── index.js          # Main handler (required by CDK)
+│   ├── index.d.ts        # TypeScript declarations
+│   └── shared/           # Compiled shared modules
+└── shared/dist/          # Lambda Layer content
+    ├── logger.js
+    ├── slack.js
+    ├── stateStore.js
+    ├── types.js
+    └── vpnManager.js
+```
