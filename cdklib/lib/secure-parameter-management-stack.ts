@@ -68,7 +68,7 @@ export class SecureParameterManagementStack extends cdk.Stack {
       inlinePolicies: {
         VpnParameterRead: new iam.PolicyDocument({
           statements: [
-            // Read access to VPN parameters only
+            // Read access to VPN parameters (both environment-specific and legacy paths)
             new iam.PolicyStatement({
               effect: iam.Effect.ALLOW,
               actions: [
@@ -76,7 +76,12 @@ export class SecureParameterManagementStack extends cdk.Stack {
                 'ssm:GetParameters'
               ],
               resources: [
-                `arn:aws:ssm:${this.region}:${this.account}:parameter/vpn/${environment}/*`
+                `arn:aws:ssm:${this.region}:${this.account}:parameter/vpn/${environment}/*`,
+                `arn:aws:ssm:${this.region}:${this.account}:parameter/vpn/endpoint/*`,
+                `arn:aws:ssm:${this.region}:${this.account}:parameter/vpn/cost/*`,
+                `arn:aws:ssm:${this.region}:${this.account}:parameter/vpn/admin/*`,
+                `arn:aws:ssm:${this.region}:${this.account}:parameter/vpn/logging/*`,
+                `arn:aws:ssm:${this.region}:${this.account}:parameter/vpn/slack/*`
               ]
             }),
             // KMS decrypt access for encrypted parameters
