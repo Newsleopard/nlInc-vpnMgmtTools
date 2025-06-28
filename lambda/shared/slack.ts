@@ -486,10 +486,7 @@ export async function sendSlackNotification(
     const webhookUrl = await stateStore.readSlackWebhook();
     
     const payload = {
-      text: message,
-      channel: channel || '#vpn-automation',
-      username: 'VPN Automation',
-      icon_emoji: ':robot_face:'
+      text: message
     };
     
     const response = await fetch(webhookUrl, {

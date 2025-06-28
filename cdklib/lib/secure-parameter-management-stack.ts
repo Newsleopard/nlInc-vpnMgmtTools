@@ -81,7 +81,8 @@ export class SecureParameterManagementStack extends cdk.Stack {
                 `arn:aws:ssm:${this.region}:${this.account}:parameter/vpn/cost/*`,
                 `arn:aws:ssm:${this.region}:${this.account}:parameter/vpn/admin/*`,
                 `arn:aws:ssm:${this.region}:${this.account}:parameter/vpn/logging/*`,
-                `arn:aws:ssm:${this.region}:${this.account}:parameter/vpn/slack/*`
+                `arn:aws:ssm:${this.region}:${this.account}:parameter/vpn/slack/*`,
+                `arn:aws:ssm:${this.region}:${this.account}:parameter/vpn/cross_account/*`
               ]
             }),
             // KMS decrypt access for encrypted parameters (via SSM)
@@ -155,7 +156,8 @@ export class SecureParameterManagementStack extends cdk.Stack {
                 `arn:aws:ssm:${this.region}:${this.account}:parameter/vpn/endpoint/state`,
                 `arn:aws:ssm:${this.region}:${this.account}:parameter/vpn/cost/*`,
                 `arn:aws:ssm:${this.region}:${this.account}:parameter/vpn/admin/*`,
-                `arn:aws:ssm:${this.region}:${this.account}:parameter/vpn/logging/*`
+                `arn:aws:ssm:${this.region}:${this.account}:parameter/vpn/logging/*`,
+                `arn:aws:ssm:${this.region}:${this.account}:parameter/vpn/cross_account/*`
               ]
             }),
             // KMS encrypt/decrypt access for encrypted parameters

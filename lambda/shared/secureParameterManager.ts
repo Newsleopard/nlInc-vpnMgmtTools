@@ -1,6 +1,6 @@
 import { SSMClient, GetParameterCommand, PutParameterCommand, GetParametersCommand } from '@aws-sdk/client-ssm';
 import { KMSClient, DescribeKeyCommand, GetKeyRotationStatusCommand } from '@aws-sdk/client-kms';
-import { createLogger, extractLogContext } from './logger';
+import { createLogger } from './logger';
 
 /**
  * Epic 5.1: Performance Optimization - Singleton AWS Clients
@@ -642,7 +642,7 @@ Performance Optimizations Active:
   /**
    * Epic 5.1: Performance Optimization - Parse parameter value with optional JSON parsing
    */
-  private parseParameterValue(value: string, schema?: SecureParameterConfig): any {
+  private parseParameterValue(value: string, _schema?: SecureParameterConfig): any {
     // Fast JSON detection and parsing
     if (value[0] === '{' || value[0] === '[') {
       try {

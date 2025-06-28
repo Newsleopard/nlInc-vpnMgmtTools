@@ -414,7 +414,7 @@ deploy_production() {
         deploy_with_secure_parameters "production" "$profile"
     else
         print_status "Deploying production stack..."
-        ENVIRONMENT=production AWS_PROFILE="$profile" cdk deploy --app "npx ts-node bin/vpn-automation.ts" --require-approval never --context environment="production"
+        ENVIRONMENT=production AWS_PROFILE="$profile" cdk deploy --all --app "npx ts-node bin/vpn-automation.ts" --require-approval never --context environment="production"
     fi
     
     print_success "✅ Production deployment completed!"
@@ -550,7 +550,7 @@ deploy_staging() {
             print_status "ℹ️  Deploying without production API key - cross-account calls will use existing configuration"
         fi
         
-        cdk deploy --app "npx ts-node bin/vpn-automation.ts" --require-approval never --context environment="staging"
+        cdk deploy --all --app "npx ts-node bin/vpn-automation.ts" --require-approval never --context environment="staging"
     fi
     
     print_success "✅ Staging deployment completed!"
