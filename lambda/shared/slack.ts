@@ -407,7 +407,7 @@ export function formatSlackResponse(
     return formatEnhancedSlackResponse(response, command);
   }
   
-  const environmentEmoji = command.environment === 'production' ? '🔴' : '🟡';
+  const environmentEmoji = command.environment === 'production' ? '🚀' : '🔧';
   const environmentName = command.environment.charAt(0).toUpperCase() + command.environment.slice(1);
   
   if (!response.success) {
@@ -519,7 +519,7 @@ export async function sendSlackAlert(
   severity: 'warning' | 'critical' = 'warning'
 ): Promise<void> {
   const emoji = severity === 'critical' ? '🚨' : '⚠️';
-  const environmentEmoji = environment === 'production' ? '🔴' : '🟡';
+  const environmentEmoji = environment === 'production' ? '🚀' : '🔧';
   
   // Convert UTC time to Taiwan timezone (UTC+8)
   const taiwanTime = new Date(new Date().getTime() + (8 * 60 * 60 * 1000));
