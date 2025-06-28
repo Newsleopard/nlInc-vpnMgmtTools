@@ -521,11 +521,77 @@ export async function sendSlackAlert(
   const emoji = severity === 'critical' ? '🚨' : '⚠️';
   const environmentEmoji = environment === 'production' ? '🔴' : '🟡';
   
-  const alertMessage = `${emoji} **VPN Automation Alert** ${environmentEmoji}\n` +
-                      `**Environment:** ${environment}\n` +
-                      `**Severity:** ${severity}\n` +
-                      `**Message:** ${message}\n` +
-                      `**Time:** ${new Date().toISOString()}`;
+  // Convert UTC time to Taiwan timezone (UTC+8)
+  const taiwanTime = new Date(new Date().getTime() + (8 * 60 * 60 * 1000));
+  const formattedTime = taiwanTime.toLocaleString('zh-TW', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    timeZone: 'Asia/Taipei'
+  });
+  
+  // Make message more user-friendly
+  const userFriendlyMessage = makeMessageUserFriendly(message);
+  const environmentName = environment === 'production' ? '正式環境' : '測試環境';
+  const severityName = severity === 'critical' ? '緊急' : '警告';
+  
+  const alertMessage = `${emoji} **VPN 系統警報** ${environmentEmoji}\n` +
+                      `**環境：** ${environmentName} (${environment})\n` +
+                      `**嚴重程度：** ${severityName}\n` +
+                      `**訊息：** ${userFriendlyMessage}\n` +
+                      `**時間：** ${formattedTime} (台灣時間)`;
   
   await sendSlackNotification(alertMessage, '#vpn-alerts');
+}
+
+/**
+ * Convert technical error messages to user-friendly messages
+ */
+function makeMessageUserFriendly(message: string): string {
+  const friendlyMessages: { [key: string]: string } = {
+    'VPN Monitor: Parameter Store validation failed. Please check configuration.': 
+      '🔧 VPN 監控系統偵測到設定參數異常，請檢查系統配置是否正確',
+    
+    'VPN endpoint validation failed': 
+      '🔗 VPN 端點連線驗證失敗，請檢查網路連線狀態',
+    
+    'Failed to send Slack notification': 
+      '📢 Slack 通知發送失敗，請檢查 Slack 整合設定',
+    
+    'Cross-account VPN operation failed': 
+      '🔄 跨帳戶 VPN 操作失敗，請檢查跨帳戶權限設定',
+    
+    'VPN endpoint not configured': 
+      '⚙️ VPN 端點尚未設定，請先完成 VPN 端點配置',
+    
+    'Unauthorized operation': 
+      '🔐 權限不足，請檢查 AWS IAM 權限設定',
+    
+    'Request validation failed': 
+      '📝 請求格式驗證失敗，請檢查輸入參數',
+    
+    'VPN connection timeout': 
+      '⏱️ VPN 連線逾時，請檢查網路狀況或稍後再試',
+    
+    'Certificate validation failed': 
+      '📜 憑證驗證失敗，請檢查 VPN 憑證是否有效'
+  };
+  
+  // Check for exact matches first
+  if (friendlyMessages[message]) {
+    return friendlyMessages[message];
+  }
+  
+  // Check for partial matches
+  for (const [technical, friendly] of Object.entries(friendlyMessages)) {
+    if (message.includes(technical) || technical.includes(message.split(':')[0])) {
+      return friendly;
+    }
+  }
+  
+  // If no match found, return original message with some formatting
+  return `🔍 ${message}`;
 }

@@ -52,7 +52,7 @@ export const handler = async (
       });
       
       await slack.sendSlackAlert(
-        'VPN Monitor: Parameter Store validation failed. Please check configuration.',
+        'VPN 監控系統偵測到設定參數異常，請檢查系統配置是否正確',
         ENVIRONMENT,
         'critical'
       );
