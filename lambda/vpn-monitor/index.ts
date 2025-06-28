@@ -175,8 +175,7 @@ export const handler = async (
     if (await hasAdministrativeOverride()) {
       console.log('Skipping auto-disassociation due to administrative override');
       await slack.sendSlackNotification(
-        `🛑 VPN ${ENVIRONMENT} auto-disassociation skipped due to administrative override. Use \`/vpn admin clear-override ${ENVIRONMENT}\` to re-enable.`,
-        `#vpn-alerts`
+        `🛑 VPN ${ENVIRONMENT} auto-disassociation skipped due to administrative override. Use \`/vpn admin clear-override ${ENVIRONMENT}\` to re-enable.`
       );
       await publishMetric('AdministrativeOverrideSkips', 1);
       return;
@@ -194,8 +193,7 @@ export const handler = async (
         `⏱️ **Idle Duration**: ${idleTimeMinutes} minutes (threshold: ${IDLE_MINUTES}min)\n` +
         `💰 **Potential Savings**: $${costProjection.hourly}/hour\n` +
         `🛡️ **Action**: Auto-close disabled during business hours\n` +
-        `📝 **Note**: VPN will auto-close at 6 PM or use \`/vpn close ${ENVIRONMENT}\` manually`,
-        `#vpn-${ENVIRONMENT}`
+        `📝 **Note**: VPN will auto-close at 6 PM or use \`/vpn close ${ENVIRONMENT}\` manually`
       );
       
       // Publish metric for business hours skips with cost impact
@@ -215,8 +213,7 @@ export const handler = async (
         `⏱️ **Remaining**: ${Math.ceil(remainingCooldown)} minutes\n` +
         `🔄 **Purpose**: Prevents rapid on/off cycling\n` +
         `📈 **Current Idle**: ${idleTimeMinutes} minutes\n` +
-        `💡 **Tip**: Use \`/vpn close ${ENVIRONMENT}\` for immediate shutdown`,
-        `#vpn-${ENVIRONMENT}`
+        `💡 **Tip**: Use \`/vpn close ${ENVIRONMENT}\` for immediate shutdown`
       );
       
       await publishMetric('CooldownSkips', 1);
@@ -255,8 +252,7 @@ export const handler = async (
         `💵 **Cost Savings**: $${costSavings.hourly}/hour (~$${costSavings.total} saved for idle period)\n` +
         `🔧 **Action**: Subnets automatically disassociated\n` +
         `📱 **Re-enable**: Use \`/vpn open ${ENVIRONMENT}\` when needed\n` +
-        `⏰ **Cooldown**: ${COOLDOWN_MINUTES} minutes to prevent rapid cycling`,
-        `#vpn-${ENVIRONMENT}`
+        `⏰ **Cooldown**: ${COOLDOWN_MINUTES} minutes to prevent rapid cycling`
       );
       
       console.log('Successfully auto-disassociated VPN subnets with cooldown protection enabled');
@@ -411,8 +407,7 @@ async function hasRecentManualActivity(): Promise<boolean> {
         `🕰️ **Last Activity**: ${timeSinceManualActivity.toFixed(1)} minutes ago\n` +
         `⏱️ **Grace Period**: ${manualActivityGracePeriod} minutes\n` +
         `🔒 **Protection**: Auto-close temporarily disabled\n` +
-        `📝 **Note**: Auto-monitoring will resume after grace period`,
-        `#vpn-${ENVIRONMENT}`
+        `📝 **Note**: Auto-monitoring will resume after grace period`
       );
     }
     

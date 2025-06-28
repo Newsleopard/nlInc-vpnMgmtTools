@@ -112,24 +112,26 @@ export const handler = async (
       };
     }
 
-    // Validate VPN endpoint configuration
-    const isValid = await vpnManager.validateEndpoint();
-    if (!isValid) {
-      const errorMsg = 'VPN endpoint validation failed. Please check configuration.';
-      await slack.sendSlackAlert(errorMsg, ENVIRONMENT, 'critical');
-      
-      return {
-        statusCode: 500,
-        headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*'
-        },
-        body: JSON.stringify({
-          success: false,
-          message: 'VPN endpoint validation failed',
-          error: errorMsg
-        })
-      };
+    // Validate VPN endpoint configuration (skip for check command)
+    if (command.action !== 'check') {
+      const isValid = await vpnManager.validateEndpoint();
+      if (!isValid) {
+        const errorMsg = 'VPN endpoint validation failed. Please check configuration.';
+        await slack.sendSlackAlert(errorMsg, ENVIRONMENT, 'critical');
+        
+        return {
+          statusCode: 500,
+          headers: {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*'
+          },
+          body: JSON.stringify({
+            success: false,
+            message: 'VPN endpoint validation failed',
+            error: errorMsg
+          })
+        };
+      }
     }
 
     // Execute the requested action
@@ -152,8 +154,7 @@ export const handler = async (
           
           // Send success notification
           await slack.sendSlackNotification(
-            `✅ VPN ${ENVIRONMENT} opened by ${command.user}`,
-            `#vpn-${ENVIRONMENT}`
+            `✅ VPN ${ENVIRONMENT} opened by ${command.user}`
           );
           break;
 
@@ -172,8 +173,7 @@ export const handler = async (
           
           // Send success notification
           await slack.sendSlackNotification(
-            `🔴 VPN ${ENVIRONMENT} closed by ${command.user}`,
-            `#vpn-${ENVIRONMENT}`
+            `🔴 VPN ${ENVIRONMENT} closed by ${command.user}`
           );
           break;
 
@@ -338,8 +338,7 @@ async function handleAdminOverride(command: VpnCommandRequest): Promise<VpnComma
       `⏰ **Duration**: 24 hours\n` +
       `⏱️ **Expires**: ${expiryTime.toLocaleString()}\n` +
       `🚫 **Effect**: Auto-close disabled\n` +
-      `📝 **Note**: Use \`/vpn admin clear-override ${ENVIRONMENT}\` to re-enable`,
-      `#vpn-alerts`
+      `📝 **Note**: Use \`/vpn admin clear-override ${ENVIRONMENT}\` to re-enable`
     );
     
     return {
@@ -366,8 +365,7 @@ async function handleClearOverride(command: VpnCommandRequest): Promise<VpnComma
       `✅ **Administrative Override Cleared** ${ENVIRONMENT === 'production' ? '🔴' : '🟡'}\n` +
       `👤 **Admin**: ${command.user}\n` +
       `🔄 **Effect**: Auto-close re-enabled\n` +
-      `⏱️ **Monitoring**: Idle detection resumed`,
-      `#vpn-alerts`
+      `⏱️ **Monitoring**: Idle detection resumed`
     );
     
     return {
@@ -441,8 +439,7 @@ async function handleForceClose(command: VpnCommandRequest): Promise<VpnCommandR
       `👤 **Admin**: ${command.user}\n` +
       `🔧 **Action**: Bypassed all safety mechanisms\n` +
       `🔄 **Cooldown**: Cleared for immediate re-association\n` +
-      `⏱️ **Timestamp**: ${new Date().toLocaleString()}`,
-      `#vpn-alerts`
+      `⏱️ **Timestamp**: ${new Date().toLocaleString()}`
     );
     
     return {

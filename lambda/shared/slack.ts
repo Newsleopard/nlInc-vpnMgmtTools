@@ -168,7 +168,7 @@ function isAuthorizedForProduction(username: string): boolean {
 
 // Generate unique request ID for tracking
 export function generateRequestId(): string {
-  return `vpn-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  return `vpn-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
 }
 
 // Parse administrative commands for Epic 3.2
@@ -479,8 +479,7 @@ export function formatSlackResponse(
 
 // Send notification to Slack webhook
 export async function sendSlackNotification(
-  message: string,
-  channel?: string
+  message: string
 ): Promise<void> {
   try {
     const webhookUrl = await stateStore.readSlackWebhook();
@@ -541,7 +540,7 @@ export async function sendSlackAlert(
                       `**訊息：** ${userFriendlyMessage}\n` +
                       `**時間：** ${formattedTime} (台灣時間)`;
   
-  await sendSlackNotification(alertMessage, '#vpn-alerts');
+  await sendSlackNotification(alertMessage);
 }
 
 /**
