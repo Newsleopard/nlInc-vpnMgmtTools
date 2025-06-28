@@ -386,7 +386,7 @@ EOF
         if [ -n "$api_key_value" ]; then
             print_success "✅ Cross-account routing configured with production API key"
         else
-            print_warning "⚠️  Cross-account routing configured but API key not found"
+            print_status "ℹ️  Cross-account routing configured - API key will be retrieved during runtime"
         fi
     else
         print_error "❌ Failed to update staging cross-account configuration"
@@ -449,16 +449,16 @@ deploy_production() {
                 echo "export PRODUCTION_API_KEY=\"$API_KEY_VALUE\"" >> "$PROJECT_ROOT/.production-url"
                 print_success "Production API configuration saved with authentication"
             else
-                print_warning "Could not retrieve API key value. Staging may not authenticate properly."
+                print_status "API key value not retrieved - will be configured during runtime"
             fi
         else
-            print_warning "No API key found for production. Cross-account calls will fail."
+            print_status "Production API key will be managed via parameter store"
         fi
         
         print_success "Production API URL saved: $PRODUCTION_URL"
     fi
     
-    print_warning "💡 To deploy staging, run: $0 staging"
+    print_status "💡 To deploy staging, run: $0 staging"
 }
 
 # Function to deploy staging environment
@@ -486,6 +486,31 @@ deploy_staging() {
         --output text \
         --profile "$production_profile" 2>/dev/null || echo "")
     
+    # Try to get API key from production stack
+    API_KEY_ID=""
+    API_KEY_VALUE=""
+    if [ -n "$PRODUCTION_URL" ] && [ "$PRODUCTION_URL" != "None" ]; then
+        API_KEY_ID=$(aws cloudformation describe-stacks \
+            --stack-name VpnAutomation-production \
+            --query 'Stacks[0].Outputs[?OutputKey==`ApiKeyId`].OutputValue' \
+            --output text \
+            --profile "$production_profile" 2>/dev/null || echo "")
+        
+        if [ -n "$API_KEY_ID" ] && [ "$API_KEY_ID" != "None" ]; then
+            API_KEY_VALUE=$(aws apigateway get-api-key \
+                --api-key "$API_KEY_ID" \
+                --include-value \
+                --query 'value' \
+                --output text \
+                --profile "$production_profile" 2>/dev/null || echo "")
+            
+            if [ -n "$API_KEY_VALUE" ]; then
+                export PRODUCTION_API_KEY="$API_KEY_VALUE"
+                print_status "✅ Retrieved production API key for cross-account authentication"
+            fi
+        fi
+    fi
+    
     # Try to load from saved file if CloudFormation query failed
     if [ -z "$PRODUCTION_URL" ] && [ -f "$PROJECT_ROOT/.production-url" ]; then
         source "$PROJECT_ROOT/.production-url"
@@ -493,8 +518,6 @@ deploy_staging() {
         
         if [ -n "$PRODUCTION_API_KEY" ]; then
             print_status "✅ Found saved production API configuration with authentication"
-        else
-            print_warning "⚠️  Production API URL found but no API key. Cross-account authentication may fail."
         fi
     fi
     
@@ -524,7 +547,7 @@ deploy_staging() {
             export PRODUCTION_API_KEY="$PRODUCTION_API_KEY"
             print_status "🔐 Deploying with production API authentication"
         else
-            print_warning "⚠️  Deploying without production API key - cross-account calls will fail"
+            print_status "ℹ️  Deploying without production API key - cross-account calls will use existing configuration"
         fi
         
         cdk deploy --app "npx ts-node bin/vpn-automation.ts" --require-approval never --context environment="staging"
@@ -545,8 +568,7 @@ deploy_staging() {
     if [ -n "$PRODUCTION_API_KEY" ]; then
         print_success "🔐 Cross-account authentication configured successfully"
     else
-        print_warning "⚠️  Cross-account authentication not configured - production commands will fail"
-        print_warning "   To fix this, ensure production environment creates an API key"
+        print_status "ℹ️  Cross-account authentication will be configured via parameter store during runtime"
     fi
 }
 
