@@ -560,9 +560,49 @@ deploy_staging() {
     print_status "🔧 Automatically configuring cross-account routing parameters..."
     update_staging_cross_account_config "$profile" "$PRODUCTION_URL" "$production_profile"
     
-    # Also update the Lambda environment variables for immediate effect
-    if [ -n "$PRODUCTION_URL" ] && [ -n "$PRODUCTION_API_KEY" ]; then
-        update_staging_lambda_config "$profile" "$PRODUCTION_URL" "$PRODUCTION_API_KEY"
+    # Always update the Lambda environment variables for immediate effect
+    # Re-fetch production API details to ensure we have the latest configuration
+    print_status "🔄 Re-fetching production API details for Lambda configuration..."
+    
+    local final_production_url=""
+    local final_production_api_key=""
+    
+    # Try to get fresh production API details
+    if [ -n "$production_profile" ]; then
+        final_production_url=$(aws cloudformation describe-stacks \
+            --stack-name VpnAutomation-production \
+            --query 'Stacks[0].Outputs[?OutputKey==`ApiGatewayUrl`].OutputValue' \
+            --output text \
+            --profile "$production_profile" 2>/dev/null || echo "")
+        
+        if [ -n "$final_production_url" ] && [ "$final_production_url" != "None" ]; then
+            final_production_url="${final_production_url}vpn"
+            
+            # Get API key
+            local api_key_id=$(aws cloudformation describe-stacks \
+                --stack-name VpnAutomation-production \
+                --query 'Stacks[0].Outputs[?OutputKey==`ApiKeyId`].OutputValue' \
+                --output text \
+                --profile "$production_profile" 2>/dev/null || echo "")
+            
+            if [ -n "$api_key_id" ] && [ "$api_key_id" != "None" ]; then
+                final_production_api_key=$(aws apigateway get-api-key \
+                    --api-key "$api_key_id" \
+                    --include-value \
+                    --query 'value' \
+                    --output text \
+                    --profile "$production_profile" 2>/dev/null || echo "")
+            fi
+        fi
+    fi
+    
+    # Update Lambda environment variables if we have production details
+    if [ -n "$final_production_url" ] && [ -n "$final_production_api_key" ]; then
+        update_staging_lambda_config "$profile" "$final_production_url" "$final_production_api_key"
+        print_success "✅ Lambda environment variables updated with production API details"
+        export PRODUCTION_API_KEY="$final_production_api_key"  # Update for the status message below
+    else
+        print_status "ℹ️  Lambda will use parameter store for cross-account routing (production API not available)"
     fi
     
     if [ -n "$PRODUCTION_API_KEY" ]; then
