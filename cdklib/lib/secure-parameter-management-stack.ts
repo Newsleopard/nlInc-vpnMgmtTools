@@ -126,7 +126,10 @@ export class SecureParameterManagementStack extends cdk.Stack {
                 'ssm:DeleteParameter'
               ],
               resources: [
-                `arn:aws:ssm:${this.region}:${this.account}:parameter/vpn/${environment}/*`
+                `arn:aws:ssm:${this.region}:${this.account}:parameter/vpn/${environment}/*`,
+                // Legacy parameter paths for backward compatibility
+                `arn:aws:ssm:${this.region}:${this.account}:parameter/vpn/endpoint/conf`,
+                `arn:aws:ssm:${this.region}:${this.account}:parameter/vpn/endpoint/state`
               ]
             }),
             // KMS encrypt/decrypt access for encrypted parameters

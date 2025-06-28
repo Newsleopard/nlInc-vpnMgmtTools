@@ -283,6 +283,59 @@ validate_deployment_environment() {
     return 0
 }
 
+# Function to update staging Lambda environment variables with production API details
+update_staging_lambda_config() {
+    local staging_profile=$1
+    local production_api_endpoint=$2
+    local production_api_key=$3
+    
+    print_status "🔧 Updating staging Lambda environment variables..."
+    
+    # Get the staging Slack handler function name
+    local slack_function_name=$(aws lambda list-functions \
+        --profile "$staging_profile" \
+        --query 'Functions[?contains(FunctionName, `SlackHandler`) && contains(FunctionName, `staging`)].FunctionName' \
+        --output text 2>/dev/null | head -1)
+    
+    if [ -n "$slack_function_name" ]; then
+        print_status "Updating Lambda function: $slack_function_name"
+        
+        # Get current environment variables
+        local current_env=$(aws lambda get-function-configuration \
+            --function-name "$slack_function_name" \
+            --profile "$staging_profile" \
+            --query 'Environment.Variables' \
+            --output json 2>/dev/null)
+        
+        if [ -n "$current_env" ] && [ "$current_env" != "null" ]; then
+            # Update the production API configuration
+            local updated_env=$(echo "$current_env" | jq \
+                --arg endpoint "$production_api_endpoint" \
+                --arg key "$production_api_key" \
+                '.PRODUCTION_API_ENDPOINT = $endpoint | .PRODUCTION_API_KEY = $key')
+            
+            # Apply the updated environment variables
+            aws lambda update-function-configuration \
+                --function-name "$slack_function_name" \
+                --environment "Variables=$updated_env" \
+                --profile "$staging_profile" \
+                --output table \
+                --query 'Environment.Variables.{ProductionEndpoint:PRODUCTION_API_ENDPOINT,ProductionKey:PRODUCTION_API_KEY}' \
+                > /dev/null 2>&1
+            
+            if [ $? -eq 0 ]; then
+                print_success "✅ Lambda environment variables updated successfully"
+            else
+                print_warning "⚠️  Failed to update Lambda environment variables"
+            fi
+        else
+            print_warning "⚠️  Could not retrieve current Lambda environment variables"
+        fi
+    else
+        print_warning "⚠️  Could not find staging Slack handler function"
+    fi
+}
+
 # Function to automatically update staging cross-account configuration
 update_staging_cross_account_config() {
     local staging_profile=$1
@@ -293,7 +346,7 @@ update_staging_cross_account_config() {
     
     # Get production API key value
     local api_key_id=$(aws cloudformation describe-stacks \
-        --stack-name VpnAutomationStack-production \
+        --stack-name VpnAutomation-production \
         --query 'Stacks[0].Outputs[?OutputKey==`ApiKeyId`].OutputValue' \
         --output text \
         --profile "$production_profile" 2>/dev/null || echo "")
@@ -368,7 +421,7 @@ deploy_production() {
     
     # Get production API Gateway URL
     PRODUCTION_URL=$(aws cloudformation describe-stacks \
-        --stack-name VpnAutomationStack-production \
+        --stack-name VpnAutomation-production \
         --query 'Stacks[0].Outputs[?OutputKey==`ApiGatewayUrl`].OutputValue' \
         --output text \
         --profile "$profile" 2>/dev/null || echo "")
@@ -379,7 +432,7 @@ deploy_production() {
         
         # Get API key if it exists
         API_KEY_ID=$(aws cloudformation describe-stacks \
-            --stack-name VpnAutomationStack-production \
+            --stack-name VpnAutomation-production \
             --query 'Stacks[0].Outputs[?OutputKey==`ApiKeyId`].OutputValue' \
             --output text \
             --profile "$profile" 2>/dev/null || echo "")
@@ -428,7 +481,7 @@ deploy_staging() {
     # Try to get production URL from CloudFormation
     local production_profile=${PRODUCTION_PROFILE:-$(get_env_profile "prod" 2>/dev/null || echo "prod")}
     PRODUCTION_URL=$(aws cloudformation describe-stacks \
-        --stack-name VpnAutomationStack-production \
+        --stack-name VpnAutomation-production \
         --query 'Stacks[0].Outputs[?OutputKey==`ApiGatewayUrl`].OutputValue' \
         --output text \
         --profile "$production_profile" 2>/dev/null || echo "")
@@ -484,6 +537,11 @@ deploy_staging() {
     print_status "🔧 Automatically configuring cross-account routing parameters..."
     update_staging_cross_account_config "$profile" "$PRODUCTION_URL" "$production_profile"
     
+    # Also update the Lambda environment variables for immediate effect
+    if [ -n "$PRODUCTION_URL" ] && [ -n "$PRODUCTION_API_KEY" ]; then
+        update_staging_lambda_config "$profile" "$PRODUCTION_URL" "$PRODUCTION_API_KEY"
+    fi
+    
     if [ -n "$PRODUCTION_API_KEY" ]; then
         print_success "🔐 Cross-account authentication configured successfully"
     else
@@ -495,9 +553,50 @@ deploy_staging() {
 # Function to deploy both environments
 deploy_both() {
     print_status "🚀 Deploying both environments..."
+    
+    # Deploy production first to get API details
     deploy_production
     echo ""
+    
+    # Deploy staging with production API configuration
     deploy_staging
+    
+    # Ensure cross-account configuration is properly set up
+    print_status "🔧 Finalizing cross-account configuration..."
+    local production_profile=${PRODUCTION_PROFILE:-$(get_env_profile "prod" 2>/dev/null || echo "prod")}
+    local staging_profile=${STAGING_PROFILE:-$(get_env_profile "staging" 2>/dev/null || echo "default")}
+    
+    # Get production API details
+    local production_url=$(aws cloudformation describe-stacks \
+        --stack-name VpnAutomation-production \
+        --query 'Stacks[0].Outputs[?OutputKey==`VpnControlEndpoint`].OutputValue' \
+        --output text \
+        --profile "$production_profile" 2>/dev/null || echo "")
+    
+    local api_key_id=$(aws cloudformation describe-stacks \
+        --stack-name VpnAutomation-production \
+        --query 'Stacks[0].Outputs[?OutputKey==`ApiKeyId`].OutputValue' \
+        --output text \
+        --profile "$production_profile" 2>/dev/null || echo "")
+    
+    local production_api_key=""
+    if [ -n "$api_key_id" ] && [ "$api_key_id" != "None" ]; then
+        production_api_key=$(aws apigateway get-api-key \
+            --api-key "$api_key_id" \
+            --include-value \
+            --query 'value' \
+            --output text \
+            --profile "$production_profile" 2>/dev/null || echo "")
+    fi
+    
+    # Update staging Lambda environment variables if we have the production details
+    if [ -n "$production_url" ] && [ -n "$production_api_key" ]; then
+        update_staging_lambda_config "$staging_profile" "$production_url" "$production_api_key"
+        print_success "✅ Cross-account routing configured successfully"
+    else
+        print_warning "⚠️  Could not configure cross-account routing - missing production API details"
+    fi
+    
     print_success "🎉 Both environments deployed successfully!"
 }
 
@@ -605,7 +704,7 @@ show_diff() {
         # For staging, we need production URL
         local production_profile=${PRODUCTION_PROFILE:-$(get_env_profile "prod" 2>/dev/null || echo "prod")}
         PRODUCTION_URL=$(aws cloudformation describe-stacks \
-            --stack-name VpnAutomationStack-production \
+            --stack-name VpnAutomation-production \
             --query 'Stacks[0].Outputs[?OutputKey==`ApiGatewayUrl`].OutputValue' \
             --output text \
             --profile "$production_profile" 2>/dev/null || echo "")
@@ -632,7 +731,7 @@ validate_cross_account_routing() {
     local production_profile=${PRODUCTION_PROFILE:-$(get_env_profile "prod" 2>/dev/null || echo "prod")}
     
     # Check if both environments are deployed
-    if ! aws cloudformation describe-stacks --stack-name VpnAutomationStack-production --profile "$production_profile" &> /dev/null; then
+    if ! aws cloudformation describe-stacks --stack-name VpnAutomation-production --profile "$production_profile" &> /dev/null; then
         print_error "Production environment not deployed - cross-account routing will fail"
         return 1
     fi
@@ -644,7 +743,7 @@ validate_cross_account_routing() {
     
     # Get production API URL
     PRODUCTION_URL=$(aws cloudformation describe-stacks \
-        --stack-name VpnAutomationStack-production \
+        --stack-name VpnAutomation-production \
         --query 'Stacks[0].Outputs[?OutputKey==`ApiGatewayUrl`].OutputValue' \
         --output text \
         --profile "$production_profile" 2>/dev/null)
@@ -656,7 +755,7 @@ validate_cross_account_routing() {
     
     # Check if API key exists
     API_KEY_ID=$(aws cloudformation describe-stacks \
-        --stack-name VpnAutomationStack-production \
+        --stack-name VpnAutomation-production \
         --query 'Stacks[0].Outputs[?OutputKey==`ApiKeyId`].OutputValue' \
         --output text \
         --profile "$production_profile" 2>/dev/null || echo "")
@@ -704,10 +803,10 @@ show_status() {
     local production_profile=${PRODUCTION_PROFILE:-$(get_env_profile "prod" 2>/dev/null || echo "prod")}
     
     # Check production
-    if aws cloudformation describe-stacks --stack-name VpnAutomationStack-production --profile "$production_profile" &> /dev/null; then
+    if aws cloudformation describe-stacks --stack-name VpnAutomation-production --profile "$production_profile" &> /dev/null; then
         print_success "✅ Production environment is deployed"
         PRODUCTION_URL=$(aws cloudformation describe-stacks \
-            --stack-name VpnAutomationStack-production \
+            --stack-name VpnAutomation-production \
             --query 'Stacks[0].Outputs[?OutputKey==`ApiGatewayUrl`].OutputValue' \
             --output text \
             --profile "$production_profile" 2>/dev/null)
@@ -781,7 +880,7 @@ deploy_with_secure_parameters() {
         # Get production profile and URL for staging configuration
         local production_profile=${PRODUCTION_PROFILE:-"prod"}
         local production_url=$(aws cloudformation describe-stacks \
-            --stack-name VpnAutomationStack-production \
+            --stack-name VpnAutomation-production \
             --query 'Stacks[0].Outputs[?OutputKey==`ApiGatewayUrl`].OutputValue' \
             --output text \
             --profile "$production_profile" 2>/dev/null || echo "")
@@ -911,7 +1010,7 @@ show_deployment_status() {
     
     # Check production environment
     print_status "Production Environment:"
-    if aws cloudformation describe-stacks --stack-name VpnAutomationStack-production --profile "$production_profile" &> /dev/null; then
+    if aws cloudformation describe-stacks --stack-name VpnAutomation-production --profile "$production_profile" &> /dev/null; then
         print_success "  ✅ VPN Automation Stack: Deployed"
         
         # Check secure parameter stack
