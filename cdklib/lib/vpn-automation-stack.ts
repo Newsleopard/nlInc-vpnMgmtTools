@@ -28,7 +28,7 @@ export class VpnAutomationStack extends cdk.Stack {
     const region = cdk.Stack.of(this).region;
     const account = cdk.Stack.of(this).account;
 
-    // Create shared Lambda layer
+    // Create shared Lambda layer (v2.1 - fixed VPN Monitor logic)
     const sharedLayer = new lambda.LayerVersion(this, 'VpnSharedLayer', {
       code: lambda.Code.fromAsset(path.resolve(__dirname, '../../lambda/shared/layer-package')),
       compatibleRuntimes: [lambda.Runtime.NODEJS_18_X],

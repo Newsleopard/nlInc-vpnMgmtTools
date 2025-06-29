@@ -209,12 +209,16 @@ export async function validateEndpoint(): Promise<boolean> {
     }
     
     const endpoint = endpoints.ClientVpnEndpoints[0];
-    if (endpoint.Status?.Code !== 'available') {
-      console.error(`VPN endpoint ${config.ENDPOINT_ID} is not available. Status: ${endpoint.Status?.Code}`);
+    const status = endpoint.Status?.Code;
+    
+    // Valid statuses: 'available' (open) and 'pending-associate' (closed, no subnets)
+    // Both are valid operational states and should not trigger alerts
+    if (status !== 'available' && status !== 'pending-associate') {
+      console.error(`VPN endpoint ${config.ENDPOINT_ID} is in invalid state. Status: ${status}`);
       return false;
     }
     
-    console.log(`VPN endpoint ${config.ENDPOINT_ID} is valid and available`);
+    console.log(`VPN endpoint ${config.ENDPOINT_ID} is valid. Status: ${status}`);
     return true;
     
   } catch (error) {
