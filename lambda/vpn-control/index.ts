@@ -96,8 +96,11 @@ export const handler = async (
       };
     }
 
-    // Validate environment matches deployment
-    if (command.environment !== ENVIRONMENT) {
+    // Validate environment matches deployment (skip for cost commands which use environment field for report type)
+    const isCostCommand = command.action.startsWith('cost-');
+    const validEnvironments = ['staging', 'production'];
+    
+    if (!isCostCommand && command.environment !== ENVIRONMENT) {
       return {
         statusCode: 400,
         headers: {
@@ -112,8 +115,8 @@ export const handler = async (
       };
     }
 
-    // Validate VPN endpoint configuration (skip for check command)
-    if (command.action !== 'check') {
+    // Validate VPN endpoint configuration (skip for check and cost commands)
+    if (command.action !== 'check' && !isCostCommand) {
       const isValid = await vpnManager.validateEndpoint();
       if (!isValid) {
         const errorMsg = 'VPN endpoint validation failed. Please check configuration.';

@@ -359,11 +359,16 @@ export const handler = async (
     // Route command based on environment
     let response: VpnCommandResponse;
     
-    if (vpnCommand.environment === ENVIRONMENT) {
+    // Cost commands always execute locally since they aggregate data from both environments
+    const isCostCommand = vpnCommand.action.startsWith('cost-');
+    const isLocalCommand = vpnCommand.environment === ENVIRONMENT || isCostCommand;
+    
+    if (isLocalCommand) {
       // Local command - invoke vpn-control Lambda directly
       logger.info('Processing local command', {
-        targetEnvironment: ENVIRONMENT,
-        routingType: 'local_lambda'
+        targetEnvironment: isCostCommand ? 'local_aggregated' : ENVIRONMENT,
+        routingType: 'local_lambda',
+        isCostCommand: isCostCommand
       });
       
       response = await withPerformanceLogging(
@@ -798,11 +803,16 @@ async function processVpnCommandAsync(
     // Route command based on environment
     let response: VpnCommandResponse;
     
-    if (vpnCommand.environment === ENVIRONMENT) {
+    // Cost commands always execute locally since they aggregate data from both environments
+    const isCostCommand = vpnCommand.action.startsWith('cost-');
+    const isLocalCommand = vpnCommand.environment === ENVIRONMENT || isCostCommand;
+    
+    if (isLocalCommand) {
       // Local command - invoke vpn-control Lambda directly
       logger.info('Processing local async command', {
-        targetEnvironment: ENVIRONMENT,
-        routingType: 'local_lambda'
+        targetEnvironment: isCostCommand ? 'local_aggregated' : ENVIRONMENT,
+        routingType: 'local_lambda',
+        isCostCommand: isCostCommand
       });
       
       response = await withPerformanceLogging(
