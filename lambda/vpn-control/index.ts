@@ -80,7 +80,7 @@ export const handler = async (
     }
 
     // Validate action (expanded for Epic 3.2)
-    const validActions = ['open', 'close', 'check', 'admin-override', 'admin-clear-override', 'admin-cooldown', 'admin-force-close', 'cost-savings', 'cost-analysis', 'help'];
+    const validActions = ['open', 'close', 'check', 'admin-noclose', 'admin-autoclose', 'admin-cooldown', 'admin-force-close', 'cost-savings', 'cost-analysis', 'help'];
     if (!validActions.includes(command.action)) {
       return {
         statusCode: 400,
@@ -191,12 +191,12 @@ export const handler = async (
           break;
           
         // Epic 3.2: Administrative commands
-        case 'admin-override':
-          response = await handleAdminOverride(command);
+        case 'admin-noclose':
+          response = await handleAdminNoClose(command);
           break;
           
-        case 'admin-clear-override':
-          response = await handleClearOverride(command);
+        case 'admin-autoclose':
+          response = await handleAdminAutoClose(command);
           break;
           
         case 'admin-cooldown':
@@ -347,8 +347,8 @@ async function recordManualActivity(): Promise<void> {
   }
 }
 
-// Epic 3.2: Handle administrative override command
-async function handleAdminOverride(command: VpnCommandRequest): Promise<VpnCommandResponse> {
+// Epic 3.2: Handle administrative no-close command (disable auto-close)
+async function handleAdminNoClose(command: VpnCommandRequest): Promise<VpnCommandResponse> {
   try {
     const expiryTime = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
     const overrideValue = `enabled:expires:${expiryTime.toISOString()}`;
@@ -357,7 +357,7 @@ async function handleAdminOverride(command: VpnCommandRequest): Promise<VpnComma
     await publishMetric('AdminOverrideEnabled', 1);
     
     await slack.sendSlackNotification({
-      text: "🛑 Administrative Override Enabled",
+      text: "🛡️ Auto-Close Disabled",
       attachments: [{
         color: "warning",
         fields: [
@@ -373,7 +373,7 @@ async function handleAdminOverride(command: VpnCommandRequest): Promise<VpnComma
           },
           {
             title: "⏰ Duration",
-            value: "24 hours",
+            value: "24 hours (auto-expires)",
             short: true
           },
           {
@@ -382,13 +382,13 @@ async function handleAdminOverride(command: VpnCommandRequest): Promise<VpnComma
             short: true
           },
           {
-            title: "🚫 Effect",
-            value: "Auto-close disabled",
+            title: "🔧 Status",
+            value: "Cost optimization suspended",
             short: true
           },
           {
             title: "📝 Note",
-            value: `Use \`/vpn admin clear-override ${ENVIRONMENT}\` to re-enable`,
+            value: `Use \`/vpn admin autoclose ${ENVIRONMENT}\` to re-enable auto-close`,
             short: false
           }
         ]
@@ -397,26 +397,26 @@ async function handleAdminOverride(command: VpnCommandRequest): Promise<VpnComma
     
     return {
       success: true,
-      message: `Administrative override enabled for ${ENVIRONMENT} (expires in 24 hours)`
+      message: `Auto-close disabled for ${ENVIRONMENT} (expires in 24 hours)`
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     return {
       success: false,
-      message: 'Admin override operation failed',
-      error: `Failed to enable admin override: ${errorMessage}`
+      message: 'Disable auto-close operation failed',
+      error: `Failed to disable auto-close: ${errorMessage}`
     };
   }
 }
 
-// Epic 3.2: Handle clear override command
-async function handleClearOverride(command: VpnCommandRequest): Promise<VpnCommandResponse> {
+// Epic 3.2: Handle auto-close command (re-enable auto-close)
+async function handleAdminAutoClose(command: VpnCommandRequest): Promise<VpnCommandResponse> {
   try {
     await stateStore.writeParameter(`/vpn/automation/admin_override/${ENVIRONMENT}`, '');
     await publishMetric('AdminOverrideCleared', 1);
     
     await slack.sendSlackNotification({
-      text: "✅ Administrative Override Cleared",
+      text: "✅ Auto-Close Re-enabled",
       attachments: [{
         color: "good",
         fields: [
@@ -431,8 +431,8 @@ async function handleClearOverride(command: VpnCommandRequest): Promise<VpnComma
             short: true
           },
           {
-            title: "🔄 Effect",
-            value: "Auto-close re-enabled",
+            title: "🔄 Status",
+            value: "Cost optimization active",
             short: true
           },
           {
@@ -446,14 +446,14 @@ async function handleClearOverride(command: VpnCommandRequest): Promise<VpnComma
     
     return {
       success: true,
-      message: `Administrative override cleared for ${ENVIRONMENT}. Auto-close re-enabled.`
+      message: `Auto-close re-enabled for ${ENVIRONMENT}. Cost optimization resumed.`
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     return {
       success: false,
-      message: 'Clear override operation failed',
-      error: `Failed to clear admin override: ${errorMessage}`
+      message: 'Enable auto-close operation failed',
+      error: `Failed to enable auto-close: ${errorMessage}`
     };
   }
 }

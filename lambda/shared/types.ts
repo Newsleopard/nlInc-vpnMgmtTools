@@ -39,7 +39,7 @@ export interface SlackCommand {
 
 // Parsed VPN command (Enhanced for Epic 3.2)
 export interface VpnCommandRequest {
-  action: 'open' | 'close' | 'check' | 'admin-override' | 'admin-clear-override' | 'admin-cooldown' | 'admin-force-close' | 'cost-savings' | 'cost-analysis' | 'help';
+  action: 'open' | 'close' | 'check' | 'admin-noclose' | 'admin-autoclose' | 'admin-cooldown' | 'admin-force-close' | 'cost-savings' | 'cost-analysis' | 'help';
   environment: 'staging' | 'production' | string; // Allow string for report types
   user: string;
   requestId: string;

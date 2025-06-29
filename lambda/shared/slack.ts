@@ -160,7 +160,7 @@ function getHelpMessage(): string {
         fields: [
           {
             title: 'Admin Commands',
-            value: '• `/vpn admin override <env>` - Disable auto-close (24h)\n• `/vpn admin clear-override <env>` - Re-enable auto-close\n• `/vpn admin cooldown <env>` - Check cooldown status\n• `/vpn admin force-close <env>` - Bypass safety mechanisms',
+            value: '• `/vpn admin noclose <env>` - Disable auto-close (24h)\n• `/vpn admin autoclose <env>` - Re-enable auto-close\n• `/vpn admin cooldown <env>` - Check cooldown status\n• `/vpn admin force-close <env>` - Bypass safety mechanisms',
             short: false
           }
         ]
@@ -176,7 +176,7 @@ function getHelpMessage(): string {
           },
           {
             title: '📝 Examples',
-            value: '• `/vpn open staging` - Open staging VPN\n• `/vpn savings production` - View production cost savings\n• `/vpn admin override staging` - Disable auto-close for 24h\n• `/vpn costs daily` - Daily cost breakdown',
+            value: '• `/vpn open staging` - Open staging VPN\n• `/vpn savings production` - View production cost savings\n• `/vpn admin noclose staging` - Disable auto-close for 24h\n• `/vpn costs daily` - Daily cost breakdown',
             short: true
           }
         ]
@@ -208,11 +208,18 @@ export function generateRequestId(): string {
 // Parse administrative commands for Epic 3.2
 function parseAdminCommand(slackCommand: SlackCommand, parts: string[]): VpnCommandRequest {
   const adminAction = parts[1].toLowerCase();
-  const environment = parts[2]?.toLowerCase();
+  let environment = parts[2]?.toLowerCase();
   
   // Validate admin permissions
   if (!isAuthorizedForAdmin(slackCommand.user_name)) {
     throw new Error(`❌ Access denied: User "${slackCommand.user_name}" is not authorized for administrative commands.\n\nContact your system administrator.`);
+  }
+  
+  // Support environment aliases for admin commands
+  if (environment === 'prod' || environment === 'production-env') {
+    environment = 'production';
+  } else if (environment === 'stage' || environment === 'staging-env' || environment === 'dev') {
+    environment = 'staging';
   }
   
   // Validate environment for admin commands
@@ -222,15 +229,18 @@ function parseAdminCommand(slackCommand: SlackCommand, parts: string[]): VpnComm
   
   // Map admin actions to standard format
   const adminActionMap: { [key: string]: string } = {
-    'override': 'admin-override',
-    'clear-override': 'admin-clear-override',
+    'noclose': 'admin-noclose',
+    'autoclose': 'admin-autoclose',
+    // Legacy commands for backward compatibility
+    'override': 'admin-noclose',
+    'clear-override': 'admin-autoclose',
     'cooldown': 'admin-cooldown',
     'force-close': 'admin-force-close'
   };
   
   const mappedAction = adminActionMap[adminAction];
   if (!mappedAction) {
-    throw new Error(`Invalid admin action "${adminAction}". Must be: override, clear-override, cooldown, or force-close`);
+    throw new Error(`Invalid admin action "${adminAction}". Must be: noclose, autoclose, cooldown, or force-close`);
   }
   
   return {
@@ -287,8 +297,8 @@ function formatEnhancedSlackResponse(response: VpnCommandResponse, command: VpnC
   
   // Format different command types
   switch (command.action) {
-    case 'admin-override':
-    case 'admin-clear-override':
+    case 'admin-noclose':
+    case 'admin-autoclose':
     case 'admin-force-close':
       return {
         response_type: 'ephemeral',
