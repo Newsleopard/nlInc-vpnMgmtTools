@@ -7,73 +7,32 @@
 
 # 全域變數
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PARENT_DIR="$(dirname "$SCRIPT_DIR")"
 
-# 載入新的 Profile Selector (替代 env_manager.sh)
-source "$PARENT_DIR/lib/profile_selector.sh"
+# 載入環境管理器 (必須第一個載入)
+source "$SCRIPT_DIR/../lib/env_manager.sh"
 
-# Parse command line arguments
-AWS_PROFILE=""
-TARGET_ENVIRONMENT=""
-SHOW_HELP=false
-
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --profile)
-            AWS_PROFILE="$2"
-            shift 2
-            ;;
-        --environment|-e)
-            TARGET_ENVIRONMENT="$2"
-            shift 2
-            ;;
-        --help|-h)
-            SHOW_HELP=true
-            shift
-            ;;
-        *)
-            break
-            ;;
-    esac
-done
-
-# Show help if requested
-if [[ "$SHOW_HELP" == true ]]; then
-    cat << EOF
-AWS Client VPN 管理員主腳本 for macOS
-
-用途：建立、管理和刪除 AWS Client VPN 端點
-
-使用方法: $0 [OPTIONS]
-
-選項:
-    --profile PROFILE     使用指定的 AWS profile
-    --environment ENV     目標環境 (staging|production)
-    --help               顯示此幫助訊息
-
-範例:
-    $0                              # 互動式 profile 選擇
-    $0 --profile production         # 使用 production profile
-    $0 --environment staging        # 目標 staging 環境
-    $0 --profile prod --environment production
-
-EOF
-    exit 0
-fi
-
-# Select and validate profile
-if ! select_and_validate_profile --profile "$AWS_PROFILE" --environment "$TARGET_ENVIRONMENT"; then
-    log_error "Profile 選擇失敗"
+# 初始化環境
+if ! env_init_for_script "aws_vpn_admin.sh"; then
+    echo -e "${RED}錯誤: 無法初始化環境管理器${NC}"
     exit 1
 fi
 
-# 設定環境感知的配置檔案
+# 驗證 AWS Profile 整合
+echo -e "${BLUE}正在驗證 AWS Profile 設定...${NC}"
+if ! env_validate_profile_integration "$CURRENT_ENVIRONMENT" "true"; then
+    echo -e "${YELLOW}警告: AWS Profile 設定可能有問題，但繼續執行管理員工具${NC}"
+fi
+
+# 設定環境特定路徑
+env_setup_paths
+
+# 環境感知的配置檔案
 # For creation: use environment config (.env) for user-configurable values
 # For management: use endpoint config (.conf) for auto-generated values
-ENV_CONFIG_FILE="$VPN_CONFIG_DIR/${SELECTED_ENVIRONMENT}.env"
-ENDPOINT_CONFIG_FILE="$VPN_CONFIG_DIR/vpn_endpoint.conf"
+ENV_CONFIG_FILE="$VPN_CONFIG_DIR/${CURRENT_ENVIRONMENT}.env"
+ENDPOINT_CONFIG_FILE="$VPN_ENDPOINT_CONFIG_FILE"
 CONFIG_FILE="$ENV_CONFIG_FILE"  # Primary config for creation process
-LOG_FILE="$VPN_LOG_DIR/vpn_admin.log"
+LOG_FILE="$VPN_ADMIN_LOG_FILE"
 
 # 載入核心函式庫
 source "$SCRIPT_DIR/../lib/core_functions.sh"
@@ -112,7 +71,7 @@ show_menu() {
     
     # 顯示 AWS Profile 資訊
     local current_profile
-    current_profile="$SELECTED_AWS_PROFILE"
+    current_profile=$(env_get_profile "$CURRENT_ENVIRONMENT" 2>/dev/null)
     if [[ -n "$current_profile" ]]; then
         # 獲取 AWS 帳戶資訊
         if command -v aws &> /dev/null && aws configure list-profiles | grep -q "^$current_profile$"; then
@@ -130,7 +89,7 @@ show_menu() {
             fi
             
             # 驗證 profile 匹配環境
-            if validate_profile_account "$current_profile" "$SELECTED_ENVIRONMENT" 2>/dev/null; then
+            if validate_profile_matches_environment "$current_profile" "$CURRENT_ENVIRONMENT" 2>/dev/null; then
                 echo -e "  狀態: ${GREEN}✓ 有效且匹配環境${NC}"
             else
                 echo -e "  狀態: ${YELLOW}⚠ 有效但可能不匹配環境${NC}"
@@ -321,7 +280,7 @@ create_vpn_endpoint() {
     
     # 創建專用安全群組
     local client_vpn_sg_id
-    client_vpn_sg_id=$(create_dedicated_client_vpn_security_group "$vpc_id" "$AWS_REGION" "$SELECTED_ENVIRONMENT")
+    client_vpn_sg_id=$(create_dedicated_client_vpn_security_group "$vpc_id" "$AWS_REGION" "$CURRENT_ENVIRONMENT")
     
     if [ $? -ne 0 ] || [ -z "$client_vpn_sg_id" ]; then
         echo -e "${RED}錯誤: 無法創建專用的 Client VPN 安全群組${NC}"
@@ -341,7 +300,7 @@ create_vpn_endpoint() {
         echo -e "${GREEN}✓ Security Groups: $security_groups${NC}"
         
         # 立即保存 CLIENT_VPN_SECURITY_GROUP_ID 到 VPN 端點配置文件 (.conf)
-        local vpn_endpoint_conf="$PROJECT_ROOT/configs/${SELECTED_ENVIRONMENT}/vpn_endpoint.conf"
+        local vpn_endpoint_conf="$PROJECT_ROOT/configs/${CURRENT_ENVIRONMENT}/vpn_endpoint.conf"
         if [ -f "$vpn_endpoint_conf" ]; then
             update_config "$vpn_endpoint_conf" "CLIENT_VPN_SECURITY_GROUP_ID" "$client_vpn_sg_id"
             echo -e "${GREEN}✓ CLIENT_VPN_SECURITY_GROUP_ID 已保存到 vpn_endpoint.conf: $client_vpn_sg_id${NC}"
@@ -386,14 +345,14 @@ create_vpn_endpoint() {
     update_config "$CONFIG_FILE" "ENDPOINT_ID" "$ENDPOINT_ID"
     
     # 同時更新環境配置文件中的 ENDPOINT_ID
-    local env_config_file="$CONFIG_DIR/${SELECTED_ENVIRONMENT}.env"
+    local env_config_file="$CONFIG_DIR/${CURRENT_ENVIRONMENT}.env"
     if [ -f "$env_config_file" ]; then
         update_config "$env_config_file" "ENDPOINT_ID" "$ENDPOINT_ID"
         echo -e "${GREEN}✓ ENDPOINT_ID 已保存到環境配置: $ENDPOINT_ID${NC}"
         
         # 同時確保 CLIENT_VPN_SECURITY_GROUP_ID 保存到 vpn_endpoint.conf (如果存在且尚未保存)
         if [ -n "$client_vpn_sg_id" ]; then
-            local vpn_endpoint_conf="$PROJECT_ROOT/configs/${SELECTED_ENVIRONMENT}/vpn_endpoint.conf"
+            local vpn_endpoint_conf="$PROJECT_ROOT/configs/${CURRENT_ENVIRONMENT}/vpn_endpoint.conf"
             if [ -f "$vpn_endpoint_conf" ]; then
                 # 檢查是否已經保存過
                 if ! grep -q "CLIENT_VPN_SECURITY_GROUP_ID=\"$client_vpn_sg_id\"" "$vpn_endpoint_conf"; then
@@ -461,7 +420,7 @@ create_vpn_endpoint() {
     echo -e "${CYAN}========================================================${NC}"
     echo
     echo -e "${YELLOW}📋 下一步操作：${NC}"
-    echo -e "1️⃣ ${BLUE}檢查生成的腳本${NC}：${YELLOW}security_group_commands_${SELECTED_ENVIRONMENT}.sh${NC}"
+    echo -e "1️⃣ ${BLUE}檢查生成的腳本${NC}：${YELLOW}security_group_commands_${CURRENT_ENVIRONMENT}.sh${NC}"
     echo -e "2️⃣ ${BLUE}編輯並執行腳本${NC}：配置服務訪問權限"
     echo -e "3️⃣ ${BLUE}生成客戶端證書${NC}：使用 ${CYAN}./team_member_setup.sh${NC}"
     echo -e "4️⃣ ${BLUE}測試 VPN 連接${NC}：驗證設定是否正確"
@@ -612,7 +571,7 @@ delete_vpn_endpoint() {
     # 🚨 安全確認：顯示即將刪除的資源信息
     echo -e "\\n${RED}⚠️ 警告：您即將刪除以下 VPN 端點和相關資源：${NC}"
     echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${CYAN}環境:${NC} ${SELECTED_ENVIRONMENT}"
+    echo -e "${CYAN}環境:${NC} ${CURRENT_ENVIRONMENT}"
     echo -e "${CYAN}端點 ID:${NC} ${ENDPOINT_ID}"
     echo -e "${CYAN}VPN 名稱:${NC} ${VPN_NAME:-未知}"
     echo -e "${CYAN}AWS 區域:${NC} ${AWS_REGION}"
@@ -657,7 +616,7 @@ delete_vpn_endpoint() {
     done
     
     # 第二層確認：環境特定確認（生產環境需要額外確認）
-    if [ "$SELECTED_ENVIRONMENT" = "production" ]; then
+    if [ "$CURRENT_ENVIRONMENT" = "production" ]; then
         echo -e "\\n${RED}⚠️ 生產環境額外確認：${NC}"
         echo -e "${RED}您正在刪除 ${YELLOW}生產環境${RED} 的 VPN 端點！${NC}"
         echo -e "${RED}這可能會影響正在工作的團隊成員！${NC}"
@@ -1150,7 +1109,7 @@ manage_aws_profiles() {
         
         # 顯示當前環境的 profile 狀態
         echo -e "${CYAN}當前環境 Profile 狀態:${NC}"
-        echo "$SELECTED_AWS_PROFILE"
+        env_get_profile "$CURRENT_ENVIRONMENT" true
         echo ""
         
         echo -e "${BLUE}Profile 管理選項:${NC}"
@@ -1168,19 +1127,12 @@ manage_aws_profiles() {
         case "$profile_choice" in
             1)
                 # 設定當前環境的 AWS Profile
-                echo -e "\n${CYAN}=== 設定 $SELECTED_ENVIRONMENT 環境的 AWS Profile ===${NC}"
+                echo -e "\n${CYAN}=== 設定 $CURRENT_ENVIRONMENT 環境的 AWS Profile ===${NC}"
                 local selected_profile
-                selected_profile=$(select_profile_interactive "$SELECTED_ENVIRONMENT")
+                selected_profile=$(select_aws_profile_for_environment "$CURRENT_ENVIRONMENT")
                 if [[ $? -eq 0 ]] && [[ -n "$selected_profile" ]]; then
-                    # Validate the newly selected profile
-                    if validate_profile_account "$selected_profile" "$SELECTED_ENVIRONMENT"; then
-                        # Update global variables
-                        SELECTED_AWS_PROFILE="$selected_profile"
-                        export AWS_PROFILE="$selected_profile"
-                        echo -e "\n${GREEN}✅ Profile 設定完成${NC}"
-                    else
-                        echo -e "\n${RED}錯誤: Profile 驗證失敗${NC}"
-                    fi
+                    env_set_profile "$CURRENT_ENVIRONMENT" "$selected_profile"
+                    echo -e "\n${GREEN}✅ Profile 設定完成${NC}"
                 else
                     echo -e "\n${YELLOW}Profile 設定已取消${NC}"
                 fi
@@ -1190,7 +1142,7 @@ manage_aws_profiles() {
             2)
                 # 驗證 Profile 整合
                 echo -e "\n${CYAN}=== 驗證 Profile 整合 ===${NC}"
-                validate_profile_account "$SELECTED_AWS_PROFILE" "$SELECTED_ENVIRONMENT"
+                env_validate_profile_integration "$CURRENT_ENVIRONMENT" true
                 echo -e "\n${YELLOW}按任意鍵繼續...${NC}"
                 read -n 1
                 ;;
@@ -1204,12 +1156,7 @@ manage_aws_profiles() {
                         if [[ -f "$env_file" ]]; then
                             source "$env_file"
                             echo -e "\n${ENV_ICON:-⚪} ${ENV_DISPLAY_NAME:-$env_name}:"
-                            local detected_profile=$(get_profile_for_environment "$env_name" 2>/dev/null)
-                            if [[ -n "$detected_profile" ]]; then
-                                echo -e "  Profile: $detected_profile"
-                            else
-                                echo -e "  ${YELLOW}未設定 Profile${NC}"
-                            fi
+                            env_get_profile "$env_name" true 2>/dev/null || echo -e "  ${YELLOW}未設定 Profile${NC}"
                         fi
                     fi
                 done
@@ -1259,12 +1206,7 @@ manage_aws_profiles() {
                         local env_file="$env_dir/${env_name}.env"
                         if [[ -f "$env_file" ]]; then
                             echo -e "\n=== $env_name 環境 ==="
-                            local env_profile=$(get_profile_for_environment "$env_name" 2>/dev/null)
-                            if [[ -n "$env_profile" ]]; then
-                                validate_profile_account "$env_profile" "$env_name"
-                            else
-                                echo -e "${YELLOW}無可用的 Profile 用於 $env_name 環境${NC}"
-                            fi
+                            env_validate_profile_integration "$env_name" true
                         fi
                     fi
                 done
