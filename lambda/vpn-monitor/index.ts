@@ -15,10 +15,23 @@ const COOLDOWN_MINUTES = Number(process.env.COOLDOWN_MINUTES || 30);
 const BUSINESS_HOURS_ENABLED = process.env.BUSINESS_HOURS_PROTECTION !== 'false';
 const BUSINESS_HOURS_TIMEZONE = process.env.BUSINESS_HOURS_TIMEZONE || 'UTC';
 
+// Warming detection helper function
+const isWarmingRequest = (event: any): boolean => {
+  return event.source === 'aws.events' && 
+         event['detail-type'] === 'Scheduled Event' &&
+         event.detail?.warming === true;
+};
+
 export const handler = async (
   event: ScheduledEvent,
   context: Context
 ): Promise<void> => {
+  // Handle warming requests
+  if (isWarmingRequest(event)) {
+    console.log('Warming request received - VPN monitor is now warm');
+    return;
+  }
+
   // Initialize structured logger for Epic 4.1
   const logger = createLogger({
     requestId: context.awsRequestId,

@@ -11,10 +11,32 @@ import { createLogger, extractLogContext, withPerformanceLogging } from '/opt/no
 const cloudwatch = new CloudWatchClient({});
 const ENVIRONMENT = process.env.ENVIRONMENT || 'staging';
 
+// Warming detection helper function
+const isWarmingRequest = (event: any): boolean => {
+  return event.source === 'aws.events' && 
+         event['detail-type'] === 'Scheduled Event' &&
+         event.detail?.warming === true;
+};
+
 export const handler = async (
   event: APIGatewayProxyEvent,
   context: Context
 ): Promise<APIGatewayProxyResult> => {
+  // Handle warming requests
+  if (isWarmingRequest(event)) {
+    console.log('Warming request received - VPN control is now warm');
+    return {
+      statusCode: 200,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: 'VPN control warmed successfully',
+        functionName: context.functionName,
+        timestamp: new Date().toISOString(),
+        environment: ENVIRONMENT
+      })
+    };
+  }
+
   // Initialize structured logger for Epic 4.1
   const logContext = extractLogContext(event, context, 'vpn-control');
   const logger = createLogger(logContext);

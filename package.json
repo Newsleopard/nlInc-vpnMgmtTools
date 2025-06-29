@@ -1,0 +1,48 @@
+{
+  "name": "aws-client-vpn-automation",
+  "version": "3.0.0",
+  "description": "Automated AWS Client VPN management system with dual-environment support, cost optimization, and Slack integration",
+  "main": "index.js",
+  "scripts": {
+    "build": "cd lambda && npm run build",
+    "test": "cd lambda && npm test",
+    "deploy:staging": "./scripts/deploy.sh staging",
+    "deploy:production": "./scripts/deploy.sh production",
+    "deploy:both": "./scripts/deploy.sh both"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-username/aws-client-vpn-automation.git"
+  },
+  "keywords": [
+    "aws",
+    "client-vpn",
+    "automation",
+    "cost-optimization",
+    "slack",
+    "serverless",
+    "infrastructure",
+    "devops",
+    "typescript",
+    "lambda"
+  ],
+  "author": "Community Contributors",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/your-username/aws-client-vpn-automation/issues"
+  },
+  "homepage": "https://github.com/your-username/aws-client-vpn-automation#readme",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "os": [
+    "darwin"
+  ],
+  "dependencies": {},
+  "devDependencies": {},
+  "directories": {
+    "doc": "docs",
+    "lib": "lib",
+    "test": "tests"
+  }
+}

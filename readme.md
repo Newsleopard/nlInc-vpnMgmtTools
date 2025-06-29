@@ -23,7 +23,7 @@ AWS Client VPN 雙環境管理自動化系統是一個專為企業設計的全�
 
 **AWS Client VPN 自動化系統成本分析：**
 
-基於實際使用場景（4 位後端工程師，實際使用頻率）：
+基於實際使用場景（典型小型開發團隊，實際使用頻率）：
 - **Staging 環境**：主要用於整合測試、AWS 服務升級、新功能更新（每次1-2人使用）
 - **Production 環境**：僅用於功能升級和除錯（每次1-2人使用）
 
@@ -233,19 +233,31 @@ AWS定價：
 
 ## 🤝 貢獻指南
 
-歡迎提交問題報告和功能建議：
-- Issue 追蹤：GitHub Issues
-- 文件改進：提交 Pull Request
-- 功能討論：Slack #vpn-automation 頻道
+歡迎提交問題報告和功能建議！
+
+### 如何貢獻
+- **問題回報**：使用 [GitHub Issues](https://github.com/your-username/aws-client-vpn-automation/issues)
+- **功能建議**：提交 [Feature Request](https://github.com/your-username/aws-client-vpn-automation/issues/new)
+- **程式碼貢獻**：提交 [Pull Request](https://github.com/your-username/aws-client-vpn-automation/pulls)
+- **文件改進**：協助改善文件和範例
+
+### 開發指南
+請參閱 [CONTRIBUTING.md](CONTRIBUTING.md) 了解詳細的貢獻指南。
+
+### 社群支援
+- 📖 [文件](docs/)
+- 💬 [GitHub Discussions](https://github.com/your-username/aws-client-vpn-automation/discussions)
+- 🐛 [問題追蹤](https://github.com/your-username/aws-client-vpn-automation/issues)
+- 🔒 [安全政策](SECURITY.md)
 
 ## 📄 授權
 
-本專案採用內部專有授權，僅供組織內部使用。
+本專案採用 MIT 授權條款，歡迎自由使用、修改和分發。詳見 [LICENSE](LICENSE) 文件。
 
 ---
 
 **版本**：3.0  
 **最後更新**：2025-06-29  
-**維護團隊**：DevOps Team
+**維護團隊**：Community Contributors
 
 > 💡 **提示**：如需快速上手，請先閱讀[使用者手冊](docs/user-manual.md)。如需深入了解系統架構，請參考[系統技術詳解](docs/technical-reference.md)。

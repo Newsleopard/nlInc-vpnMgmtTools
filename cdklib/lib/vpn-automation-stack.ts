@@ -356,6 +356,75 @@ export class VpnAutomationStack extends cdk.Stack {
       sourceArn: monitoringRule.ruleArn
     });
 
+    // Lambda Warming Infrastructure
+    // Business hours warming rule (9 AM - 6 PM Taiwan time, Mon-Fri)
+    const businessHoursWarmingRule = new events.Rule(this, 'BusinessHoursWarmingRule', {
+      schedule: events.Schedule.expression('rate(3 minutes)'),
+      description: `Business hours Lambda warming for ${environment} environment`,
+      enabled: true
+    });
+
+    // Off-hours warming rule (6 PM - 9 AM Taiwan time, Mon-Fri)
+    const offHoursWarmingRule = new events.Rule(this, 'OffHoursWarmingRule', {
+      schedule: events.Schedule.expression('rate(15 minutes)'),
+      description: `Off-hours Lambda warming for ${environment} environment`,
+      enabled: true
+    });
+
+    // Weekend warming rule (Sat-Sun, all day)
+    const weekendWarmingRule = new events.Rule(this, 'WeekendWarmingRule', {
+      schedule: events.Schedule.expression('rate(30 minutes)'),
+      description: `Weekend Lambda warming for ${environment} environment`,
+      enabled: true
+    });
+
+    // Warming event payload
+    const warmingEventPayload = {
+      source: 'aws.events',
+      'detail-type': 'Scheduled Event',
+      detail: {
+        warming: true,
+        environment: environment,
+        timestamp: '{{aws.events.scheduled-time}}'
+      }
+    };
+
+    // Add all Lambda functions as targets for each warming rule
+    const lambdaFunctions = [slackHandler, vpnControl, vpnMonitor];
+
+    lambdaFunctions.forEach((lambdaFunction, index) => {
+      // Business hours warming
+      businessHoursWarmingRule.addTarget(new targets.LambdaFunction(lambdaFunction, {
+        event: events.RuleTargetInput.fromObject(warmingEventPayload)
+      }));
+      
+      // Off-hours warming
+      offHoursWarmingRule.addTarget(new targets.LambdaFunction(lambdaFunction, {
+        event: events.RuleTargetInput.fromObject(warmingEventPayload)
+      }));
+      
+      // Weekend warming
+      weekendWarmingRule.addTarget(new targets.LambdaFunction(lambdaFunction, {
+        event: events.RuleTargetInput.fromObject(warmingEventPayload)
+      }));
+      
+      // Grant CloudWatch Events permission to invoke each Lambda for warming
+      lambdaFunction.addPermission(`AllowBusinessHoursWarmingInvoke${index}`, {
+        principal: new iam.ServicePrincipal('events.amazonaws.com'),
+        sourceArn: businessHoursWarmingRule.ruleArn
+      });
+      
+      lambdaFunction.addPermission(`AllowOffHoursWarmingInvoke${index}`, {
+        principal: new iam.ServicePrincipal('events.amazonaws.com'),
+        sourceArn: offHoursWarmingRule.ruleArn
+      });
+      
+      lambdaFunction.addPermission(`AllowWeekendWarmingInvoke${index}`, {
+        principal: new iam.ServicePrincipal('events.amazonaws.com'),
+        sourceArn: weekendWarmingRule.ruleArn
+      });
+    });
+
     // Epic 4.1: Enhanced CloudWatch log groups with custom retention
     const slackHandlerLogGroup = new logs.LogGroup(this, 'SlackHandlerLogGroup', {
       logGroupName: `/aws/lambda/${slackHandler.functionName}`,
@@ -398,6 +467,54 @@ export class VpnAutomationStack extends cdk.Stack {
           slackHandler.metricErrors(),
           vpnControl.metricErrors(),
           vpnMonitor.metricErrors()
+        ],
+        period: cdk.Duration.minutes(5)
+      })
+    );
+
+    // Add Lambda warming metrics
+    dashboard.addWidgets(
+      new cloudwatch.GraphWidget({
+        title: 'Lambda Warming Metrics',
+        left: [
+          new cloudwatch.Metric({
+            namespace: 'AWS/Lambda',
+            metricName: 'Invocations',
+            dimensionsMap: { FunctionName: slackHandler.functionName },
+            label: 'Slack Handler Invocations'
+          }),
+          new cloudwatch.Metric({
+            namespace: 'AWS/Lambda',
+            metricName: 'Invocations',
+            dimensionsMap: { FunctionName: vpnControl.functionName },
+            label: 'VPN Control Invocations'
+          }),
+          new cloudwatch.Metric({
+            namespace: 'AWS/Lambda',
+            metricName: 'Invocations',
+            dimensionsMap: { FunctionName: vpnMonitor.functionName },
+            label: 'VPN Monitor Invocations'
+          })
+        ],
+        period: cdk.Duration.minutes(5)
+      }),
+      new cloudwatch.GraphWidget({
+        title: 'Lambda Cold Start Metrics',
+        left: [
+          new cloudwatch.Metric({
+            namespace: 'AWS/Lambda',
+            metricName: 'Duration',
+            dimensionsMap: { FunctionName: slackHandler.functionName },
+            statistic: 'Maximum',
+            label: 'Slack Handler Max Duration'
+          }),
+          new cloudwatch.Metric({
+            namespace: 'AWS/Lambda',
+            metricName: 'Duration',
+            dimensionsMap: { FunctionName: vpnControl.functionName },
+            statistic: 'Maximum',
+            label: 'VPN Control Max Duration'
+          })
         ],
         period: cdk.Duration.minutes(5)
       })
@@ -630,6 +747,26 @@ export class VpnAutomationStack extends cdk.Stack {
         crossAccount: 'fields @timestamp, message, metadata | filter message like /cross.account/ | sort @timestamp desc'
       }),
       description: 'Pre-built CloudWatch Log Insights queries for troubleshooting'
+    });
+
+    // Lambda Warming Configuration Outputs
+    new cdk.CfnOutput(this, 'LambdaWarmingStrategy', {
+      value: JSON.stringify({
+        businessHours: '3 minutes (9 AM - 6 PM Taiwan)',
+        offHours: '15 minutes (6 PM - 9 AM Taiwan)',
+        weekend: '30 minutes (Sat-Sun all day)',
+        estimatedMonthlyCost: '$8-12'
+      }),
+      description: 'Lambda warming configuration and schedule'
+    });
+
+    new cdk.CfnOutput(this, 'WarmingRuleArns', {
+      value: JSON.stringify({
+        businessHours: businessHoursWarmingRule.ruleArn,
+        offHours: offHoursWarmingRule.ruleArn,
+        weekend: weekendWarmingRule.ruleArn
+      }),
+      description: 'CloudWatch Events rule ARNs for Lambda warming'
     });
 
     new cdk.CfnOutput(this, 'VpnControlEndpoint', {
