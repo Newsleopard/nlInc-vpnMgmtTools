@@ -79,6 +79,78 @@ logs/
 
 ---
 
+## Serverless Architecture: Lambda and SSM Integration
+
+### Investigation Summary
+
+The AWS Systems Manager (SSM) Parameter Store is the central nervous system for this serverless application. It externalizes all configuration, secrets, and state, allowing the three core Lambda functions (`slack-handler`, `vpn-control`, `vpn-monitor`) to be stateless and environment-agnostic. The key is that while the code is identical in both `staging` and `production` environments, the SSM parameters they read are scoped to their respective AWS accounts, which dictates their behavior.
+
+Interaction is managed almost exclusively by a shared module: `lambda/shared/secureParameterManager.ts`. This module provides a consistent, secure interface for all other functions to read (and occasionally write) parameters, handling decryption of `SecureString` values automatically.
+
+### Lambda Function Deep Dive & SSM Interaction
+
+| Function | Purpose | SSM Read Parameters | SSM Write Parameters |
+| :--- | :--- | :--- | :--- |
+| **`slack-handler`** | Entry point for all Slack commands. Validates and dispatches user requests. | `/vpn/slack/signing_secret`<br>`/vpn/slack/bot_token`<br>`/vpn/cross_account/config` (Staging only) | None |
+| **`vpn-control`** | Executes core VPN actions (start, stop, check status). | `/vpn/endpoint/conf`<br>`/vpn/state/manual_override` | `/vpn/state/last_manual_activity`<br>`/vpn/state/manual_override` |
+| **`vpn-monitor`** | Runs periodically to enforce policies, primarily shutting down idle VPNs to save costs. | `/vpn/endpoint/conf`<br>`/vpn/monitor/config`<br>`/vpn/state/last_manual_activity` | None |
+
+### Cross-Account Data Flow: `/vpn check prod`
+
+This sequence diagram illustrates how a command issued in a `staging`-monitored channel can securely trigger an action in the `production` environment.
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Slack
+    participant Staging_Slack_Handler as Staging<br>slack-handler
+    participant Staging_SSM as Staging<br>SSM
+    participant Prod_VPN_Control as Production<br>vpn-control
+    participant Prod_SSM as Production<br>SSM
+    participant Prod_VPN_Service as Production<br>AWS VPN Service
+
+    User->>+Slack: /vpn check prod
+    Slack->>+Staging_Slack_Handler: POST Webhook
+    Staging_Slack_Handler->>+Staging_SSM: GetParameter (/vpn/slack/signing_secret)
+    Staging_SSM-->>-Staging_Slack_Handler: Return secret
+    Note over Staging_Slack_Handler: Validate & Parse Command
+    Staging_Slack_Handler->>+Staging_SSM: GetParameter (/vpn/cross_account/config)
+    Staging_SSM-->>-Staging_Slack_Handler: Return Prod API Endpoint URL
+    Staging_Slack_Handler->>+Prod_VPN_Control: Invoke API (command: "check")
+    Prod_VPN_Control->>+Prod_SSM: GetParameter (/vpn/endpoint/conf)
+    Prod_SSM-->>-Prod_VPN_Control: Return Prod Endpoint ID
+    Prod_VPN_Control->>+Prod_VPN_Service: DescribeClientVpnConnections()
+    Prod_VPN_Service-->>-Prod_VPN_Control: Return Connection Status
+    Prod_VPN_Control->>+Prod_SSM: GetParameter (/vpn/slack/bot_token)
+    Prod_SSM-->>-Prod_VPN_Control: Return Prod Bot Token
+    Prod_VPN_Control->>+Slack: Post Message (via Webhook/API)
+    Slack->>-User: Display "Production VPN Status: ..."
+```
+
+### The Role of Lambda Environment Variables: Bootstrap Context
+
+While SSM Parameter Store holds the *dynamic, real-time* configuration, Lambda **environment variables** provide the function with its static **bootstrap context**. They tell the function *who it is*, not what to do. This is a serverless best practice that separates volatile application configuration from the stable function identity.
+
+*   **SSM Parameters answer:** "What is the current idle timeout for the production VPN?"
+*   **Environment Variables answer:** "You are the `vpn-monitor` function running in the `production` environment."
+
+The primary roles of environment variables in this project are:
+
+1.  **Environment Identification (Most Critical):** An environment variable (e.g., `APP_ENV`) is set to `"staging"` or `"production"` during deployment. The function reads this variable first to construct the correct SSM parameter paths (e.g., `/vpn/${process.env.APP_ENV}/monitor/config`).
+2.  **Logging and Observability:** Used to set values like `LOG_LEVEL` (e.g., `INFO`, `DEBUG`) to control log verbosity differently for each environment without a code change.
+3.  **Node.js Environment:** The standard `NODE_ENV` variable is set to `"production"` to signal to libraries that the code is running in a deployed, optimized state.
+
+#### Summary: Static vs. Dynamic Configuration
+
+This creates a clean separation between the two types of configuration:
+
+| Type                       | Stored In               | Purpose                                              | Example                               | When does it change?         |
+| :------------------------- | :---------------------- | :--------------------------------------------------- | :------------------------------------ | :--------------------------- |
+| **Static Bootstrap Context** | **Environment Variables** | Tells the function its identity and how to behave.   | `APP_ENV="production"`                | Only when redeployed.        |
+| **Dynamic App Config**     | **SSM Parameter Store** | Tells the function what business logic to execute. | `/vpn/monitor/config` (JSON object) | Can change at any time.      |
+
+---
+
 ## 環境管理簡介
 
 本工具套件提供 `admin-tools/vpn_env.sh` 作為環境管理的主要入口點。它允許用戶進行核心的環境操作，如：
@@ -908,6 +980,25 @@ aws sts get-caller-identity --profile default
 /vpn check staging
 /vpn check production
 ```
+
+**5.3 Slack App Request URL 更新時機**
+
+由於系統的智能路由設計，Slack App 的 **Request URL** 組態非常穩定。您**不**需要在以下常見操作後更新它：
+- **更新 Lambda 函數程式碼**：`./scripts/deploy.sh staging`
+- **重新部署 `production` 環境**
+- **變更任何 SSM 中的參數**
+
+您**唯一**需要更新 Slack App 中 Request URL 的情況是：
+
+**當 `staging` 環境的 API Gateway 被完全摧毀並重新建立時。**
+
+這通常只會在執行 `cdk destroy` 後再重新部署 `staging` 環境時發生。
+
+**更新流程：**
+1.  **取得新 URL**：部署完成後，執行 `./scripts/deploy.sh status` 來取得新的 `staging` API Gateway URL。
+2.  **更新 Slack App**：
+    - 前往 `https://api.slack.com/apps/{YOUR_APP_ID}/slash-commands`
+    - 編輯 `/vpn` 指令，將新的 URL 貼到 **Request URL** 欄位並儲存。
 
 #### **步驟 6: 系統驗證與測試**
 

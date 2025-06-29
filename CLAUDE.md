@@ -633,3 +633,26 @@ lambda/
     ├── types.js
     └── vpnManager.js
 ```
+
+### Lambda and SSM Configuration Strategy
+
+This serverless application uses a best-practice approach to configuration, separating the function's identity from its operational parameters.
+
+- **SSM Parameter Store for Dynamic Configuration**: All operational parameters (VPN endpoint IDs, idle timeouts, Slack tokens) are stored in SSM. Lambda functions fetch these values **at runtime** on every invocation. This allows for real-time configuration changes without needing to redeploy the function.
+
+- **Lambda Environment Variables for Static Context**: Environment variables (e.g., `APP_ENV`) are set during deployment to give the function its **bootstrap identity**. The function reads `process.env.APP_ENV` (`staging` or `production`) to know which set of SSM parameters to query. This makes the Lambda code itself environment-agnostic.
+
+### Slack App Request URL Maintenance
+
+The Slack App's Request URL for the `/vpn` command is highly stable due to the smart-routing architecture. It only needs to be updated in one specific scenario:
+
+- **When to Update**: You MUST update the URL if the **`staging` API Gateway is completely destroyed and recreated** (e.g., via `cdk destroy` followed by a new deployment). This action generates a new, unique API Gateway URL.
+
+- **When NOT to Update**: You DO NOT need to update the URL for most common operations, including:
+    - Redeploying Lambda function code.
+    - Redeploying the `production` environment stack.
+    - Changing any configuration values in SSM.
+
+**Update Process**:
+1. Run `./scripts/deploy.sh status` to get the new `staging` API Gateway URL.
+2. Go to your Slack App settings (`https://api.slack.com/apps/.../slash-commands`), edit the `/vpn` command, and paste the new URL into the **Request URL** field.
