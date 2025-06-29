@@ -184,7 +184,7 @@ function getHelpMessage(): string {
       {
         color: '#764FA5',
         title: '🤖 Auto-Cost Optimization',
-        text: '• Idle VPNs auto-close after 54 minutes (configurable)\n• Business hours protection (9 AM - 6 PM)\n• 30-minute cooldown prevents rapid cycling\n• Manual activity detection (15-min grace period)\n• Real-time cost savings tracking (~$0.10/hour per subnet)',
+        text: '• Idle VPNs auto-close after 54 minutes (configurable)\n• Business hours protection (9 AM - 6 PM)\n• 30-minute cooldown prevents rapid cycling\n• Manual activity detection (15-min grace period)\n• Prevents 24/7 waste: saves ~$1.80/day per environment',
         footer: 'VPN Automation System'
       }
     ]
@@ -344,18 +344,23 @@ function formatEnhancedSlackResponse(response: VpnCommandResponse, command: VpnC
       const savingsData = response.data as any;
       return {
         response_type: 'in_channel',
-        text: `💰 Cost Savings Report - ${savingsData.environment}`,
+        text: `💰 Waste Prevention Report - ${savingsData.environment}`,
         attachments: [{
           color: 'good',
           fields: [
             {
-              title: 'Today\'s Savings',
+              title: 'Today\'s Waste Prevented',
               value: `$${savingsData.todaySavings}`,
               short: true
             },
             {
-              title: 'Total Savings',
+              title: 'Total Waste Prevented',
               value: `$${savingsData.cumulativeSavings}`,
+              short: true
+            },
+            {
+              title: 'Theoretical Daily Savings',
+              value: `$${savingsData.theoreticalDailySavings || '0.00'}`,
               short: true
             },
             {
@@ -364,12 +369,17 @@ function formatEnhancedSlackResponse(response: VpnCommandResponse, command: VpnC
               short: true
             },
             {
-              title: 'Potential Hourly Savings',
+              title: 'Hourly Waste Rate',
               value: `$${savingsData.potentialHourlySavings}/hour`,
               short: true
+            },
+            {
+              title: 'Concept',
+              value: 'Without auto-system: VPN runs 24/7\nWith auto-system: VPN closes when idle\nSavings = Prevented waste time',
+              short: false
             }
           ],
-          footer: `Last updated: ${new Date(savingsData.lastUpdated).toLocaleString()}`
+          footer: `${savingsData.explanation} | ${new Date(savingsData.lastUpdated).toLocaleString()}`
         }]
       };
       

@@ -210,8 +210,8 @@ export const handler = async (
               short: true
             },
             {
-              title: "💰 Potential Savings | 潛在節省",
-              value: `$${costProjection.hourly}/hour | 每小時`,
+              title: "💰 Waste Being Accumulated | 正在累積浪費",
+              value: `$${costProjection.hourly}/hour | 每小時\n_Would save ~$${costProjection.total} if closed now | 如現在關閉可節省約$${costProjection.total}_`,
               short: true
             },
             {
@@ -326,8 +326,8 @@ export const handler = async (
               short: true
             },
             {
-              title: "💵 Cost Savings | 節省成本",
-              value: `$${costSavings.hourly}/hour | 每小時\n~$${costSavings.total} saved | 節省`,
+              title: "💵 Waste Prevented | 避免浪費",
+              value: `~$${costSavings.total} saved | 節省\n_${costSavings.details.wasteTimePrevented}h of 24/7 waste prevented | 避免${costSavings.details.wasteTimePrevented}小時全天候浪費_`,
               short: true
             },
             {
@@ -573,7 +573,7 @@ async function hasAdministrativeOverride(): Promise<boolean> {
   }
 }
 
-// Enhanced cost savings calculation with regional pricing and subnet detection
+// True cost savings calculation based on preventing 24/7 waste with AWS hourly billing
 async function calculateCostSavings(idleTimeMinutes: number): Promise<{ hourly: string; total: string; details: any }> {
   try {
     // AWS Client VPN pricing varies by region and includes multiple components
@@ -600,37 +600,64 @@ async function calculateCostSavings(idleTimeMinutes: number): Promise<{ hourly: 
       console.log('Could not determine subnet count, using default of 1');
     }
     
-    // Calculate different cost components
+    // Calculate hourly cost (only subnet association is saved when VPN closes)
     const hourlySubnetCost = pricing.subnetAssociation * subnetCount;
-    // Note: hourlyEndpointCost continues even when disassociated, so only subnet association saves money
-    const totalHourlySavings = hourlySubnetCost; // Only subnet association is saved
     
-    // Calculate total savings for the idle period
+    // Key insight: Without auto-cost system, VPN would run 24/7 due to human forgetfulness
+    // With auto-cost system, VPN runs for idle time then auto-closes
+    // AWS bills partial hours as full hours, so we need to account for that
+    
     const idleHours = idleTimeMinutes / 60;
-    const totalSavingsForPeriod = totalHourlySavings * idleHours;
+    const billedIdleHours = Math.ceil(idleHours); // AWS rounds up partial hours
+    
+    // Calculate the waste time prevented
+    // This represents the time from auto-close until next expected usage
+    // Conservative estimate: VPN would stay on until next business period
+    const currentHour = new Date().getHours();
+    let estimatedWasteHours = 0;
+    
+    // Estimate waste time based on time of day
+    if (currentHour >= 18 || currentHour < 9) {
+      // Evening/night closure - would waste until next morning
+      estimatedWasteHours = currentHour >= 18 ? (24 - currentHour + 9) : (9 - currentHour);
+    } else {
+      // Daytime closure - conservative estimate of 4 hours until next usage
+      estimatedWasteHours = 4;
+    }
+    
+    // True savings = Waste time prevented × hourly cost
+    // This is the cost we would have paid without the auto-system
+    const totalSavingsForPeriod = estimatedWasteHours * hourlySubnetCost;
     
     const details = {
       region,
       subnetCount,
+      idleTimeMinutes,
       idleHours: idleHours.toFixed(2),
+      billedIdleHours,
+      estimatedWasteHours,
       costPerSubnetPerHour: pricing.subnetAssociation,
-      endpointHourlyChargesContinue: pricing.endpointHour,
-      actualSavingsPerHour: totalHourlySavings
+      actualCostPaid: billedIdleHours * hourlySubnetCost,
+      wasteTimePrevented: estimatedWasteHours,
+      savingsExplanation: `Prevented ${estimatedWasteHours}h of waste (VPN would run 24/7 without auto-system)`
     };
     
     return {
-      hourly: totalHourlySavings.toFixed(2),
+      hourly: hourlySubnetCost.toFixed(2),
       total: totalSavingsForPeriod.toFixed(2),
       details
     };
   } catch (error) {
     console.error('Error calculating cost savings:', error);
-    // Fallback to simple calculation
-    const simpleSavings = (0.10 * 1).toFixed(2);
+    // Fallback to simple calculation - assume 8 hours of waste prevented
+    const simpleSavings = (0.10 * 1 * 8).toFixed(2); // 8 hours of waste prevented
     return {
-      hourly: simpleSavings,
-      total: (parseFloat(simpleSavings) * (idleTimeMinutes / 60)).toFixed(2),
-      details: { error: 'Calculation failed, using fallback estimate' }
+      hourly: '0.10',
+      total: simpleSavings,
+      details: { 
+        error: 'Calculation failed, using fallback estimate',
+        explanation: 'Estimated 8 hours of waste prevented'
+      }
     };
   }
 }
@@ -837,9 +864,50 @@ async function trackDailySavings(savingsAmount: number): Promise<void> {
       }]
     }));
     
-    console.log(`Updated daily savings for ${today}: $${dailySavings.toFixed(2)}`);
+    console.log(`Updated daily savings for ${today}: $${dailySavings.toFixed(2)} (waste time prevented)`);
+    
+    // Also calculate and store the theoretical daily maximum savings
+    // This represents what we would save if VPN ran 24/7 vs optimal usage
+    await calculateAndStoreDailyMaxSavings(today);
     
   } catch (error) {
     console.error('Failed to track daily savings:', error);
+  }
+}
+
+// Calculate theoretical daily maximum savings (24/7 cost vs actual usage)
+async function calculateAndStoreDailyMaxSavings(dateStr: string): Promise<void> {
+  try {
+    // Get all VPN runtime periods for today from state tracking
+    const runtimeKey = `/vpn/runtime_tracking/${ENVIRONMENT}/${dateStr}`;
+    let totalRuntimeHours = 0;
+    
+    try {
+      const runtimeData = await stateStore.readParameter(runtimeKey);
+      const runtime = JSON.parse(runtimeData);
+      totalRuntimeHours = runtime.totalHours || 0;
+    } catch (error) {
+      // If no runtime data, estimate based on current closure
+      // This is a fallback - ideally we'd track all start/stop events
+      console.log('No runtime tracking data found, using estimation');
+      return;
+    }
+    
+    // Calculate theoretical maximum daily savings
+    const pricing = 0.10; // Default US pricing
+    const subnetCount = 1; // Default
+    
+    const maxDailyCost = 24 * pricing * subnetCount; // 24/7 cost
+    const actualDailyCost = Math.ceil(totalRuntimeHours) * pricing * subnetCount; // AWS hourly billing
+    const theoreticalMaxSavings = maxDailyCost - actualDailyCost;
+    
+    // Store theoretical max savings for reporting
+    const maxSavingsKey = `/vpn/cost_optimization/daily_max_savings/${ENVIRONMENT}/${dateStr}`;
+    await stateStore.writeParameter(maxSavingsKey, theoreticalMaxSavings.toString());
+    
+    console.log(`Theoretical max daily savings for ${dateStr}: $${theoreticalMaxSavings.toFixed(2)} (24h cost: $${maxDailyCost} - actual: $${actualDailyCost})`);
+    
+  } catch (error) {
+    console.error('Failed to calculate daily max savings:', error);
   }
 }

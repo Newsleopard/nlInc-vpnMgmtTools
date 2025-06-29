@@ -562,7 +562,7 @@ async function handleForceClose(command: VpnCommandRequest): Promise<VpnCommandR
 // Epic 3.2: Handle cost savings report
 async function handleCostSavings(_command: VpnCommandRequest): Promise<VpnCommandResponse> {
   try {
-    // Get cumulative savings
+    // Get cumulative savings (waste time prevented)
     const cumulativeKey = `/vpn/cost_optimization/cumulative_savings/${ENVIRONMENT}`;
     let cumulativeSavings = 0;
     try {
@@ -572,7 +572,7 @@ async function handleCostSavings(_command: VpnCommandRequest): Promise<VpnComman
       console.log('No cumulative savings data found');
     }
     
-    // Get today's savings
+    // Get today's savings (waste time prevented today)
     const today = new Date().toISOString().split('T')[0];
     const dailyKey = `/vpn/cost_optimization/daily_savings/${ENVIRONMENT}/${today}`;
     let todaySavings = 0;
@@ -583,7 +583,17 @@ async function handleCostSavings(_command: VpnCommandRequest): Promise<VpnComman
       console.log('No daily savings data found for today');
     }
     
-    // Get current VPN status for potential savings
+    // Get theoretical daily maximum savings (24/7 vs actual usage)
+    const dailyMaxKey = `/vpn/cost_optimization/daily_max_savings/${ENVIRONMENT}/${today}`;
+    let theoreticalDailySavings = 0;
+    try {
+      const dailyMax = await stateStore.readParameter(dailyMaxKey);
+      theoreticalDailySavings = parseFloat(dailyMax) || 0;
+    } catch (error) {
+      console.log('No theoretical daily savings data found');
+    }
+    
+    // Get current VPN status
     const status = await vpnManager.fetchStatus();
     const hourlyRate = 0.10; // Base rate per subnet per hour
     
@@ -591,8 +601,10 @@ async function handleCostSavings(_command: VpnCommandRequest): Promise<VpnComman
       environment: ENVIRONMENT,
       cumulativeSavings: cumulativeSavings.toFixed(2),
       todaySavings: todaySavings.toFixed(2),
-      currentStatus: status.associated ? 'Running' : 'Stopped',
+      theoreticalDailySavings: theoreticalDailySavings.toFixed(2),
+      currentStatus: status.associated ? 'Running (accumulating cost)' : 'Stopped (saving money)',
       potentialHourlySavings: status.associated ? hourlyRate.toFixed(2) : '0.00',
+      explanation: 'Savings = waste time prevented (VPN would run 24/7 without auto-system)',
       lastUpdated: new Date().toISOString()
     };
     
@@ -662,6 +674,9 @@ async function handleCostAnalysis(command: VpnCommandRequest): Promise<VpnComman
         productionTotal: parseFloat(productionCumulative) || 0,
         grandTotal: (parseFloat(stagingCumulative) || 0) + (parseFloat(productionCumulative) || 0),
         estimatedMonthlySavings: ((parseFloat(stagingCumulative) || 0) + (parseFloat(productionCumulative) || 0)) * 30,
+        concept: 'Baseline: VPN runs 24/7 without auto-system. Savings = waste time prevented by auto-close.',
+        dailyWasteWithout: '$2.40 per environment (24h × $0.10)',
+        actualDailyWithAuto: '~$0.60 per environment (optimal usage)',
         lastUpdated: new Date().toISOString()
       };
       
