@@ -37,6 +37,89 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+# Function to store Slack URL history
+store_slack_url() {
+    local environment=$1
+    local slack_url=$2
+    local history_file="$PROJECT_ROOT/.slack-urls-history"
+    
+    # Create history file if it doesn't exist
+    [ ! -f "$history_file" ] && touch "$history_file"
+    
+    # Store the URL with timestamp
+    echo "${environment}|${slack_url}|$(date +%Y%m%d_%H%M%S)" >> "$history_file"
+}
+
+# Function to get previous Slack URL
+get_previous_slack_url() {
+    local environment=$1
+    local history_file="$PROJECT_ROOT/.slack-urls-history"
+    
+    if [ -f "$history_file" ]; then
+        # Get the most recent URL for this environment
+        grep "^${environment}|" "$history_file" | tail -2 | head -1 | cut -d'|' -f2
+    else
+        echo ""
+    fi
+}
+
+# Function to notify about Slack URL changes
+notify_slack_url_change() {
+    local environment=$1
+    local new_url=$2
+    local previous_url=$(get_previous_slack_url "$environment")
+    
+    # Store the new URL
+    store_slack_url "$environment" "$new_url"
+    
+    # Check if URL has changed
+    if [ -n "$previous_url" ] && [ "$previous_url" != "$new_url" ]; then
+        echo ""
+        echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo -e "${RED}⚠️  IMPORTANT: Slack Webhook URL has changed! ⚠️${NC}"
+        echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo ""
+        echo -e "${YELLOW}Environment:${NC} $environment"
+        echo -e "${RED}Previous URL:${NC} $previous_url"
+        echo -e "${GREEN}New URL:${NC}      $new_url"
+        echo ""
+        echo -e "${YELLOW}ACTION REQUIRED:${NC}"
+        echo "1. Go to your Slack App configuration: https://api.slack.com/apps"
+        echo "2. Navigate to 'Slash Commands'"
+        echo "3. Find the /vpn command"
+        echo "4. Update the Request URL to:"
+        echo -e "   ${BLUE}$new_url${NC}"
+        echo "5. Save the changes"
+        echo ""
+        echo -e "${YELLOW}Without this update, your /vpn commands will fail with 'dispatch_unknown_error'${NC}"
+        echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo ""
+    elif [ -z "$previous_url" ]; then
+        # First deployment
+        echo ""
+        echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo -e "${GREEN}🎉 First deployment completed! Configure your Slack App${NC}"
+        echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo ""
+        echo -e "${YELLOW}Environment:${NC} $environment"
+        echo -e "${GREEN}Slack URL:${NC} $new_url"
+        echo ""
+        echo -e "${YELLOW}To enable /vpn commands:${NC}"
+        echo "1. Go to your Slack App configuration: https://api.slack.com/apps"
+        echo "2. Navigate to 'Slash Commands'"
+        echo "3. Create or update the /vpn command"
+        echo "4. Set the Request URL to:"
+        echo -e "   ${BLUE}$new_url${NC}"
+        echo "5. Save the changes"
+        echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo ""
+    else
+        # URL unchanged
+        echo ""
+        echo -e "${GREEN}✅ Slack URL unchanged:${NC} $new_url"
+    fi
+}
+
 # Function to check prerequisites
 check_prerequisites() {
     print_status "Checking prerequisites..."
@@ -458,6 +541,17 @@ deploy_production() {
         print_success "Production API URL saved: $PRODUCTION_URL"
     fi
     
+    # Get and check Slack endpoint URL
+    SLACK_ENDPOINT=$(aws cloudformation describe-stacks \
+        --stack-name VpnAutomation-production \
+        --query 'Stacks[0].Outputs[?OutputKey==`SlackEndpoint`].OutputValue' \
+        --output text \
+        --profile "$profile" 2>/dev/null || echo "")
+    
+    if [ -n "$SLACK_ENDPOINT" ]; then
+        notify_slack_url_change "production" "$SLACK_ENDPOINT"
+    fi
+    
     print_status "💡 To deploy staging, run: $0 staging"
 }
 
@@ -555,6 +649,17 @@ deploy_staging() {
     
     print_success "✅ Staging deployment completed!"
     print_success "🔗 Staging will route production commands to: $PRODUCTION_URL"
+    
+    # Get and check Slack endpoint URL for staging
+    SLACK_ENDPOINT=$(aws cloudformation describe-stacks \
+        --stack-name VpnAutomation-staging \
+        --query 'Stacks[0].Outputs[?OutputKey==`SlackEndpoint`].OutputValue' \
+        --output text \
+        --profile "$profile" 2>/dev/null || echo "")
+    
+    if [ -n "$SLACK_ENDPOINT" ]; then
+        notify_slack_url_change "staging" "$SLACK_ENDPOINT"
+    fi
     
     # Automatically update staging parameter store with production API information
     print_status "🔧 Automatically configuring cross-account routing parameters..."

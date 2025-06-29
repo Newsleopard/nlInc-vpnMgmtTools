@@ -16,6 +16,10 @@ configs/**/*.conf
 # 日誌文件
 *.log
 
+# Deployment history files
+.slack-urls-history
+.production-url
+
 # 測試結果文件
 *test_results*.txt
 
