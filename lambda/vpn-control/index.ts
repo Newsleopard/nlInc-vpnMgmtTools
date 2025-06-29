@@ -80,7 +80,7 @@ export const handler = async (
     }
 
     // Validate action (expanded for Epic 3.2)
-    const validActions = ['open', 'close', 'check', 'admin-override', 'admin-clear-override', 'admin-cooldown', 'admin-force-close', 'cost-savings', 'cost-analysis'];
+    const validActions = ['open', 'close', 'check', 'admin-override', 'admin-clear-override', 'admin-cooldown', 'admin-force-close', 'cost-savings', 'cost-analysis', 'help'];
     if (!validActions.includes(command.action)) {
       return {
         statusCode: 400,
@@ -211,6 +211,15 @@ export const handler = async (
           
         case 'cost-analysis':
           response = await handleCostAnalysis(command);
+          break;
+          
+        case 'help':
+          // Help commands should be handled in Slack handler, not here
+          response = {
+            success: false,
+            message: 'Help command should not reach VPN control',
+            error: 'Help commands are handled at the Slack handler level'
+          };
           break;
 
         default:

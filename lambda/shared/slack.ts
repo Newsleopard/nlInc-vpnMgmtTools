@@ -58,7 +58,13 @@ export function parseSlackCommand(slackCommand: SlackCommand): VpnCommandRequest
   
   // Handle help commands
   if (!text || text === 'help' || text === '--help' || text === '-h') {
-    throw new Error(getHelpMessage());
+    return {
+      action: 'help' as any,
+      environment: 'staging' as any, // Default environment for help
+      user: slackCommand.user_name,
+      requestId: generateRequestId(),
+      helpMessage: getHelpMessage()
+    };
   }
   
   const parts = text.split(/\s+/);
@@ -97,8 +103,8 @@ export function parseSlackCommand(slackCommand: SlackCommand): VpnCommandRequest
   }
   
   // Validate action (expanded for Epic 3.2)
-  if (!['open', 'close', 'check', 'admin', 'savings', 'costs'].includes(action)) {
-    throw new Error(`Invalid action "${parts[0]}". Must be: open, close, check, admin, savings, or costs\n\n` + getHelpMessage());
+  if (!['open', 'close', 'check', 'admin', 'savings', 'costs', 'help'].includes(action)) {
+    throw new Error(`Invalid action "${parts[0]}". Must be: open, close, check, admin, savings, costs, or help\n\n` + getHelpMessage());
   }
   
   // Validate environment

@@ -224,6 +224,23 @@ export const handler = async (
       isLocalEnvironment: vpnCommand.environment === ENVIRONMENT
     });
 
+    // Handle help commands immediately
+    if (vpnCommand.action === 'help') {
+      logger.info('Returning help message', {
+        user: vpnCommand.user,
+        requestId: vpnCommand.requestId
+      });
+      
+      return {
+        statusCode: 200,
+        headers: { 'Content-Type': 'application/json' },
+        body: vpnCommand.helpMessage || JSON.stringify({
+          response_type: 'ephemeral',
+          text: 'Help information not available'
+        })
+      };
+    }
+
     // For potentially long-running operations (open/close), check for intermediate states first
     const isLongRunningOperation = ['open', 'close', 'start', 'stop', 'enable', 'disable', 'on', 'off'].includes(vpnCommand.action);
     
