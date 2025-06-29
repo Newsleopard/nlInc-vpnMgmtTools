@@ -6,7 +6,7 @@
 
 > **Reference Implementation** - Production-tested AWS Client VPN automation system with 57% cost reduction
 
-📖 **完整中文文檔**: See [README.md](README.md) for comprehensive Chinese documentation
+📖 **完整繁體中文檔**: See [README.md](../README.md) for comprehensive Chinese documentation
 
 ## 🎯 What This Project Does
 
