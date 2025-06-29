@@ -4,7 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is an AWS Client VPN dual-environment management toolkit designed for macOS. It provides a comprehensive solution for managing VPN endpoints, certificates, and user access across Staging and Production environments with strict environment isolation and enhanced security for production operations.
+This is an AWS Client VPN dual-environment management toolkit designed for macOS, developed by [Newsleopard 電子豹](https://newsleopard.com). It provides a comprehensive solution for managing VPN endpoints, certificates, and user access across Staging and Production environments with strict environment isolation and enhanced security for production operations.
+
+**Original Author**: [CT Yeh](https://github.com/ctyeh) (ct@newsleopard.tw)  
+**Company**: [Newsleopard 電子豹](https://newsleopard.com)  
+**Status**: Reference Implementation (Open Source)
 
 ## Key Architecture Components
 
@@ -44,7 +48,7 @@ ENV_AWS_PROFILE=""
 SUGGESTED_PROFILES="staging,company-staging,dev-staging"
 
 # Account ID for cross-account validation (required)
-AWS_ACCOUNT_ID="123456789012"  # Replace with actual account ID for this environment
+AWS_ACCOUNT_ID="YOUR_ACCOUNT_ID"  # Replace with actual account ID for this environment
 
 # S3 bucket name for zero-touch workflow (unified across all environments)
 # Note: All environments now use the same bucket name: "vpn-csr-exchange"

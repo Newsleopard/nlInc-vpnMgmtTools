@@ -327,12 +327,106 @@ graph TB
         H[types.ts]
     end
     
+    subgraph "Warming System"
+        I[Business Hours Rule<br/>3 min interval]
+        J[Off Hours Rule<br/>15 min interval]
+        K[Weekend Rule<br/>30 min interval]
+    end
+    
     A --> D
     A --> E
     B --> F
     B --> G
     C --> F
     C --> G
+    
+    I --> A
+    I --> B
+    I --> C
+    J --> A
+    J --> B
+    J --> C
+    K --> A
+    K --> B
+    K --> C
+```
+
+### Lambda 預熱機制
+
+#### 預熱策略設計
+
+為了解決 Lambda 冷啟動延遲問題，特別是 Slack 指令的 3 秒超時限制，系統實作了智能預熱機制：
+
+**預熱時程表：**
+- **營業時間**（台灣時間 9:00-18:00，週一至週五）：每 3 分鐘
+- **非營業時間**（台灣時間 18:00-9:00，週一至週五）：每 15 分鐘
+- **週末**（週六日全天）：每 30 分鐘
+
+**成本估算：**
+- 月度成本：約 $8-12 USD
+- 效益：消除冷啟動延遲，確保 Slack 指令響應時間 < 1 秒
+
+#### 預熱事件檢測
+
+每個 Lambda 函數都包含預熱事件檢測邏輯：
+
+```typescript
+// 預熱事件檢測函數
+const isWarmingRequest = (event: any): boolean => {
+  return event.source === 'aws.events' && 
+         event['detail-type'] === 'Scheduled Event' &&
+         event.detail?.warming === true;
+};
+
+// 在每個 Lambda handler 中的實作
+export const handler = async (event: any, context: Context) => {
+  // 處理預熱請求
+  if (isWarmingRequest(event)) {
+    console.log('Warming request received - Function is now warm');
+    return {
+      statusCode: 200,
+      body: JSON.stringify({
+        message: 'Function warmed successfully',
+        functionName: context.functionName,
+        timestamp: new Date().toISOString()
+      })
+    };
+  }
+  
+  // 繼續正常函數邏輯...
+};
+```
+
+#### 預熱基礎設施
+
+CDK 中的預熱規則配置：
+
+```typescript
+// 營業時間預熱規則
+const businessHoursWarmingRule = new events.Rule(this, 'BusinessHoursWarmingRule', {
+  schedule: events.Schedule.expression('rate(3 minutes)'),
+  description: `Business hours Lambda warming for ${environment} environment`,
+  enabled: true
+});
+
+// 預熱事件負載
+const warmingEventPayload = {
+  source: 'aws.events',
+  'detail-type': 'Scheduled Event',
+  detail: {
+    warming: true,
+    environment: environment,
+    timestamp: '{{aws.events.scheduled-time}}'
+  }
+};
+
+// 為所有 Lambda 函數添加預熱目標
+const lambdaFunctions = [slackHandler, vpnControl, vpnMonitor];
+lambdaFunctions.forEach((lambdaFunction, index) => {
+  businessHoursWarmingRule.addTarget(new targets.LambdaFunction(lambdaFunction, {
+    event: events.RuleTargetInput.fromObject(warmingEventPayload)
+  }));
+});
 ```
 
 ### 事件驅動設計
@@ -357,6 +451,11 @@ interface ScheduledEvent {
   'detail-type': 'Scheduled Event';
   time: string;
   resources: string[];
+  detail?: {
+    warming?: boolean;  // 預熱事件標識
+    environment?: string;
+    timestamp?: string;
+  };
 }
 ```
 
@@ -1054,4 +1153,5 @@ async function batchCheckConnections(
 
 **文件版本**：1.0  
 **最後更新**：2025-06-29  
-**技術等級**：進階
+**技術等級**：進階  
+**開發團隊**：[Newsleopard 電子豹](https://newsleopard.com)

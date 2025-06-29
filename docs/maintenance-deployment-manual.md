@@ -3,17 +3,18 @@
 ## 目錄
 
 1. [系統架構總覽](#系統架構總覽)
-2. [部署前準備](#部署前準備)
-3. [基礎設施部署](#基礎設施部署)
-4. [Lambda 函數開發](#lambda-函數開發)
-5. [CDK 部署管理](#cdk-部署管理)
-6. [系統配置管理](#系統配置管理)
-7. [監控與日誌](#監控與日誌)
-8. [維護作業](#維護作業)
-9. [故障排除指南](#故障排除指南)
-10. [災難復原](#災難復原)
-11. [效能優化](#效能優化)
-12. [安全加固](#安全加固)
+2. [新用戶快速設置](#新用戶快速設置)
+3. [部署前準備](#部署前準備)
+4. [基礎設施部署](#基礎設施部署)
+5. [Lambda 函數開發](#lambda-函數開發)
+6. [CDK 部署管理](#cdk-部署管理)
+7. [系統配置管理](#系統配置管理)
+8. [監控與日誌](#監控與日誌)
+9. [維護作業](#維護作業)
+10. [故障排除指南](#故障排除指南)
+11. [災難復原](#災難復原)
+12. [效能優化](#效能優化)
+13. [安全加固](#安全加固)
 
 ## 系統架構總覽
 
@@ -89,6 +90,197 @@ graph TB
 | VPN 端點 | 測試用 | 正式用 |
 | 參數存儲 | 環境隔離 | 環境隔離 |
 | 監控告警 | 寬鬆閾值 | 嚴格閾值 |
+
+## 新用戶快速設置
+
+> **⚠️ 重要提醒**: 這是一個參考實作專案。請 fork 並根據您的需求進行調整。
+
+### 🚀 快速設置指南
+
+本節專為首次部署此系統的用戶設計，提供完整的設置流程。
+
+#### 📋 前置需求
+
+**AWS 需求:**
+- 兩個 AWS 帳戶（建議）或一個帳戶的分離環境
+- AWS CLI v2 已安裝並配置
+- Node.js 18+ 已安裝
+- macOS 10.15+（系統專為 macOS 設計）
+
+**必要的 AWS 權限:**
+您的 AWS 用戶/角色需要以下權限：
+- EC2 Client VPN 管理
+- Lambda 函數部署
+- S3 儲存桶操作
+- SSM Parameter Store 存取
+- CloudWatch 日誌和指標
+- IAM 角色建立（用於 Lambda 執行）
+
+#### 🔧 配置步驟
+
+**步驟 1: 替換帳戶 ID**
+
+您需要在整個配置中替換佔位符帳戶 ID：
+
+**尋找並替換這些佔位符:**
+- `YOUR_STAGING_ACCOUNT_ID` → 您的測試環境 AWS 帳戶 ID（12位數字）
+- `YOUR_PRODUCTION_ACCOUNT_ID` → 您的正式環境 AWS 帳戶 ID（12位數字）
+- `YOUR_ACCOUNT_ID` → 您的 AWS 帳戶 ID（如果使用單一帳戶）
+
+**需要更新的檔案:**
+```bash
+# 配置檔案
+configs/staging/staging.env
+configs/production/production.env
+
+# 文件（可選，供您參考）
+docs/admin-manual.md
+docs/plans_history/DUAL_AWS_PROFILE_SETUP_GUIDE.md
+CLAUDE.md
+```
+
+**步驟 2: AWS Profile 設置**
+
+為每個環境建立 AWS profiles：
+
+```bash
+# 配置測試環境 profile
+aws configure --profile staging-vpn
+# 輸入您的測試帳戶憑證
+
+# 配置正式環境 profile  
+aws configure --profile production-vpn
+# 輸入您的正式帳戶憑證
+```
+
+**步驟 3: 環境配置**
+
+**測試環境配置:**
+```bash
+# 編輯 configs/staging/staging.env
+ENV_AWS_PROFILE="staging-vpn"
+AWS_ACCOUNT_ID="YOUR_STAGING_ACCOUNT_ID"
+AWS_REGION="us-east-1"  # 或您偏好的區域
+```
+
+**正式環境配置:**
+```bash
+# 編輯 configs/production/production.env
+ENV_AWS_PROFILE="production-vpn"
+AWS_ACCOUNT_ID="YOUR_PRODUCTION_ACCOUNT_ID"
+AWS_REGION="us-east-1"  # 或您偏好的區域
+```
+
+**步驟 4: Slack 整合設置**
+
+1. **建立 Slack App** 於 https://api.slack.com/apps
+2. **配置 Bot 權限:**
+   - `chat:write`
+   - `commands`
+   - `incoming-webhook`
+
+3. **取得必要的 Token:**
+   - Bot User OAuth Token（以 `xoxb-` 開頭）
+   - Signing Secret（從 Basic Information）
+   - Webhook URL（從 Incoming Webhooks）
+
+4. **儲存到 AWS SSM:**
+```bash
+# 儲存 Slack 配置
+aws ssm put-parameter --name "/vpn/slack/bot_token" --value "xoxb-your-token" --type "SecureString"
+aws ssm put-parameter --name "/vpn/slack/signing_secret" --value "your-signing-secret" --type "SecureString"
+aws ssm put-parameter --name "/vpn/slack/webhook_url" --value "https://hooks.slack.com/your-webhook" --type "SecureString"
+```
+
+**步驟 5: 部署基礎設施**
+
+```bash
+# 部署到兩個環境
+./scripts/deploy.sh both --secure-parameters
+
+# 或個別部署
+./scripts/deploy.sh staging
+./scripts/deploy.sh production
+```
+
+**步驟 6: 配置 Slack 指令**
+
+1. **從部署輸出取得 API Gateway URLs**
+2. **配置 Slack Slash Command:**
+   - 指令: `/vpn`
+   - Request URL: 您的測試環境 API Gateway URL
+   - Method: POST
+
+#### 🔍 驗證設置
+
+**測試基本功能:**
+```bash
+# 檢查環境健康狀態
+./vpn_env.sh health
+
+# 測試 VPN 操作
+/vpn check staging
+/vpn check production
+```
+
+**驗證成本優化:**
+```bash
+# 檢查成本追蹤
+/vpn savings staging
+/vpn costs daily
+```
+
+#### 🛠️ 客製化選項
+
+**調整閒置超時時間:**
+預設的 54 分鐘閒置超時已針對 AWS 按小時計費進行優化。如需變更：
+
+```bash
+# 在部署配置中更新
+# cdklib/lib/vpn-automation-stack.ts
+IDLE_MINUTES: '54'  # 變更為您偏好的值
+```
+
+**區域定價:**
+在 `lambda/vpn-monitor/index.ts` 中更新區域定價：
+
+```typescript
+const regionalPricing = {
+  'us-east-1': { subnetAssociation: 0.10, endpointHour: 0.05 },
+  'eu-west-1': { subnetAssociation: 0.12, endpointHour: 0.06 },
+  // 新增您的區域
+};
+```
+
+#### 🆘 常見問題排除
+
+**1. 帳戶 ID 不符**
+```
+錯誤: Cross-account validation failed
+```
+**解決方案:** 驗證環境配置中的帳戶 ID 是否正確
+
+**2. 權限被拒絕**
+```
+錯誤: User is not authorized to perform: ec2:DescribeClientVpnEndpoints
+```
+**解決方案:** 為您的用戶/角色新增必要的 AWS 權限
+
+**3. Slack 整合失敗**
+```
+錯誤: Invalid signing secret
+```
+**解決方案:** 驗證 Slack tokens 是否正確儲存在 SSM Parameter Store
+
+#### 📊 預期結果
+
+成功設置後，您應該看到：
+- **成本降低:** VPN 成本約 57% 的節省
+- **自動化:** VPN 在閒置 54 分鐘後自動關閉
+- **Slack 整合:** 透過 `/vpn` 指令完全控制 VPN
+- **監控:** 詳細的成本和使用追蹤
+
+---
 
 ## 部署前準備
 
@@ -474,7 +666,72 @@ aws logs filter-log-events \
   --log-group-name /aws/lambda/vpn-control-production \
   --filter-pattern "ERROR" \
   --profile prod
+
+# 查看預熱日誌
+aws logs filter-log-events \
+  --log-group-name /aws/lambda/vpn-slack-handler-staging \
+  --filter-pattern "Warming request received" \
+  --profile staging
 ```
+
+### Lambda 預熱監控
+
+#### 預熱狀態檢查
+
+系統包含完整的 Lambda 預熱機制，用於消除冷啟動延遲：
+
+**預熱時程表：**
+- **營業時間**（9:00-18:00 台灣時間）：每 3 分鐘
+- **非營業時間**（18:00-9:00 台灣時間）：每 15 分鐘  
+- **週末**：每 30 分鐘
+
+**監控預熱效果：**
+```bash
+# 檢查預熱事件
+aws events list-rules --name-prefix "*Warming*" --profile staging
+
+# 查看預熱指標
+aws cloudwatch get-metric-statistics \
+  --namespace AWS/Lambda \
+  --metric-name Invocations \
+  --dimensions Name=FunctionName,Value=vpn-slack-handler-staging \
+  --start-time 2024-01-01T00:00:00Z \
+  --end-time 2024-01-01T23:59:59Z \
+  --period 300 \
+  --statistics Sum \
+  --profile staging
+```
+
+**預熱成本分析：**
+```bash
+# 計算預熱成本
+# 營業時間：3分鐘間隔 = 20次/小時 × 9小時 × 5天 = 900次/週
+# 非營業時間：15分鐘間隔 = 4次/小時 × 15小時 × 5天 = 300次/週  
+# 週末：30分鐘間隔 = 2次/小時 × 48小時 = 96次/週
+# 總計：1,296次/週 × 3個函數 = 3,888次/週
+# 月度成本：約 $8-12 USD
+```
+
+#### 預熱效能驗證
+
+**冷啟動 vs 預熱啟動比較：**
+```bash
+# 查看 Lambda 持續時間指標
+aws cloudwatch get-metric-statistics \
+  --namespace AWS/Lambda \
+  --metric-name Duration \
+  --dimensions Name=FunctionName,Value=vpn-slack-handler-staging \
+  --start-time $(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ) \
+  --end-time $(date -u +%Y-%m-%dT%H:%M:%SZ) \
+  --period 300 \
+  --statistics Average,Maximum \
+  --profile staging
+```
+
+**預期效能改善：**
+- **冷啟動時間**：1,500-3,000ms
+- **預熱啟動時間**：50-200ms
+- **改善幅度**：90-95% 延遲降低
 
 ### CloudWatch Metrics
 
@@ -483,6 +740,25 @@ aws logs filter-log-events \
 - `VPN/Automation/VpnCloseOperations`
 - `VPN/Automation/AutoCloseTriggered`
 - `VPN/Automation/CostSaved`
+- `VPN/Automation/WarmingInvocations` (新增)
+
+#### Lambda 預熱指標監控
+
+**預熱成功率告警：**
+```bash
+aws cloudwatch put-metric-alarm \
+  --alarm-name "Lambda-Warming-Failure-Rate" \
+  --alarm-description "Alert when Lambda warming failure rate is high" \
+  --metric-name Errors \
+  --namespace AWS/Lambda \
+  --dimensions Name=FunctionName,Value=vpn-slack-handler-staging \
+  --statistic Sum \
+  --period 900 \
+  --threshold 5 \
+  --comparison-operator GreaterThanThreshold \
+  --evaluation-periods 2 \
+  --profile staging
+```
 
 #### 創建告警
 ```bash
@@ -519,6 +795,25 @@ fields @timestamp, @message
 | filter @message like /Cost saved/
 | parse @message /Cost saved: \$(?<saved>\d+\.\d+)/
 | stats sum(saved) by bin(1d)
+
+-- 分析 Lambda 預熱效果
+fields @timestamp, @message, @duration
+| filter @message like /Warming request received/
+| stats count() as warming_count by bin(1h)
+| sort @timestamp desc
+
+-- 比較冷啟動 vs 預熱啟動時間
+fields @timestamp, @duration, @message
+| filter @type = "REPORT"
+| stats avg(@duration), max(@duration), min(@duration) by bin(1h)
+| sort @timestamp desc
+
+-- 預熱成本分析
+fields @timestamp, @billedDuration
+| filter @message like /Warming request/
+| stats sum(@billedDuration)/1000 as total_seconds by bin(1d)
+| eval cost_usd = total_seconds * 0.0000166667
+| sort @timestamp desc
 ```
 
 ## 維護作業
@@ -919,4 +1214,5 @@ aws logs tail /aws/lambda/vpn-slack-handler-staging --follow
 
 **文件版本**：1.0  
 **最後更新**：2025-06-29  
-**適用系統版本**：3.0+
+**適用系統版本**：3.0+  
+**開發團隊**：[Newsleopard 電子豹](https://newsleopard.com)

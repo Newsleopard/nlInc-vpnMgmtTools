@@ -80,7 +80,7 @@
 === VPN Environment Status ===
 Current Environment: staging
 AWS Profile: staging-vpn-admin
-Account ID: 123456789012
+Account ID: YOUR_STAGING_ACCOUNT_ID
 Region: us-east-1
 Health: ✅ Healthy
 ```
@@ -638,6 +638,165 @@ aws logs tail /aws/lambda/vpn-slack-handler-staging
 3. 調整閒置門檻
 4. 實施使用政策
 
+## Lambda 預熱系統管理
+
+### 預熱機制概述
+
+系統實作了智能 Lambda 預熱機制，確保 Slack 指令的快速響應（< 1 秒）：
+
+**預熱時程表：**
+- **營業時間**（9:00-18:00 台灣時間，週一至週五）：每 3 分鐘
+- **非營業時間**（18:00-9:00 台灣時間，週一至週五）：每 15 分鐘
+- **週末**（週六日全天）：每 30 分鐘
+
+**涵蓋的 Lambda 函數：**
+- `slack-handler` - Slack 指令處理
+- `vpn-control` - VPN 操作控制
+- `vpn-monitor` - VPN 監控和自動關閉
+
+### 預熱狀態監控
+
+#### 檢查預熱規則狀態
+```bash
+# 查看所有預熱規則
+aws events list-rules --name-prefix "*Warming*" --profile staging
+
+# 檢查特定規則詳情
+aws events describe-rule --name "BusinessHoursWarmingRule" --profile staging
+
+# 查看規則目標
+aws events list-targets-by-rule --rule "BusinessHoursWarmingRule" --profile staging
+```
+
+#### 監控預熱效果
+```bash
+# 查看 Lambda 調用次數（包含預熱）
+aws cloudwatch get-metric-statistics \
+  --namespace AWS/Lambda \
+  --metric-name Invocations \
+  --dimensions Name=FunctionName,Value=vpn-slack-handler-staging \
+  --start-time $(date -u -d '1 day ago' +%Y-%m-%dT%H:%M:%SZ) \
+  --end-time $(date -u +%Y-%m-%dT%H:%M:%SZ) \
+  --period 3600 \
+  --statistics Sum \
+  --profile staging
+
+# 分析 Lambda 執行時間改善
+aws cloudwatch get-metric-statistics \
+  --namespace AWS/Lambda \
+  --metric-name Duration \
+  --dimensions Name=FunctionName,Value=vpn-slack-handler-staging \
+  --start-time $(date -u -d '1 day ago' +%Y-%m-%dT%H:%M:%SZ) \
+  --end-time $(date -u +%Y-%m-%dT%H:%M:%SZ) \
+  --period 3600 \
+  --statistics Average,Maximum \
+  --profile staging
+```
+
+### 預熱成本管理
+
+#### 成本估算
+```bash
+# 每月預熱調用次數計算：
+# 營業時間：20次/小時 × 9小時 × 22工作日 = 3,960次
+# 非營業時間：4次/小時 × 15小時 × 22工作日 = 1,320次
+# 週末：2次/小時 × 48小時 × 8天 = 768次
+# 總計：6,048次/月 × 3個函數 = 18,144次/月
+# 預估成本：$8-12/月
+```
+
+#### 成本效益分析
+```bash
+# 查看預熱日誌中的成本資訊
+aws logs filter-log-events \
+  --log-group-name /aws/lambda/vpn-slack-handler-staging \
+  --filter-pattern "Warming request received" \
+  --start-time $(date -d '1 day ago' +%s)000 \
+  --profile staging
+```
+
+### 預熱配置調整
+
+#### 修改預熱頻率
+
+如需調整預熱頻率，編輯 `cdklib/lib/vpn-automation-stack.ts`：
+
+```typescript
+// 營業時間預熱（目前：每 3 分鐘）
+const businessHoursWarmingRule = new events.Rule(this, 'BusinessHoursWarmingRule', {
+  schedule: events.Schedule.expression('rate(5 minutes)'), // 改為 5 分鐘
+  description: `Business hours Lambda warming for ${environment} environment`,
+  enabled: true
+});
+```
+
+#### 啟用/停用預熱
+
+```bash
+# 停用營業時間預熱
+aws events disable-rule --name "BusinessHoursWarmingRule" --profile staging
+
+# 重新啟用
+aws events enable-rule --name "BusinessHoursWarmingRule" --profile staging
+
+# 檢查規則狀態
+aws events describe-rule --name "BusinessHoursWarmingRule" --profile staging
+```
+
+### 預熱故障排除
+
+#### 常見問題
+
+**1. 預熱調用失敗**
+```bash
+# 檢查 Lambda 錯誤
+aws logs filter-log-events \
+  --log-group-name /aws/lambda/vpn-slack-handler-staging \
+  --filter-pattern "ERROR" \
+  --start-time $(date -d '1 hour ago' +%s)000 \
+  --profile staging
+```
+
+**2. 預熱頻率過高**
+```bash
+# 檢查調用頻率
+aws cloudwatch get-metric-statistics \
+  --namespace AWS/Lambda \
+  --metric-name Invocations \
+  --dimensions Name=FunctionName,Value=vpn-slack-handler-staging \
+  --start-time $(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ) \
+  --end-time $(date -u +%Y-%m-%dT%H:%M:%SZ) \
+  --period 300 \
+  --statistics Sum \
+  --profile staging
+```
+
+**3. 預熱成本過高**
+```bash
+# 分析預熱相關的計費時間
+aws logs filter-log-events \
+  --log-group-name /aws/lambda/vpn-slack-handler-staging \
+  --filter-pattern "REPORT" \
+  --start-time $(date -d '1 day ago' +%s)000 \
+  --profile staging | grep "Billed Duration"
+```
+
+#### 效能驗證
+
+**預期效能指標：**
+- **冷啟動時間**：1,500-3,000ms
+- **預熱啟動時間**：50-200ms  
+- **Slack 指令響應**：< 1 秒
+- **改善幅度**：90-95% 延遲降低
+
+**驗證指令：**
+```bash
+# 測試 Slack 指令響應時間
+time curl -X POST "YOUR_API_GATEWAY_URL" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "command=/vpn&text=check staging"
+```
+
 ## 安全最佳實踐
 
 ### 證書安全
@@ -761,4 +920,5 @@ alias vpn-admin='./admin-tools/aws_vpn_admin.sh'
 
 **文件版本**：1.0  
 **最後更新**：2025-06-29  
-**適用系統版本**：3.0+
+**適用系統版本**：3.0+  
+**開發團隊**：[Newsleopard 電子豹](https://newsleopard.com)

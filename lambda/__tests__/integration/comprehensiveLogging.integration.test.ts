@@ -522,10 +522,10 @@ describe('Epic 4.1: Comprehensive Logging Integration Tests', () => {
         id: 'scheduled-event-123',
         'detail-type': 'Scheduled Event',
         source: 'aws.events',
-        account: '123456789012',
+        account: 'TEST_ACCOUNT_ID',
         time: new Date().toISOString(),
         region: 'us-east-1',
-        resources: ['arn:aws:events:us-east-1:123456789012:rule/vpn-monitor'],
+        resources: ['arn:aws:events:us-east-1:TEST_ACCOUNT_ID:rule/vpn-monitor'],
         detail: {}
       };
 

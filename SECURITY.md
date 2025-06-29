@@ -17,7 +17,7 @@ We take security seriously. If you discover a security vulnerability, please fol
 ### For Security Issues
 1. **DO NOT** create a public GitHub issue
 2. Use GitHub's Security Advisories feature to report privately
-3. Or email security concerns to the maintainers
+3. Or email security concerns to: ct@newsleopard.tw
 4. Include detailed information about the vulnerability
 
 ### What to Include

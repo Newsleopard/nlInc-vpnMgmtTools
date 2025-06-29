@@ -193,8 +193,8 @@ load_environment_config() {
 ./admin-tools/aws_vpn_admin.sh
 # Shows menu:
 # Select AWS Profile:
-# 1) staging (Account: 677089019267, Region: us-east-1)
-# 2) production (Account: 123456789012, Region: us-east-1)  
+# 1) staging (Account: YOUR_STAGING_ACCOUNT_ID, Region: us-east-1)
+# 2) production (Account: YOUR_PRODUCTION_ACCOUNT_ID, Region: us-east-1)  
 # Enter choice [1-2]: 2
 
 # Option 2: Direct specification

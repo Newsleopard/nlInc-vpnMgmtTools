@@ -1,90 +1,62 @@
 # Contributing to AWS Client VPN Automation
 
-We welcome contributions to the AWS Client VPN Automation project! This document provides guidelines for contributing.
+## 🎯 Project Status: Reference Implementation
+
+This project is shared as a **reference implementation** and is not actively maintained. We encourage the community to:
+
+- **Fork and adapt** for your specific needs
+- **Share improvements** via community discussions
+- **Build upon** the architecture and patterns shown here
+- **Create your own maintained versions**
 
 ## 🤝 How to Contribute
 
-### Reporting Issues
-- Use GitHub Issues to report bugs or request features
-- Provide detailed information about your environment and the issue
-- Include steps to reproduce the problem
+### For Bug Reports and Questions
+- Use GitHub Issues for documentation clarifications
+- Share your implementation experiences
+- Help other users with setup questions
 
-### Submitting Changes
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Make your changes
-4. Add tests if applicable
-5. Commit your changes (`git commit -m 'Add amazing feature'`)
-6. Push to the branch (`git push origin feature/amazing-feature`)
-7. Open a Pull Request
+### For Improvements and Extensions
+- **Fork the repository** and create your own version
+- **Share your fork** in GitHub Discussions for others to discover
+- **Document your changes** to help the community learn
 
-### Development Setup
-1. Clone the repository
-2. Install dependencies: `npm install`
-3. Set up your AWS credentials and profiles
-4. Follow the setup instructions in the README.md
+### Community Forks
+We encourage community members to create and maintain their own forks with:
+- Additional features
+- Different cloud providers
+- Alternative integrations
+- Updated dependencies
 
 ## 📋 Code Standards
 
-### TypeScript/JavaScript
-- Use TypeScript for all Lambda functions
-- Follow existing code style and patterns
-- Add proper error handling and logging
-- Include JSDoc comments for functions
-
-### Documentation
-- Update README.md for significant changes
-- Add or update relevant documentation in `/docs`
-- Use clear, concise language
-- Include examples where helpful
-
-### Testing
-- Add unit tests for new functionality
-- Ensure existing tests pass
-- Test in both staging and production-like environments
+If you're forking this project, we recommend maintaining:
+- TypeScript for Lambda functions
+- Comprehensive documentation
+- Security best practices
+- Cost optimization focus
 
 ## 🔒 Security Guidelines
 
 - Never commit secrets, keys, or credentials
 - Use AWS SSM Parameter Store for sensitive configuration
 - Follow AWS security best practices
-- Report security issues privately via GitHub Security Advisories
-
-## 📝 Pull Request Guidelines
-
-### Before Submitting
-- [ ] Code follows project style guidelines
-- [ ] Tests pass locally
-- [ ] Documentation is updated
-- [ ] No sensitive information is included
-- [ ] Changes are tested in a real AWS environment
-
-### PR Description
-- Clearly describe what the PR does
-- Reference any related issues
-- Include screenshots for UI changes
-- List any breaking changes
-
-## 🏗️ Architecture Guidelines
-
-When contributing to the core architecture:
-- Maintain separation between staging and production environments
-- Follow the serverless-first approach
-- Ensure cost optimization features remain intact
-- Consider multi-region compatibility
+- Report security issues via GitHub Security Advisories
 
 ## 💬 Community
 
-- Be respectful and inclusive
-- Help others learn and contribute
-- Share knowledge and best practices
-- Follow the project's code of conduct
+- **GitHub Discussions**: Share your implementations and ask questions
+- **Issues**: Report documentation problems or setup issues
+- **Forks**: Create your own maintained versions
+- **Stars**: Show appreciation and help others discover the project
 
 ## 📞 Getting Help
 
-- Check existing documentation first
-- Search existing issues
-- Ask questions in GitHub Discussions
-- Be specific about your environment and use case
+1. Check the comprehensive documentation first
+2. Search existing issues and discussions
+3. Ask questions in GitHub Discussions
+4. Consider hiring AWS consultants for complex implementations
 
-Thank you for contributing to AWS Client VPN Automation! 🎉
+**Remember**: This is a reference implementation. Fork it, adapt it, make it yours! 🚀
+
+Thank you for being part of the AWS automation community! 🎉

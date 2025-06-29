@@ -1,5 +1,27 @@
 # AWS Client VPN 雙環境管理自動化系統
 
+> **🎯 Project Status**: This is a **reference implementation** shared for educational and inspiration purposes. While the code is production-tested and fully functional, this repository is not actively maintained. Feel free to fork, adapt, and build upon this work for your own needs.
+
+## 🌟 Why We Built This
+
+At [Newsleopard 電子豹](https://newsleopard.com), we believe in building efficient, cost-effective infrastructure solutions. This AWS Client VPN automation system was born from our real-world need to:
+
+- **Reduce AWS costs** by 57% through intelligent automation
+- **Eliminate human error** in VPN management
+- **Scale securely** across multiple environments
+- **Share knowledge** with the broader AWS community
+
+We're open-sourcing this complete, production-tested solution to help other teams solve similar challenges and demonstrate modern AWS automation patterns.
+
+**Key Innovations:**
+- 🎯 **54-minute idle optimization** - mathematically perfect for AWS hourly billing
+- 🔄 **Dual-environment architecture** - complete staging/production isolation  
+- 💰 **True cost savings calculation** - prevents 24/7 waste from human forgetfulness
+- 🤖 **Slack-native operations** - DevOps teams love the UX
+- ⚡ **Lambda warming system** - sub-1-second Slack command response guaranteed
+
+---
+
 ## 系統概述
 
 AWS Client VPN 雙環境管理自動化系統是一個專為企業設計的全方位 VPN 管理解決方案。本系統結合了基礎設施即代碼（IaC）、無伺服器架構和智能成本優化，為企業提供安全、高效且經濟的 VPN 管理框架。
@@ -114,7 +136,16 @@ AWS定價：
    - 營業時間保護機制
    - 詳細成本追蹤報告
 
+5. **Lambda 預熱系統**
+   - 消除冷啟動延遲，確保快速響應
+   - 智能時程：營業時間每3分鐘，非營業時間每15分鐘
+   - Slack 指令響應時間 < 1 秒保證
+
 ## 🚀 快速開始
+
+**⚠️ Important**: This is a reference implementation. Please fork and adapt for your needs.
+
+**📋 New User Setup**: See [維護部署手冊](docs/maintenance-deployment-manual.md#新用戶快速設置) for detailed configuration instructions including account ID replacement.
 
 ### 系統需求
 
@@ -236,9 +267,9 @@ AWS定價：
 歡迎提交問題報告和功能建議！
 
 ### 如何貢獻
-- **問題回報**：使用 [GitHub Issues](https://github.com/your-username/aws-client-vpn-automation/issues)
-- **功能建議**：提交 [Feature Request](https://github.com/your-username/aws-client-vpn-automation/issues/new)
-- **程式碼貢獻**：提交 [Pull Request](https://github.com/your-username/aws-client-vpn-automation/pulls)
+- **問題回報**：使用 [GitHub Issues](https://github.com/ctyeh/aws-client-vpn-automation/issues)
+- **功能建議**：提交 [Feature Request](https://github.com/ctyeh/aws-client-vpn-automation/issues/new)
+- **程式碼貢獻**：提交 [Pull Request](https://github.com/ctyeh/aws-client-vpn-automation/pulls)
 - **文件改進**：協助改善文件和範例
 
 ### 開發指南
@@ -246,8 +277,8 @@ AWS定價：
 
 ### 社群支援
 - 📖 [文件](docs/)
-- 💬 [GitHub Discussions](https://github.com/your-username/aws-client-vpn-automation/discussions)
-- 🐛 [問題追蹤](https://github.com/your-username/aws-client-vpn-automation/issues)
+- 💬 [GitHub Discussions](https://github.com/ctyeh/aws-client-vpn-automation/discussions)
+- 🐛 [問題追蹤](https://github.com/ctyeh/aws-client-vpn-automation/issues)
 - 🔒 [安全政策](SECURITY.md)
 
 ## 📄 授權
@@ -258,6 +289,11 @@ AWS定價：
 
 **版本**：3.0  
 **最後更新**：2025-06-29  
-**維護團隊**：Community Contributors
+**原始開發**：[Newsleopard 電子豹](https://newsleopard.com) - [CT Yeh](https://github.com/ctyeh)  
+**維護狀態**：Reference Implementation (Community Forks Welcome)
 
 > 💡 **提示**：如需快速上手，請先閱讀[使用者手冊](docs/user-manual.md)。如需深入了解系統架構，請參考[系統技術詳解](docs/technical-reference.md)。
+
+---
+
+**Built with ❤️ by [Newsleopard 電子豹](https://newsleopard.com)** - Sharing knowledge with the AWS community

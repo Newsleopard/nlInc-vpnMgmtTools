@@ -12,7 +12,7 @@ describe('VPN Monitor Integration Tests', () => {
     callbackWaitsForEmptyEventLoop: false,
     functionName: 'vpn-monitor-test',
     functionVersion: '$LATEST',
-    invokedFunctionArn: 'arn:aws:lambda:us-east-1:123456789012:function:vpn-monitor-test',
+    invokedFunctionArn: 'arn:aws:lambda:us-east-1:TEST_ACCOUNT_ID:function:vpn-monitor-test',
     memoryLimitInMB: '256',
     awsRequestId: 'test-request-id',
     logGroupName: '/aws/lambda/vpn-monitor-test',

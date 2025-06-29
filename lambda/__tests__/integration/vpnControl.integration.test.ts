@@ -12,7 +12,7 @@ describe('VPN Control Integration Tests', () => {
     callbackWaitsForEmptyEventLoop: false,
     functionName: 'vpn-control-test',
     functionVersion: '$LATEST',
-    invokedFunctionArn: 'arn:aws:lambda:us-east-1:123456789012:function:vpn-control-test',
+    invokedFunctionArn: 'arn:aws:lambda:us-east-1:TEST_ACCOUNT_ID:function:vpn-control-test',
     memoryLimitInMB: '256',
     awsRequestId: 'test-request-id',
     logGroupName: '/aws/lambda/vpn-control-test',

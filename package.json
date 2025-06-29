@@ -12,7 +12,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/your-username/aws-client-vpn-automation.git"
+    "url": "https://github.com/ctyeh/aws-client-vpn-automation.git"
   },
   "keywords": [
     "aws",
@@ -26,12 +26,22 @@
     "typescript",
     "lambda"
   ],
-  "author": "Community Contributors",
+  "author": {
+    "name": "CT Yeh",
+    "email": "ct@newsleopard.tw",
+    "url": "https://github.com/ctyeh"
+  },
+  "contributors": [
+    {
+      "name": "Newsleopard Team",
+      "url": "https://newsleopard.com"
+    }
+  ],
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/your-username/aws-client-vpn-automation/issues"
+    "url": "https://github.com/ctyeh/aws-client-vpn-automation/issues"
   },
-  "homepage": "https://github.com/your-username/aws-client-vpn-automation#readme",
+  "homepage": "https://github.com/ctyeh/aws-client-vpn-automation#readme",
   "engines": {
     "node": ">=18.0.0"
   },

@@ -83,10 +83,10 @@ describe('Epic 3.2: Automatic Cost-Saving Actions Integration Tests', () => {
     id: 'test-event-id',
     'detail-type': 'Scheduled Event',
     source: 'aws.events',
-    account: '123456789012',
+    account: 'TEST_ACCOUNT_ID',
     time: new Date().toISOString(),
     region: 'us-east-1',
-    resources: ['arn:aws:events:us-east-1:123456789012:rule/test-rule'],
+    resources: ['arn:aws:events:us-east-1:TEST_ACCOUNT_ID:rule/test-rule'],
     detail: {}
   };
 
