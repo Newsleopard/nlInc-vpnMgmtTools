@@ -116,7 +116,7 @@ describe('Epic 4.1: Comprehensive Logging Integration Tests', () => {
     jest.clearAllMocks();
     logCaptures.length = 0;
     process.env.ENVIRONMENT = 'staging';
-    process.env.IDLE_MINUTES = '60';
+    process.env.IDLE_MINUTES = '54';
     process.env.BUSINESS_HOURS_PROTECTION = 'false';
   });
 

@@ -152,7 +152,7 @@ function getHelpMessage(): string {
 • \`/vpn costs daily\` - Daily cost breakdown
 
 *Auto-Cost Optimization:*
-- Idle VPNs auto-close after 60 minutes (configurable)
+- Idle VPNs auto-close after 54 minutes (configurable)
 - Business hours protection (9 AM - 6 PM)
 - 30-minute cooldown prevents rapid cycling
 - Manual activity detection (15-min grace period)

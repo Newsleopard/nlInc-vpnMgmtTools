@@ -27,7 +27,7 @@ describe('VPN Monitor Integration Tests', () => {
     resetAllMocks();
     
     process.env.ENVIRONMENT = 'staging';
-    process.env.IDLE_MINUTES = '60';
+    process.env.IDLE_MINUTES = '54';
     
     // Mock successful Parameter Store validation
     setMockResponse('SSM', 'getParameter', {

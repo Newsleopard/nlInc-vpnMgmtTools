@@ -164,7 +164,7 @@ export class VpnAutomationStack extends cdk.Stack {
 
     // Epic 5.1: Environment variables for Lambda functions with secure parameter management
     const commonEnvironment = {
-      IDLE_MINUTES: '60',
+      IDLE_MINUTES: '54',
       ENVIRONMENT: environment,
       VPN_STATE_PREFIX: `/vpn/${environment}/`,
       SIGNING_SECRET_PARAM: `/vpn/${environment}/slack/signing_secret`,

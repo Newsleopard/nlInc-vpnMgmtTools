@@ -93,7 +93,7 @@ describe('Epic 3.2: Automatic Cost-Saving Actions Integration Tests', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     process.env.ENVIRONMENT = 'staging';
-    process.env.IDLE_MINUTES = '60';
+    process.env.IDLE_MINUTES = '54';
     process.env.COOLDOWN_MINUTES = '30';
     process.env.BUSINESS_HOURS_PROTECTION = 'false'; // Disable for testing
     process.env.COST_TRACKING_ENABLED = 'true';

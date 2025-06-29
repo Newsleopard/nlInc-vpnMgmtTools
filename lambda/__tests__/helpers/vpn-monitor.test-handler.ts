@@ -113,10 +113,10 @@ export const handler = async (event: ScheduledEvent, context: Context): Promise<
     const vpnState: VpnState = await stateStore.readState();
     const idleTimeMinutes = calculateIdleTime(vpnState.lastActivity);
     
-    console.log(`VPN idle for ${idleTimeMinutes} minutes (threshold: ${(parseInt(process.env.IDLE_MINUTES || '60'))} minutes)`);
+    console.log(`VPN idle for ${idleTimeMinutes} minutes (threshold: ${(parseInt(process.env.IDLE_MINUTES || '54'))} minutes)`);
     
     // If not idle long enough, no action needed
-    if (idleTimeMinutes < (parseInt(process.env.IDLE_MINUTES || '60'))) {
+    if (idleTimeMinutes < (parseInt(process.env.IDLE_MINUTES || '54'))) {
       console.log('VPN not idle long enough, no action needed');
       return;
     }

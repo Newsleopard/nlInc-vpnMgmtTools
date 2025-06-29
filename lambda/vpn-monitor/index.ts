@@ -10,7 +10,7 @@ import { createLogger, withPerformanceLogging } from '/opt/nodejs/logger';
 
 const cloudwatch = new CloudWatchClient({});
 
-const IDLE_MINUTES = Number(process.env.IDLE_MINUTES || 60);
+const IDLE_MINUTES = Number(process.env.IDLE_MINUTES || 54);
 const ENVIRONMENT = process.env.ENVIRONMENT || 'staging';
 const COOLDOWN_MINUTES = Number(process.env.COOLDOWN_MINUTES || 30);
 const BUSINESS_HOURS_ENABLED = process.env.BUSINESS_HOURS_PROTECTION !== 'false';
