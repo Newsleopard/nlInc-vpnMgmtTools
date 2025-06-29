@@ -17,39 +17,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 CDK_DIR="$PROJECT_ROOT/cdklib"
 
-# Load profile selector for AWS profile awareness
-source "$PROJECT_ROOT/lib/profile_selector.sh" 2>/dev/null || true
-
-# Enhanced profile detection using new profile selector
-get_env_profile() {
-    local environment="$1"
-    local interactive="${2:-false}"
-    
-    # Try to get profile for specific environment
-    local profile=$(get_profile_for_environment "$environment" 2>/dev/null)
-    
-    if [[ -n "$profile" ]]; then
-        echo "$profile"
-        return 0
-    fi
-    
-    # If interactive mode and no profile found, prompt user
-    if [[ "$interactive" == "true" ]]; then
-        print_warning "No suitable profile found for $environment environment"
-        profile=$(select_profile_interactive "$environment")
-        if [[ -n "$profile" ]]; then
-            echo "$profile"
-            return 0
-        fi
-    fi
-    
-    # Fallback defaults
-    case "$environment" in
-        "prod"|"production") echo "prod" ;;
-        "staging"|"dev") echo "default" ;;
-        *) echo "default" ;;
-    esac
-}
+# Load environment manager for AWS profile awareness
+source "$PROJECT_ROOT/lib/env_core.sh" 2>/dev/null || true
 
 # Function to print colored output
 print_status() {
@@ -1242,8 +1211,6 @@ show_deployment_status() {
 # Parse command line arguments
 parse_arguments() {
     USE_SECURE_PARAMETERS=false
-    STAGING_PROFILE=""
-    PRODUCTION_PROFILE=""
     
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -1252,28 +1219,6 @@ parse_arguments() {
                 export USE_SECURE_PARAMETERS=true
                 shift
                 ;;
-            --staging-profile)
-                STAGING_PROFILE="$2"
-                shift 2
-                ;;
-            --production-profile)
-                PRODUCTION_PROFILE="$2"
-                shift 2
-                ;;
-            --profile)
-                # Use same profile for both environments if specific env profiles not set
-                if [[ -z "$STAGING_PROFILE" ]]; then
-                    STAGING_PROFILE="$2"
-                fi
-                if [[ -z "$PRODUCTION_PROFILE" ]]; then
-                    PRODUCTION_PROFILE="$2"
-                fi
-                shift 2
-                ;;
-            -h|--help)
-                show_deploy_help
-                exit 0
-                ;;
             *)
                 # Store non-option arguments
                 ARGS+=("$1")
@@ -1281,34 +1226,6 @@ parse_arguments() {
                 ;;
         esac
     done
-}
-
-# Show deployment help
-show_deploy_help() {
-    cat << 'EOF'
-VPN Cost Automation Deployment Script
-
-用法: ./scripts/deploy.sh [OPTIONS] [COMMAND]
-
-Commands:
-  staging                   Deploy to staging environment
-  production               Deploy to production environment  
-  both                     Deploy to both environments
-
-Options:
-  --secure-parameters      Use secure parameter management stack
-  --staging-profile PROF   AWS profile for staging environment
-  --production-profile PROF AWS profile for production environment
-  --profile PROF           AWS profile for both environments
-  -h, --help              Show this help message
-
-Examples:
-  ./scripts/deploy.sh staging                                    # Deploy staging with auto-detected profile
-  ./scripts/deploy.sh --profile prod production                  # Deploy production with specific profile
-  ./scripts/deploy.sh --staging-profile default --production-profile prod both  # Deploy both with specific profiles
-  ./scripts/deploy.sh both --secure-parameters                   # Deploy both with secure parameters
-
-EOF
 }
 
 # Main script logic

@@ -13,10 +13,10 @@ This is an AWS Client VPN dual-environment management toolkit designed for macOS
 ## Key Architecture Components
 
 - **Dual Environment Architecture**: Complete separation between Staging (🟡) and Production (🔴) environments
-- **Dual AWS Profile Management**: Intelligent profile detection, cross-account validation, and automatic profile switching
+- **Direct Profile Selection**: Explicit AWS profile selection with cross-account validation (replaces stateful environment switching)
 - **Modular Library Design**: Core functionality split across `lib/` directory with specialized libraries
-- **Environment Manager**: Centralized environment switching and health monitoring via `lib/env_manager.sh`
-- **Enhanced Security**: Production operations require multi-factor confirmation and additional security checks
+- **Profile Selector Library**: New `lib/profile_selector.sh` provides intelligent profile detection and interactive selection
+- **Enhanced Security**: Cross-account validation prevents wrong-environment operations, with enhanced production confirmations
 
 ## Environment Configuration
 
@@ -71,27 +71,34 @@ AWS_ACCOUNT_ID="YOUR_ACCOUNT_ID"  # Replace with actual account ID for this envi
 
 ## Common Development Commands
 
-### Environment Management
+### Environment Management (Updated)
 
+**New Direct Profile Selection System:**
 ```bash
-# View current environment status
-./admin-tools/vpn_env.sh status
+# All scripts now support direct profile and environment parameters
+./admin-tools/aws_vpn_admin.sh --profile staging --environment staging
+./admin-tools/aws_vpn_admin.sh --profile prod --environment prod
 
-# Switch to staging environment
-./admin-tools/vpn_env.sh switch staging
+# Interactive profile selection (recommended)
+./admin-tools/aws_vpn_admin.sh  # Shows profile selection menu
 
-# Switch to production (requires confirmation)
-./admin-tools/vpn_env.sh switch production
+# Deployment with specific profiles
+./scripts/deploy.sh --staging-profile default --production-profile prod both
+```
 
-# Interactive environment selector
-./enhanced_env_selector.sh
+**Legacy Environment Switching (Deprecated):**
+```bash
+# Old stateful system (moved to deprecated/)
+# ./admin-tools/vpn_env.sh switch production  # NO LONGER RECOMMENDED
+# ./enhanced_env_selector.sh                  # NO LONGER NEEDED
 ```
 
 ### Admin Operations
 
 ```bash
-# Main admin console (environment-aware)
-./admin-tools/aws_vpn_admin.sh
+# Main admin console with direct profile selection
+./admin-tools/aws_vpn_admin.sh --profile prod --environment prod
+./admin-tools/aws_vpn_admin.sh  # Interactive profile selection
 
 # Team member setup (secure CSR workflow)
 # Zero-Touch Workflow (Recommended)
@@ -243,20 +250,27 @@ route 169.254.169.253 255.255.255.255  # VPC DNS resolver
 The `lib/` directory contains modular libraries:
 
 - `core_functions.sh` - Basic utilities, logging, validation functions, AWS CLI wrappers
-- `env_manager.sh` - Environment switching, health checks, and profile management
-- `env_core.sh` - Core profile management functions and cross-account validation
+- `profile_selector.sh` - **NEW** Direct AWS profile selection and validation (replaces env_manager.sh)
+- `env_core.sh` - Legacy profile utilities (minimal, mostly deprecated)
 - `aws_setup.sh` - AWS CLI setup and configuration
 - `cert_management.sh` - Certificate generation and management
 - `endpoint_management.sh` - VPN endpoint operations
 - `endpoint_creation.sh` - VPN endpoint creation logic
 - `enhanced_confirmation.sh` - Security confirmation prompts
 
-### Key Profile Management Functions
-- `aws_with_profile()` - Wrapper for AWS CLI commands with automatic profile selection
-- `aws_with_env_profile()` - Environment-aware AWS CLI wrapper
-- `validate_profile_matches_environment()` - Cross-account validation
-- `env_validate_profile_integration()` - Comprehensive profile-environment validation
-- `select_aws_profile_for_environment()` - Interactive profile selection with smart recommendations
+### New Profile Selection Functions (lib/profile_selector.sh)
+- `select_and_validate_profile()` - Main function for profile selection and validation
+- `aws_with_selected_profile()` - Wrapper for AWS CLI commands with selected profile
+- `detect_available_profiles()` - Scan and detect available AWS profiles
+- `map_profile_to_environment()` - Map profile names to environments using naming conventions
+- `validate_profile_account()` - Cross-account validation with account ID verification
+- `select_profile_interactive()` - Interactive profile selection with environment recommendations
+- `load_environment_config()` - Load environment-specific configuration files
+
+### Legacy Functions (deprecated)
+- `aws_with_env_profile()` - Use `aws_with_selected_profile()` instead
+- `env_validate_profile_integration()` - Use `validate_profile_account()` instead
+- `select_aws_profile_for_environment()` - Use `select_profile_interactive()` instead
 
 ## Environment-Specific Behavior
 

@@ -338,8 +338,8 @@ elif [ -n "$TARGET_ENVIRONMENT" ]; then
     esac
     
     # Use environment manager to get correct AWS profile
-    source "$PROJECT_ROOT/lib/profile_selector.sh"
-    CURRENT_AWS_PROFILE=$(get_profile_for_environment "$TARGET_ENVIRONMENT" 2>/dev/null || echo "default")
+    source "$PROJECT_ROOT/lib/env_core.sh"
+    CURRENT_AWS_PROFILE=$(get_env_profile "$TARGET_ENVIRONMENT")
     
     # Validate AWS profile
     print_status "驗證 AWS profile: $CURRENT_AWS_PROFILE"
