@@ -39,23 +39,30 @@ graph TB
         J[vpn-monitor-production]
     end
     
+    subgraph "Event Scheduling"
+        K[EventBridge Staging]
+        L[EventBridge Production]
+    end
+    
     subgraph "Data Store"
-        K[SSM Parameter Store]
-        L[S3 Buckets]
+        M[SSM Parameter Store]
+        N[S3 Buckets]
     end
     
     subgraph "VPN Infrastructure"
-        M[Client VPN Endpoints]
-        N[VPC/Subnets]
-        O[Security Groups]
+        O[Client VPN Endpoints]
+        P[VPC/Subnets]
+        Q[Security Groups]
     end
     
-    G --> K
-    H --> K
-    I --> K
-    J --> K
+    K --> I
+    L --> J
     G --> M
     H --> M
+    I --> M
+    J --> M
+    G --> O
+    H --> O
 ```
 
 ### 技術堆疊
@@ -64,6 +71,7 @@ graph TB
 - **運行時**: Node.js 20.x
 - **Lambda 層**: 共享程式碼和依賴
 - **API**: REST API via API Gateway
+- **事件排程**: EventBridge (CloudWatch Events)
 - **狀態管理**: SSM Parameter Store
 - **監控**: CloudWatch Logs/Metrics
 - **安全**: KMS, IAM, Security Groups
@@ -77,6 +85,7 @@ graph TB
 | AWS 帳戶 | 獨立帳戶 | 獨立帳戶 |
 | API Gateway | 獨立端點 | 獨立端點 |
 | Lambda 函數 | 獨立部署 | 獨立部署 |
+| EventBridge 規則 | 獨立排程 | 獨立排程 |
 | VPN 端點 | 測試用 | 正式用 |
 | 參數存儲 | 環境隔離 | 環境隔離 |
 | 監控告警 | 寬鬆閾值 | 嚴格閾值 |
