@@ -45,49 +45,23 @@ EOF
     fi
 done
 
-# 載入新的 Profile Selector (替代 env_manager.sh)
-source "$PARENT_DIR/lib/profile_selector.sh"
+# 載入環境管理器 (必須第一個載入)
+source "$PARENT_DIR/lib/env_manager.sh"
 
-# 參數初始化
-AWS_PROFILE=""
-TARGET_ENVIRONMENT=""
-BUCKET_NAME=""
-ACTION=""
-USERNAME=""
-CREATE_USER=false
-DRY_RUN=false
-
-# Parse command line arguments for profile selection only, preserve others
-REMAINING_ARGS=()
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        -e|--environment)
-            TARGET_ENVIRONMENT="$2"
-            shift 2
-            ;;
-        -p|--profile)
-            AWS_PROFILE="$2"
-            shift 2
-            ;;
-        *)
-            # Preserve all other arguments for original script logic
-            REMAINING_ARGS+=("$1")
-            shift
-            ;;
-    esac
-done
-
-# Restore remaining arguments for original script parsing
-set -- "${REMAINING_ARGS[@]}"
-
-# Select and validate profile
-if ! select_and_validate_profile --profile "$AWS_PROFILE" --environment "$TARGET_ENVIRONMENT"; then
-    log_error "Profile 選擇失敗"
+# 初始化環境
+if ! env_init_for_script "manage_vpn_users.sh"; then
+    echo -e "${RED}錯誤: 無法初始化環境管理器${NC}"
     exit 1
 fi
 
-# 設定預設值
-BUCKET_NAME="${BUCKET_NAME:-vpn-csr-exchange}"
+# 驗證 AWS Profile 整合
+echo -e "${BLUE}正在驗證 AWS Profile 設定...${NC}"
+if ! env_validate_profile_integration "$CURRENT_ENVIRONMENT" "true"; then
+    echo -e "${YELLOW}警告: AWS Profile 設定可能有問題，但繼續執行用戶管理工具${NC}"
+fi
+
+# 設定環境特定路徑
+env_setup_paths
 
 # 載入核心函式庫
 source "$PARENT_DIR/lib/core_functions.sh"
@@ -504,7 +478,7 @@ main() {
     # 預設值
     BUCKET_NAME="$DEFAULT_BUCKET_NAME"
     # Get AWS profile from environment manager
-    # AWS_PROFILE is already set from profile selection
+    AWS_PROFILE="$(env_get_profile "$CURRENT_ENVIRONMENT" 2>/dev/null || echo default)"
     ENVIRONMENT=""
     CREATE_USER=false
     DRY_RUN=false
@@ -581,7 +555,7 @@ main() {
     
     # 顯示 AWS Profile 資訊
     local current_profile
-    current_profile="$SELECTED_AWS_PROFILE"
+    current_profile=$(env_get_profile "$CURRENT_ENVIRONMENT" 2>/dev/null)
     if [[ -n "$current_profile" ]]; then
         local account_id region
         account_id=$(aws_with_profile sts get-caller-identity --query Account --output text 2>/dev/null)
