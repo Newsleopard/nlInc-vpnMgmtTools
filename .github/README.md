@@ -6,6 +6,8 @@
 
 > **Reference Implementation** - Production-tested AWS Client VPN automation system with 57% cost reduction
 
+📖 **完整中文文檔**: See [README.md](README.md) for comprehensive Chinese documentation
+
 ## 🎯 What This Project Does
 
 - **Saves Money**: Automatically prevents 24/7 VPN waste, saving ~$907/year
