@@ -81,8 +81,31 @@ graph LR
 
 ```bash
 # 使用零接觸工作流程（推薦）
+# 如果您知道要使用的環境，可以明確指定
+./team_member_setup.sh --init --profile staging
+
+# 或使用互動式選擇
 ./team_member_setup.sh --init
 ```
+
+**關於互動式 Profile 選擇：**
+當您未指定 `--profile` 時，系統會顯示選擇選單：
+
+```
+=== AWS Profile Selection ===
+
+ 1) ⭐ staging (Env: staging, Account: 123456789012, Region: us-east-1)
+ 2)   production (Env: prod, Account: 987654321098, Region: us-east-1)
+
+⭐ = Recommended for environment: staging
+
+Select AWS Profile [1-3]: 1
+```
+
+- **⭐ 星號**：表示推薦的環境 profile
+- **環境資訊**：顯示 profile 對應的環境
+- **帳戶 ID**：幫助確認正確的 AWS 帳戶
+- 請選擇您要使用的環境對應的 profile
 
 系統會自動：
 - 從 S3 下載 CA 證書
@@ -101,7 +124,7 @@ graph LR
 CSR 位置: s3://vpn-csr-exchange/csr/your-username.csr
 
 當管理員簽署完成後，請執行以下命令繼續：
-./team_member_setup.sh --resume
+./team_member_setup.sh --resume --profile staging  # 或您使用的環境
 ```
 
 #### 4. 完成設置
@@ -109,7 +132,10 @@ CSR 位置: s3://vpn-csr-exchange/csr/your-username.csr
 當管理員通知您證書已簽署後：
 
 ```bash
-# 恢復設置流程
+# 恢復設置流程（與 --init 使用相同的 profile）
+./team_member_setup.sh --resume --profile staging
+
+# 或使用互動式選擇
 ./team_member_setup.sh --resume
 ```
 

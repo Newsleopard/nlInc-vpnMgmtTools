@@ -19,6 +19,7 @@ We're open-sourcing this complete, production-tested solution to help other team
 - 💰 **True cost savings calculation** - prevents 24/7 waste from human forgetfulness
 - 🤖 **Slack-native operations** - DevOps teams love the UX
 - ⚡ **Lambda warming system** - sub-1-second Slack command response guaranteed
+- 🔐 **Direct profile selection** - explicit AWS profile management eliminates hidden state
 
 ---
 
@@ -157,8 +158,8 @@ AWS定價：
 ### 三步驟部署
 
 ```bash
-# 1. 部署基礎設施
-./scripts/deploy.sh both --secure-parameters
+# 1. 部署基礎設施（使用明確的 AWS Profile）
+./scripts/deploy.sh both --secure-parameters --staging-profile default --production-profile prod
 
 # 2. 配置系統參數
 ./scripts/setup-parameters.sh --all --secure --auto-read \
@@ -174,8 +175,13 @@ AWS定價：
 
 **團隊成員 VPN 設置：**
 ```bash
-./team_member_setup.sh --init    # 開始設置流程
-./team_member_setup.sh --resume  # 完成證書安裝
+# 使用直接 profile 選擇
+./team_member_setup.sh --init --profile staging    # 開始設置流程（指定環境）
+./team_member_setup.sh --resume --profile staging  # 完成證書安裝
+
+# 或使用互動式選擇
+./team_member_setup.sh --init    # 互動式選擇 AWS profile
+./team_member_setup.sh --resume  # 互動式選擇 AWS profile
 ```
 
 **Slack 指令操作：**
@@ -246,8 +252,8 @@ AWS定價：
 ## 🔄 系統元件
 
 ### Shell Scripts 工具集
-- 環境管理：`vpn_env.sh`
-- 管理員控制台：`aws_vpn_admin.sh`
+- 配置管理：`lib/profile_selector.sh`（直接 AWS profile 選擇）
+- 管理員控制台：`aws_vpn_admin.sh`（支援 `--profile` 和 `--environment` 參數）
 - 團隊設置：`team_member_setup.sh`
 - 診斷修復：`tools/` 目錄下多個工具
 

@@ -68,52 +68,59 @@
     └── 確認要求：多重確認
 ```
 
-### 環境切換操作
+### 環境與 Profile 管理
 
-#### 查看當前環境
+#### 使用直接 Profile 選擇
+新的系統採用直接 AWS profile 選擇方式，消除隱藏狀態，提升安全性：
+
 ```bash
-./admin-tools/vpn_env.sh status
+# 明確指定 AWS profile
+./admin-tools/aws_vpn_admin.sh --profile staging
+./admin-tools/aws_vpn_admin.sh --profile production
+
+# 指定環境，自動選擇對應 profile
+./admin-tools/aws_vpn_admin.sh --environment staging
+./admin-tools/aws_vpn_admin.sh --environment production
+
+# 互動式選擇（顯示可用 profiles 和建議）
+./admin-tools/aws_vpn_admin.sh
 ```
 
-輸出範例：
-```
-=== VPN Environment Status ===
-Current Environment: staging
-AWS Profile: staging-vpn-admin
-Account ID: YOUR_STAGING_ACCOUNT_ID
-Region: us-east-1
-Health: ✅ Healthy
-```
-
-#### 切換環境
+#### Profile 狀態查看
 ```bash
-# 切換到 Staging
-./admin-tools/vpn_env.sh switch staging
+# 查看當前可用的 AWS profiles
+aws configure list-profiles
 
-# 切換到 Production（需要額外確認）
-./admin-tools/vpn_env.sh switch production
+# 驗證 profile 設定
+aws sts get-caller-identity --profile staging
+aws sts get-caller-identity --profile production
 ```
 
-#### 使用互動式選擇器
-```bash
-./enhanced_env_selector.sh
+#### 互動式 Profile 選擇
+當不指定 `--profile` 參數時，系統會顯示智能選擇選單：
+
+```
+=== AWS Profile Selection ===
+
+ 1) ⭐ staging (Env: staging, Account: 123456789012, Region: us-east-1)
+ 2)   production (Env: prod, Account: 987654321098, Region: us-east-1)  
+ 3)   default (Env: unknown, Account: 555666777888, Region: us-west-2)
+
+⭐ = Recommended for environment: staging
+
+Select AWS Profile [1-3]: 
 ```
 
-### AWS Profile 管理
+**選單特色：**
+- **⭐ 星號標示**：推薦的環境對應 profiles
+- **環境對應**：自動顯示 profile 對應的環境
+- **帳戶資訊**：顯示 AWS 帳戶 ID 避免誤操作
+- **區域資訊**：顯示 AWS 區域設定
 
-系統支援智能 AWS Profile 管理：
-
-#### 設定環境專用 Profile
-```bash
-# 為當前環境設定特定 Profile
-./admin-tools/aws_vpn_admin.sh --set-profile my-staging-profile
-
-# 重置為自動檢測
-./admin-tools/aws_vpn_admin.sh --reset-profile
-
-# 查看 Profile 狀態
-./admin-tools/aws_vpn_admin.sh --profile-status
-```
+**安全驗證：**
+- 自動驗證所選 profile 的帳戶 ID 是否符合環境設定
+- 防止在錯誤的 AWS 帳戶中執行操作
+- 顯示警告若缺少帳戶驗證設定
 
 #### Profile 配置建議
 ```bash
@@ -852,12 +859,12 @@ time curl -X POST "YOUR_API_GATEWAY_URL" \
 
 ## 管理工具參考
 
-### 環境管理工具
+### Profile 與環境管理工具
 
 | 工具 | 用途 | 常用選項 |
 |------|------|----------|
-| `vpn_env.sh` | 環境管理 | `status`, `switch`, `selector` |
-| `enhanced_env_selector.sh` | 互動式選擇 | - |
+| `lib/profile_selector.sh` | Profile 選擇庫 | 所有管理工具的核心 |
+| `aws_vpn_admin.sh` | 主要管理控制台 | `--profile`, `--environment`, `--help` |
 
 ### 證書管理工具
 
@@ -910,10 +917,10 @@ time curl -X POST "YOUR_API_GATEWAY_URL" \
 #### 有用的別名
 ```bash
 # 加入到 ~/.bashrc 或 ~/.zshrc
-alias vpn-status='./admin-tools/vpn_env.sh status'
-alias vpn-staging='./admin-tools/vpn_env.sh switch staging'
-alias vpn-prod='./admin-tools/vpn_env.sh switch production'
+alias vpn-admin-staging='./admin-tools/aws_vpn_admin.sh --profile staging'
+alias vpn-admin-prod='./admin-tools/aws_vpn_admin.sh --profile production'
 alias vpn-admin='./admin-tools/aws_vpn_admin.sh'
+alias vpn-profiles='aws configure list-profiles'
 ```
 
 ---

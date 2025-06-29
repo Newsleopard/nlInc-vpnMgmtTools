@@ -24,8 +24,8 @@ Each environment has its own configuration structure:
 
 - `configs/staging/staging.env` - Staging environment settings
 - `configs/production/production.env` - Production environment settings  
-- `.current_env` - Tracks currently active environment
 - Environment-specific directories for certs, logs, and user configs
+- `lib/profile_selector.sh` - Direct AWS profile selection (replaces stateful environment tracking)
 
 ## AWS Profile Management
 
@@ -56,18 +56,26 @@ AWS_ACCOUNT_ID="YOUR_ACCOUNT_ID"  # Replace with actual account ID for this envi
 
 ### Profile Operations
 ```bash
-# View current AWS profile status
-./admin-tools/vpn_env.sh status
+# View available AWS profiles
+aws configure list-profiles
 
-# Set specific profile for current environment
-./admin-tools/aws_vpn_admin.sh --set-profile my-staging-profile
+# Use specific profile with admin tools
+./admin-tools/aws_vpn_admin.sh --profile staging
+./admin-tools/aws_vpn_admin.sh --profile production
 
-# Reset to automatic profile detection
-./admin-tools/aws_vpn_admin.sh --reset-profile
+# Use environment-aware selection (interactive)
+./admin-tools/aws_vpn_admin.sh --environment staging
 
-# View detailed profile information
-./admin-tools/aws_vpn_admin.sh --profile-status
+# Interactive profile selection (shows smart menu)
+./admin-tools/aws_vpn_admin.sh
 ```
+
+**Interactive Profile Selection Features:**
+- Smart menu with environment mapping and recommendations  
+- Star (⭐) highlighting for environment-matched profiles
+- Account ID and region display for verification
+- Cross-account validation prevents wrong-environment operations
+- User-friendly error handling and guidance
 
 ## Common Development Commands
 
@@ -285,7 +293,7 @@ Scripts create/modify files in environment-specific locations:
 - Certificates: `certs/{staging|production}/`
 - Configurations: `configs/{staging|production}/`
 - Logs: `logs/{staging|production}/`
-- Current environment state: `.current_env`
+- Direct profile selection: No state files (stateless operation)
 
 ### Configuration File Organization
 
@@ -514,13 +522,13 @@ For large teams, use batch operations:
 
 1. **Regular Audits**: Use `./admin-tools/manage_vpn_users.sh list` to review active users
 2. **Permission Validation**: Run `./team_member_setup.sh --check-permissions` before VPN setup
-3. **Environment Isolation**: Verify environment with `./admin-tools/vpn_env.sh status` before user operations
+3. **Profile Verification**: Verify AWS profile configuration with `aws configure list-profiles` and `aws sts get-caller-identity --profile PROFILE` before operations
 4. **Policy Updates**: Regularly review and update IAM policies in `iam-policies/` directory
 5. **Access Logging**: Monitor S3 bucket access logs for suspicious activity
 
 ## Important Notes
 
-- **Always verify current environment and AWS profile** before operations using `./admin-tools/vpn_env.sh status`
+- **Always verify AWS profile** before operations using `aws sts get-caller-identity --profile PROFILE`
 - **Profile Configuration Required**: Each environment needs proper AWS profile configuration in `configs/{env}/{env}.env`
 - **Account ID Validation**: Set correct `AWS_ACCOUNT_ID` in each environment config
 - **Tool Separation**: Use `setup_csr_s3_bucket.sh` for infrastructure, `manage_vpn_users.sh` for user management
@@ -549,12 +557,14 @@ aws sts get-caller-identity --profile production
 # Edit configs/staging/staging.env and configs/production/production.env
 # Set AWS_ACCOUNT_ID for each environment
 
-# Test environment switching with profile validation
-./admin-tools/vpn_env.sh switch staging
-./admin-tools/vpn_env.sh switch production
+# Test profile selection with admin tools
+./admin-tools/aws_vpn_admin.sh --profile staging --help
+./admin-tools/aws_vpn_admin.sh --profile production --help
 
-# View current status (shows environment + profile info)
-./admin-tools/vpn_env.sh status
+# View profile status
+aws configure list-profiles
+aws sts get-caller-identity --profile staging
+aws sts get-caller-identity --profile production
 ```
 
 ## Adding New Administrators

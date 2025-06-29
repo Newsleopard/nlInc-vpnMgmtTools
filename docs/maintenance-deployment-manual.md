@@ -215,13 +215,27 @@ aws ssm put-parameter --name "/vpn/slack/webhook_url" --value "https://hooks.sla
 
 **測試基本功能:**
 ```bash
-# 檢查環境健康狀態
-./vpn_env.sh health
+# 檢查 AWS profiles 設定
+aws configure list-profiles
+aws sts get-caller-identity --profile staging
+aws sts get-caller-identity --profile production
 
-# 測試 VPN 操作
+# 測試管理工具
+./admin-tools/aws_vpn_admin.sh --help
+
+# 測試互動式 profile 選擇
+./admin-tools/aws_vpn_admin.sh  # Should show profile selection menu
+
+# 測試 VPN 操作（透過 Slack）
 /vpn check staging
 /vpn check production
 ```
+
+**Profile 選擇測試：**
+驗證互動式選擇功能正常運作：
+- 應顯示所有可用的 AWS profiles
+- 正確標示環境對應和帳戶資訊
+- 驗證跨帳戶安全檢查功能
 
 **驗證成本優化:**
 ```bash
