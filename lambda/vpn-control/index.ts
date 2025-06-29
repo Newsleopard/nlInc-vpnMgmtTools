@@ -222,20 +222,32 @@ export const handler = async (
     } catch (operationError) {
       console.error(`VPN ${command.action} operation failed:`, operationError);
       
-      // Send alert for operation failure
       const errorMessage = operationError instanceof Error ? operationError.message : String(operationError);
-      await slack.sendSlackAlert(
-        `VPN ${command.action} operation failed: ${errorMessage}`,
-        ENVIRONMENT,
-        'critical'
-      );
       
-      await publishMetric('VpnOperationErrors', 1);
+      // Check if this is an intermediate state error (not a critical system failure)
+      const isIntermediateStateError = errorMessage.includes('currently associating') || 
+                                     errorMessage.includes('currently disassociating');
+      
+      if (isIntermediateStateError) {
+        // Don't send critical alerts for expected intermediate state blocks
+        console.log('Operation blocked due to intermediate state - this is expected behavior');
+        await publishMetric('VpnOperationBlocked', 1);
+      } else {
+        // Send alert for actual operation failures
+        await slack.sendSlackAlert(
+          `VPN ${command.action} operation failed: ${errorMessage}`,
+          ENVIRONMENT,
+          'critical'
+        );
+        await publishMetric('VpnOperationErrors', 1);
+      }
       
       response = {
         success: false,
-        message: `VPN ${command.action} operation failed`,
-        error: `VPN ${command.action} failed: ${errorMessage}`
+        message: isIntermediateStateError ? 
+          'VPN operation temporarily unavailable' : 
+          `VPN ${command.action} operation failed`,
+        error: errorMessage
       };
     }
 
@@ -435,7 +447,7 @@ async function handleClearOverride(command: VpnCommandRequest): Promise<VpnComma
 }
 
 // Epic 3.2: Handle cooldown status command
-async function handleCooldownStatus(command: VpnCommandRequest): Promise<VpnCommandResponse> {
+async function handleCooldownStatus(_command: VpnCommandRequest): Promise<VpnCommandResponse> {
   try {
     const cooldownParam = await stateStore.readParameter(`/vpn/automation/cooldown/${ENVIRONMENT}`);
     
@@ -536,7 +548,7 @@ async function handleForceClose(command: VpnCommandRequest): Promise<VpnCommandR
 }
 
 // Epic 3.2: Handle cost savings report
-async function handleCostSavings(command: VpnCommandRequest): Promise<VpnCommandResponse> {
+async function handleCostSavings(_command: VpnCommandRequest): Promise<VpnCommandResponse> {
   try {
     // Get cumulative savings
     const cumulativeKey = `/vpn/cost_optimization/cumulative_savings/${ENVIRONMENT}`;

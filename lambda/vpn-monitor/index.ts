@@ -2,11 +2,10 @@ import { ScheduledEvent, Context } from 'aws-lambda';
 import { CloudWatchClient, PutMetricDataCommand, StandardUnit } from '@aws-sdk/client-cloudwatch';
 
 // Import shared utilities from Lambda Layer
-import { VpnState } from '/opt/nodejs/types';
 import * as vpnManager from '/opt/nodejs/vpnManager';
 import * as stateStore from '/opt/nodejs/stateStore';
 import * as slack from '/opt/nodejs/slack';
-import { createLogger, withPerformanceLogging } from '/opt/nodejs/logger';
+import { createLogger } from '/opt/nodejs/logger';
 
 const cloudwatch = new CloudWatchClient({});
 
@@ -39,11 +38,7 @@ export const handler = async (
 
   try {
     // Validate Parameter Store configuration
-    const isValid = await withPerformanceLogging(
-      'validateParameterStore',
-      stateStore.validateParameterStore,
-      logger
-    )();
+    const isValid = await stateStore.validateParameterStore();
     
     if (!isValid) {
       logger.critical('Parameter Store validation failed - some required parameters are missing', null, {
@@ -62,11 +57,7 @@ export const handler = async (
     logger.debug('Parameter Store validation successful');
 
     // Validate VPN endpoint exists and is accessible
-    const endpointValid = await withPerformanceLogging(
-      'validateEndpoint',
-      vpnManager.validateEndpoint,
-      logger
-    )();
+    const endpointValid = await vpnManager.validateEndpoint();
     
     if (!endpointValid) {
       logger.critical('VPN endpoint validation failed', null, {
@@ -85,17 +76,8 @@ export const handler = async (
     logger.debug('VPN endpoint validation successful');
 
     // Fetch current VPN status
-    const status = await withPerformanceLogging(
-      'fetchVpnStatus',
-      vpnManager.fetchStatus,
-      logger
-    )();
-    
-    const state = await withPerformanceLogging(
-      'readVpnState', 
-      stateStore.readState,
-      logger
-    )();
+    const status = await vpnManager.fetchStatus();
+    const state = await stateStore.readState();
     
     logger.info('Current VPN status', {
       associated: status.associated,
@@ -113,11 +95,7 @@ export const handler = async (
     });
 
     // Publish current status metrics
-    await withPerformanceLogging(
-      'publishStatusMetrics',
-      publishStatusMetrics,
-      logger
-    )(status);
+    await publishStatusMetrics(status);
 
     // Check if VPN is associated and potentially idle
     if (!status.associated) {
@@ -136,11 +114,7 @@ export const handler = async (
       });
       
       // Update last activity since there are active connections
-      await withPerformanceLogging(
-        'updateLastActivity',
-        vpnManager.updateLastActivity,
-        logger
-      )();
+      await vpnManager.updateLastActivity();
       
       // Reset cooldown if VPN is actively being used
       await clearCooldownTimestamp();
@@ -628,7 +602,7 @@ async function calculateCostSavings(idleTimeMinutes: number): Promise<{ hourly: 
     
     // Calculate different cost components
     const hourlySubnetCost = pricing.subnetAssociation * subnetCount;
-    const hourlyEndpointCost = pricing.endpointHour; // This continues even when disassociated
+    // Note: hourlyEndpointCost continues even when disassociated, so only subnet association saves money
     const totalHourlySavings = hourlySubnetCost; // Only subnet association is saved
     
     // Calculate total savings for the idle period
@@ -661,10 +635,6 @@ async function calculateCostSavings(idleTimeMinutes: number): Promise<{ hourly: 
   }
 }
 
-// Legacy function for backward compatibility
-function calculateHourlyCostSavings(): string {
-  return '0.10'; // Simple fallback
-}
 
 // Helper function to publish CloudWatch metrics
 async function publishMetric(metricName: string, value: number): Promise<void> {

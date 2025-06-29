@@ -439,26 +439,115 @@ export function formatSlackResponse(
   const environmentName = command.environment.charAt(0).toUpperCase() + command.environment.slice(1);
   
   if (!response.success) {
-    return {
-      response_type: 'ephemeral',
-      text: `❌ VPN ${command.action} failed for ${environmentEmoji} ${environmentName}`,
-      attachments: [{
-        color: 'danger',
-        fields: [{
-          title: 'Error',
-          value: response.error || 'Unknown error occurred',
-          short: false
+    // Check if this is an intermediate state error
+    const errorMessage = response.error || 'Unknown error occurred';
+    const isIntermediateStateError = errorMessage.includes('currently associating') || 
+                                   errorMessage.includes('currently disassociating');
+    
+    if (isIntermediateStateError) {
+      // Special handling for intermediate state errors with bilingual support
+      const isAssociating = errorMessage.includes('currently associating');
+      const isDisassociating = errorMessage.includes('currently disassociating');
+      const actionAttempted = command.action === 'open' ? 'open' : 'close';
+      
+      let statusText = '';
+      let instructionText = '';
+      
+      if (isAssociating) {
+        statusText = 'VPN subnets are currently associating | VPN 子網路正在關聯中';
+        instructionText = actionAttempted === 'open' ? 
+          'Please wait for association to complete | 請等待關聯完成' :
+          'Wait for association to finish, then try closing | 等待關聯完成後再嘗試關閉';
+      } else if (isDisassociating) {
+        statusText = 'VPN subnets are currently disassociating | VPN 子網路正在取消關聯中';
+        instructionText = actionAttempted === 'close' ? 
+          'Please wait for disassociation to complete | 請等待取消關聯完成' :
+          'Wait for disassociation to finish, then try opening | 等待取消關聯完成後再嘗試開啟';
+      }
+      
+      return {
+        response_type: 'ephemeral',
+        text: `🟡 VPN Operation In Progress | VPN 操作進行中`,
+        attachments: [{
+          color: 'warning',
+          fields: [
+            {
+              title: `${environmentEmoji} Environment | 環境`,
+              value: environmentName,
+              short: true
+            },
+            {
+              title: '📊 Current Status | 目前狀態',
+              value: statusText,
+              short: true
+            },
+            {
+              title: '⏳ Action Required | 所需動作',
+              value: instructionText,
+              short: false
+            },
+            {
+              title: '💡 Tip | 提示',
+              value: `Use \`/vpn check ${command.environment}\` to monitor progress | 使用 \`/vpn check ${command.environment}\` 監控進度`,
+              short: false
+            }
+          ],
+          footer: 'VPN Automation System | VPN 自動化系統'
         }]
-      }]
-    };
+      };
+    } else {
+      // Regular error formatting for actual failures
+      return {
+        response_type: 'ephemeral',
+        text: `❌ VPN ${command.action} failed for ${environmentEmoji} ${environmentName}`,
+        attachments: [{
+          color: 'danger',
+          fields: [{
+            title: 'Error',
+            value: errorMessage,
+            short: false
+          }]
+        }]
+      };
+    }
   }
   
   let statusEmoji = '⚪';
   let statusText = 'Unknown';
   
   if (command.action === 'check' && response.data) {
-    statusEmoji = response.data.associated ? '🟢' : '🔴';
-    statusText = response.data.associated ? 'Open' : 'Closed';
+    // Handle different association states
+    if (response.data.associationState) {
+      switch (response.data.associationState) {
+        case 'associated':
+          statusEmoji = '🟢';
+          statusText = 'Open';
+          break;
+        case 'associating':
+          statusEmoji = '🟡';
+          statusText = 'Associating...';
+          break;
+        case 'disassociating':
+          statusEmoji = '🟡';
+          statusText = 'Disassociating...';
+          break;
+        case 'disassociated':
+          statusEmoji = '🔴';
+          statusText = 'Closed';
+          break;
+        case 'failed':
+          statusEmoji = '❌';
+          statusText = 'Failed';
+          break;
+        default:
+          statusEmoji = '⚪';
+          statusText = 'Unknown';
+      }
+    } else {
+      // Fallback to boolean check
+      statusEmoji = response.data.associated ? '🟢' : '🔴';
+      statusText = response.data.associated ? 'Open' : 'Closed';
+    }
   } else if (command.action === 'open') {
     statusEmoji = '🟢';
     statusText = 'Opened';
@@ -479,6 +568,16 @@ export function formatSlackResponse(
       value: response.data.activeConnections.toString(),
       short: true
     });
+    
+    // Add association state details for intermediate states
+    if (response.data.associationState && 
+        ['associating', 'disassociating', 'failed'].includes(response.data.associationState)) {
+      fields.push({
+        title: 'Association State',
+        value: response.data.associationState.charAt(0).toUpperCase() + response.data.associationState.slice(1),
+        short: true
+      });
+    }
     
     if (response.data.lastActivity) {
       const lastActivity = new Date(response.data.lastActivity);

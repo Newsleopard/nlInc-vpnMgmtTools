@@ -15,6 +15,7 @@ export interface VpnConfig {
 // Runtime status from EC2 API + Parameter Store
 export interface VpnStatus {
   associated: boolean;
+  associationState?: 'associated' | 'associating' | 'disassociating' | 'disassociated' | 'failed';
   activeConnections: number;
   lastActivity: Date;
   endpointId: string;

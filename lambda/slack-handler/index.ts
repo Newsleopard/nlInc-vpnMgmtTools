@@ -224,10 +224,86 @@ export const handler = async (
       isLocalEnvironment: vpnCommand.environment === ENVIRONMENT
     });
 
-    // For potentially long-running operations (open/close), respond immediately and process asynchronously
+    // For potentially long-running operations (open/close), check for intermediate states first
     const isLongRunningOperation = ['open', 'close', 'start', 'stop', 'enable', 'disable', 'on', 'off'].includes(vpnCommand.action);
     
     if (isLongRunningOperation) {
+      // Quick validation for intermediate states to provide immediate feedback
+      try {
+        logger.info('Pre-validating operation for intermediate states', {
+          action: vpnCommand.action,
+          environment: vpnCommand.environment
+        });
+        
+        // For both local and cross-account commands, do a quick status check first
+        let quickStatusResponse: VpnCommandResponse;
+        
+        if (vpnCommand.environment === ENVIRONMENT) {
+          // Local environment - direct lambda call
+          quickStatusResponse = await withPerformanceLogging(
+            'quickStatusCheck',
+            invokeLocalVpnControl,
+            logger
+          )({ ...vpnCommand, action: 'check' as any }, logger);
+        } else {
+          // Cross-account environment - API Gateway call
+          quickStatusResponse = await withPerformanceLogging(
+            'quickCrossAccountStatusCheck',
+            invokeProductionViaAPIGateway,
+            logger
+          )({ ...vpnCommand, action: 'check' as any }, logger);
+        }
+        
+        // If we can detect intermediate state, handle it immediately
+        if (quickStatusResponse.success && quickStatusResponse.data?.associationState) {
+          const state = quickStatusResponse.data.associationState;
+          
+          if (vpnCommand.action === 'open' && (state === 'associating' || state === 'disassociating')) {
+            // Return intermediate state error immediately
+            const errorResponse = {
+              success: false,
+              message: 'VPN operation temporarily unavailable',
+              error: state === 'associating' ? 
+                'VPN is currently associating subnets. Please wait for the operation to complete before trying again.' :
+                'VPN is currently disassociating subnets. Please wait for the operation to complete before trying to open.'
+            };
+            
+            const slackResponse = slack.formatSlackResponse(errorResponse, vpnCommand);
+            return {
+              statusCode: 200,
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(slackResponse)
+            };
+          }
+          
+          if (vpnCommand.action === 'close' && (state === 'associating' || state === 'disassociating')) {
+            // Return intermediate state error immediately
+            const errorResponse = {
+              success: false,
+              message: 'VPN operation temporarily unavailable',
+              error: state === 'disassociating' ? 
+                'VPN is currently disassociating subnets. Please wait for the operation to complete before trying again.' :
+                'VPN is currently associating subnets. Please wait for the operation to complete before trying to close.'
+            };
+            
+            const slackResponse = slack.formatSlackResponse(errorResponse, vpnCommand);
+            return {
+              statusCode: 200,
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(slackResponse)
+            };
+          }
+        }
+        
+      } catch (preValidationError) {
+        // If pre-validation fails, continue with normal flow
+        logger.warn('Pre-validation failed, continuing with async processing', {
+          error: preValidationError.message,
+          action: vpnCommand.action,
+          environment: vpnCommand.environment
+        });
+      }
+      
       logger.info('Processing long-running operation asynchronously', {
         action: vpnCommand.action,
         environment: vpnCommand.environment,

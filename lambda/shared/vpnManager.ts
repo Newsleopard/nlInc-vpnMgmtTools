@@ -6,7 +6,7 @@ import {
   DescribeClientVpnConnectionsCommand,
   DescribeClientVpnEndpointsCommand
 } from '@aws-sdk/client-ec2';
-import { VpnConfig, VpnState, VpnStatus } from './types';
+import { VpnState, VpnStatus } from './types';
 import * as stateStore from './stateStore';
 
 const ec2 = new EC2Client({});
@@ -20,11 +20,22 @@ export async function associateSubnets(): Promise<void> {
     const config = await stateStore.readConfig();
     console.log('Retrieved config:', config);
     
-    // Check if already associated
+    // Check current status including intermediate states
     const currentStatus = await fetchStatus();
+    
+    // If already associated, no action needed
     if (currentStatus.associated) {
       console.log('Subnets are already associated with VPN endpoint');
       return;
+    }
+    
+    // Check for intermediate states that should block operations
+    if (currentStatus.associationState === 'associating') {
+      throw new Error('VPN is currently associating subnets. Please wait for the operation to complete before trying again.');
+    }
+    
+    if (currentStatus.associationState === 'disassociating') {
+      throw new Error('VPN is currently disassociating subnets. Please wait for the operation to complete before trying to open.');
     }
     
     // Associate subnet with VPN endpoint
@@ -62,11 +73,22 @@ export async function disassociateSubnets(): Promise<void> {
     const config = await stateStore.readConfig();
     console.log('Retrieved config:', config);
     
-    // Check if already disassociated
+    // Check current status including intermediate states
     const currentStatus = await fetchStatus();
+    
+    // If already disassociated, no action needed
     if (!currentStatus.associated) {
       console.log('Subnets are already disassociated from VPN endpoint');
       return;
+    }
+    
+    // Check for intermediate states that should block operations
+    if (currentStatus.associationState === 'disassociating') {
+      throw new Error('VPN is currently disassociating subnets. Please wait for the operation to complete before trying again.');
+    }
+    
+    if (currentStatus.associationState === 'associating') {
+      throw new Error('VPN is currently associating subnets. Please wait for the operation to complete before trying to close.');
     }
     
     // Get association ID for disassociation
@@ -144,10 +166,12 @@ export async function fetchStatus(): Promise<VpnStatus> {
     ).length || 0;
     
     // Check actual association status from AWS
-    const actuallyAssociated = associations.ClientVpnTargetNetworks?.some(
-      assoc => assoc.TargetNetworkId === config.SUBNET_ID && 
-               assoc.Status?.Code === 'associated'
-    ) || false;
+    const targetAssociation = associations.ClientVpnTargetNetworks?.find(
+      assoc => assoc.TargetNetworkId === config.SUBNET_ID
+    );
+    
+    const associationState = targetAssociation?.Status?.Code || 'disassociated';
+    const actuallyAssociated = associationState === 'associated';
     
     // If state doesn't match reality, update it
     if (state.associated !== actuallyAssociated) {
@@ -161,6 +185,7 @@ export async function fetchStatus(): Promise<VpnStatus> {
     
     const status: VpnStatus = {
       associated: actuallyAssociated,
+      associationState: associationState as 'associated' | 'associating' | 'disassociating' | 'disassociated' | 'failed',
       activeConnections,
       lastActivity: new Date(state.lastActivity),
       endpointId: config.ENDPOINT_ID,
