@@ -174,9 +174,33 @@ export const handler = async (
     // Check for administrative override
     if (await hasAdministrativeOverride()) {
       console.log('Skipping auto-disassociation due to administrative override');
-      await slack.sendSlackNotification(
-        `🛑 VPN ${ENVIRONMENT} auto-disassociation skipped due to administrative override. Use \`/vpn admin clear-override ${ENVIRONMENT}\` to re-enable.`
-      );
+      const environmentEmoji = ENVIRONMENT === 'production' ? '🚀' : '🔧';
+      const environmentName = ENVIRONMENT === 'production' ? 'Production' : 'Staging';
+      
+      await slack.sendSlackNotification({
+        text: "🛑 Administrative Override Active | 管理員覆蓋已啟用",
+        attachments: [{
+          color: "warning",
+          fields: [
+            {
+              title: `${environmentEmoji} Environment | 環境`,
+              value: environmentName,
+              short: true
+            },
+            {
+              title: "🚫 Status | 狀態",
+              value: "Auto-disassociation disabled | 自動斷開已停用",
+              short: true
+            },
+            {
+              title: "🔧 To Re-enable | 重新啟用",
+              value: `/vpn admin clear-override ${ENVIRONMENT}`,
+              short: false
+            }
+          ]
+        }]
+      });
+      
       await publishMetric('AdministrativeOverrideSkips', 1);
       return;
     }
@@ -187,14 +211,48 @@ export const handler = async (
       
       // Enhanced business hours notification with cost impact
       const costProjection = await calculateCostSavings(idleTimeMinutes);
-      await slack.sendSlackNotification(
-        `⏰ **Business Hours Protection** ${ENVIRONMENT === 'production' ? '🔴' : '🟡'}\n` +
-        `🕒 **Current Time**: ${new Date().toLocaleTimeString()} ${BUSINESS_HOURS_TIMEZONE}\n` +
-        `⏱️ **Idle Duration**: ${idleTimeMinutes} minutes (threshold: ${IDLE_MINUTES}min)\n` +
-        `💰 **Potential Savings**: $${costProjection.hourly}/hour\n` +
-        `🛡️ **Action**: Auto-close disabled during business hours\n` +
-        `📝 **Note**: VPN will auto-close at 6 PM or use \`/vpn close ${ENVIRONMENT}\` manually`
-      );
+      const environmentEmoji = ENVIRONMENT === 'production' ? '🚀' : '🔧';
+      const environmentName = ENVIRONMENT === 'production' ? 'Production' : 'Staging';
+      const currentTime = new Date().toLocaleTimeString();
+      
+      await slack.sendSlackNotification({
+        text: "⏰ Business Hours Protection | 營業時間保護",
+        attachments: [{
+          color: "good",
+          fields: [
+            {
+              title: `${environmentEmoji} Environment | 環境`,
+              value: environmentName,
+              short: true
+            },
+            {
+              title: "🕒 Current Time | 目前時間",
+              value: `${currentTime} (${BUSINESS_HOURS_TIMEZONE})`,
+              short: true
+            },
+            {
+              title: "⏱️ Idle Duration | 閒置時間",
+              value: `${idleTimeMinutes} minutes | 分鐘\n_threshold: ${IDLE_MINUTES}min | 閾值: ${IDLE_MINUTES}分鐘_`,
+              short: true
+            },
+            {
+              title: "💰 Potential Savings | 潛在節省",
+              value: `$${costProjection.hourly}/hour | 每小時`,
+              short: true
+            },
+            {
+              title: "🛡️ Protection Status | 保護狀態",
+              value: "Auto-close disabled | 自動關閉已停用",
+              short: true
+            },
+            {
+              title: "📝 Note | 注意",
+              value: `Auto-close at 6 PM or manual: \`/vpn close ${ENVIRONMENT}\` | 6PM自動關閉或手動操作`,
+              short: false
+            }
+          ]
+        }]
+      });
       
       // Publish metric for business hours skips with cost impact
       await publishMetric('BusinessHoursSkips', 1);
@@ -208,13 +266,42 @@ export const handler = async (
       console.log(`Skipping auto-disassociation - still in cooldown period (${remainingCooldown} minutes remaining)`);
       
       // Enhanced cooldown notification with context
-      await slack.sendSlackNotification(
-        `⏳ **Cooldown Protection Active** ${ENVIRONMENT === 'production' ? '🔴' : '🟡'}\n` +
-        `⏱️ **Remaining**: ${Math.ceil(remainingCooldown)} minutes\n` +
-        `🔄 **Purpose**: Prevents rapid on/off cycling\n` +
-        `📈 **Current Idle**: ${idleTimeMinutes} minutes\n` +
-        `💡 **Tip**: Use \`/vpn close ${ENVIRONMENT}\` for immediate shutdown`
-      );
+      const environmentEmoji = ENVIRONMENT === 'production' ? '🚀' : '🔧';
+      const environmentName = ENVIRONMENT === 'production' ? 'Production' : 'Staging';
+      
+      await slack.sendSlackNotification({
+        text: "⏳ Cooldown Protection Active | 冷卻保護啟用中",
+        attachments: [{
+          color: "#ffaa00",
+          fields: [
+            {
+              title: `${environmentEmoji} Environment | 環境`,
+              value: environmentName,
+              short: true
+            },
+            {
+              title: "⏱️ Time Remaining | 剩餘時間",
+              value: `${Math.ceil(remainingCooldown)} minutes | 分鐘`,
+              short: true
+            },
+            {
+              title: "🔄 Purpose | 目的",
+              value: "Prevents rapid cycling | 防止快速循環",
+              short: true
+            },
+            {
+              title: "📈 Current Idle | 目前閒置",
+              value: `${idleTimeMinutes} minutes | 分鐘`,
+              short: true
+            },
+            {
+              title: "💡 Manual Override | 手動覆蓋",
+              value: `/vpn close ${ENVIRONMENT} for immediate shutdown | 立即關閉`,
+              short: false
+            }
+          ]
+        }]
+      });
       
       await publishMetric('CooldownSkips', 1);
       await publishMetric('CooldownRemainingMinutes', remainingCooldown);
@@ -244,16 +331,51 @@ export const handler = async (
       // Publish cost savings metrics
       await publishCostSavingsMetrics(costSavings, idleTimeMinutes);
       
-      // Send enhanced Slack notification about automatic action
-      const environmentEmoji = ENVIRONMENT === 'production' ? '🔴' : '🟡';
-      await slack.sendSlackNotification(
-        `💰 **Auto-Cost Optimization** ${environmentEmoji} **${ENVIRONMENT}**\n` +
-        `📊 **Idle Time**: ${idleTimeMinutes} minutes (threshold: ${IDLE_MINUTES}min)\n` +
-        `💵 **Cost Savings**: $${costSavings.hourly}/hour (~$${costSavings.total} saved for idle period)\n` +
-        `🔧 **Action**: Subnets automatically disassociated\n` +
-        `📱 **Re-enable**: Use \`/vpn open ${ENVIRONMENT}\` when needed\n` +
-        `⏰ **Cooldown**: ${COOLDOWN_MINUTES} minutes to prevent rapid cycling`
-      );
+      // Send enhanced bilingual Slack notification about automatic action
+      const environmentEmoji = ENVIRONMENT === 'production' ? '🚀' : '🔧';
+      const environmentName = ENVIRONMENT === 'production' ? 'Production' : 'Staging';
+      
+      // Create bilingual message with beautiful formatting using attachments
+      await slack.sendSlackNotification({
+        text: "💰 Auto VPN Cost Optimization | 自動 VPN 成本優化",
+        attachments: [{
+          color: "good",
+          fields: [
+            {
+              title: `${environmentEmoji} Environment | 環境`,
+              value: environmentName,
+              short: true
+            },
+            {
+              title: "📊 Idle Duration | 閒置時間",
+              value: `${idleTimeMinutes} minutes | 分鐘\n_threshold: ${IDLE_MINUTES}min | 閾值: ${IDLE_MINUTES}分鐘_`,
+              short: true
+            },
+            {
+              title: "💵 Cost Savings | 節省成本",
+              value: `$${costSavings.hourly}/hour | 每小時\n~$${costSavings.total} saved | 節省`,
+              short: true
+            },
+            {
+              title: "🔧 Action Taken | 執行動作",
+              value: "Subnets auto-disassociated | 子網路已自動取消關聯",
+              short: true
+            },
+            {
+              title: "📱 Re-enable | 重新啟用",
+              value: `/vpn open ${ENVIRONMENT}`,
+              short: true
+            },
+            {
+              title: "⏰ Cooldown Period | 冷卻期",
+              value: `${COOLDOWN_MINUTES} minutes | 分鐘\n_prevents rapid cycling | 防止快速循環_`,
+              short: true
+            }
+          ],
+          footer: "VPN Automation System",
+          ts: Math.floor(Date.now() / 1000)
+        }]
+      });
       
       console.log('Successfully auto-disassociated VPN subnets with cooldown protection enabled');
       
@@ -402,13 +524,42 @@ async function hasRecentManualActivity(): Promise<boolean> {
       console.log(`Recent manual activity detected: ${timeSinceManualActivity.toFixed(1)} minutes ago`);
       
       // Enhanced manual activity notification
-      await slack.sendSlackNotification(
-        `👤 **Manual Activity Detected** ${ENVIRONMENT === 'production' ? '🔴' : '🟡'}\n` +
-        `🕰️ **Last Activity**: ${timeSinceManualActivity.toFixed(1)} minutes ago\n` +
-        `⏱️ **Grace Period**: ${manualActivityGracePeriod} minutes\n` +
-        `🔒 **Protection**: Auto-close temporarily disabled\n` +
-        `📝 **Note**: Auto-monitoring will resume after grace period`
-      );
+      const environmentEmoji = ENVIRONMENT === 'production' ? '🚀' : '🔧';
+      const environmentName = ENVIRONMENT === 'production' ? 'Production' : 'Staging';
+      
+      await slack.sendSlackNotification({
+        text: "👤 Manual Activity Detected | 檢測到手動活動",
+        attachments: [{
+          color: "#36a64f",
+          fields: [
+            {
+              title: `${environmentEmoji} Environment | 環境`,
+              value: environmentName,
+              short: true
+            },
+            {
+              title: "🕰️ Last Activity | 最後活動",
+              value: `${timeSinceManualActivity.toFixed(1)} minutes ago | 分鐘前`,
+              short: true
+            },
+            {
+              title: "⏱️ Grace Period | 寬限期",
+              value: `${manualActivityGracePeriod} minutes | 分鐘`,
+              short: true
+            },
+            {
+              title: "🔒 Protection Status | 保護狀態",
+              value: "Auto-close temporarily disabled | 自動關閉暫時停用",
+              short: true
+            },
+            {
+              title: "📝 Note | 注意",
+              value: "Auto-monitoring will resume after grace period | 寬限期後將恢復自動監控",
+              short: false
+            }
+          ]
+        }]
+      });
     }
     
     return isRecent;

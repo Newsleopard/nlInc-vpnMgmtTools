@@ -121,42 +121,70 @@ export function parseSlackCommand(slackCommand: SlackCommand): VpnCommandRequest
 
 // Get help message for VPN commands
 function getHelpMessage(): string {
-  return `*VPN Automation Commands:*
-
-*Basic Usage:* \`/vpn <action> <environment>\`
-
-*Core Actions:*
-• \`open\` (aliases: start, enable, on) - Associate VPN subnets
-• \`close\` (aliases: stop, disable, off) - Disassociate VPN subnets  
-• \`check\` (aliases: status, state, info) - Check VPN status
-
-*Cost Optimization (Epic 3.2):*
-• \`/vpn savings <environment>\` - Show cost savings report
-• \`/vpn costs daily\` - Show daily cost analysis
-• \`/vpn costs cumulative\` - Show total savings
-
-*Administrative Controls:*
-• \`/vpn admin override <env>\` - Disable auto-close (24h)
-• \`/vpn admin clear-override <env>\` - Re-enable auto-close
-• \`/vpn admin cooldown <env>\` - Check cooldown status
-• \`/vpn admin force-close <env>\` - Bypass safety mechanisms
-
-*Environments:*
-• \`staging\` (aliases: stage, dev) - Staging environment 🟡
-• \`production\` (aliases: prod) - Production environment 🔴
-
-*Examples:*
-• \`/vpn open staging\` - Open staging VPN
-• \`/vpn savings production\` - View production cost savings
-• \`/vpn admin override staging\` - Disable auto-close for 24h
-• \`/vpn costs daily\` - Daily cost breakdown
-
-*Auto-Cost Optimization:*
-- Idle VPNs auto-close after 54 minutes (configurable)
-- Business hours protection (9 AM - 6 PM)
-- 30-minute cooldown prevents rapid cycling
-- Manual activity detection (15-min grace period)
-- Real-time cost savings tracking (~$0.10/hour per subnet)`;
+  const helpResponse = {
+    response_type: 'ephemeral',
+    text: '📚 VPN Automation Help',
+    attachments: [
+      {
+        color: 'good',
+        title: '🚀 Basic Usage',
+        text: '`/vpn <action> <environment>`',
+        fields: [
+          {
+            title: '📋 Core Actions',
+            value: '• `open` (aliases: start, enable, on) - Associate VPN subnets\n• `close` (aliases: stop, disable, off) - Disassociate VPN subnets\n• `check` (aliases: status, state, info) - Check VPN status',
+            short: false
+          }
+        ]
+      },
+      {
+        color: '#ffaa00',
+        title: '💰 Cost Optimization Commands',
+        fields: [
+          {
+            title: 'Cost Reports',
+            value: '• `/vpn savings <environment>` - Show cost savings report\n• `/vpn costs daily` - Show daily cost analysis\n• `/vpn costs cumulative` - Show total savings',
+            short: false
+          }
+        ]
+      },
+      {
+        color: 'danger',
+        title: '⚙️ Administrative Controls',
+        fields: [
+          {
+            title: 'Admin Commands',
+            value: '• `/vpn admin override <env>` - Disable auto-close (24h)\n• `/vpn admin clear-override <env>` - Re-enable auto-close\n• `/vpn admin cooldown <env>` - Check cooldown status\n• `/vpn admin force-close <env>` - Bypass safety mechanisms',
+            short: false
+          }
+        ]
+      },
+      {
+        color: '#36a64f',
+        title: '🌍 Environments',
+        fields: [
+          {
+            title: 'Available Environments',
+            value: '• `staging` (aliases: stage, dev) - Staging environment 🔧\n• `production` (aliases: prod) - Production environment 🚀',
+            short: true
+          },
+          {
+            title: '📝 Examples',
+            value: '• `/vpn open staging` - Open staging VPN\n• `/vpn savings production` - View production cost savings\n• `/vpn admin override staging` - Disable auto-close for 24h\n• `/vpn costs daily` - Daily cost breakdown',
+            short: true
+          }
+        ]
+      },
+      {
+        color: '#764FA5',
+        title: '🤖 Auto-Cost Optimization',
+        text: '• Idle VPNs auto-close after 54 minutes (configurable)\n• Business hours protection (9 AM - 6 PM)\n• 30-minute cooldown prevents rapid cycling\n• Manual activity detection (15-min grace period)\n• Real-time cost savings tracking (~$0.10/hour per subnet)',
+        footer: 'VPN Automation System'
+      }
+    ]
+  };
+  
+  return JSON.stringify(helpResponse);
 }
 
 // Check if user is authorized for production operations
@@ -479,14 +507,12 @@ export function formatSlackResponse(
 
 // Send notification to Slack webhook
 export async function sendSlackNotification(
-  message: string
+  message: string | object
 ): Promise<void> {
   try {
     const webhookUrl = await stateStore.readSlackWebhook();
     
-    const payload = {
-      text: message
-    };
+    const payload = typeof message === 'string' ? { text: message } : message;
     
     const response = await fetch(webhookUrl, {
       method: 'POST',
@@ -533,13 +559,36 @@ export async function sendSlackAlert(
   const environmentName = environment === 'production' ? '正式環境' : '測試環境';
   const severityName = severity === 'critical' ? '緊急' : '警告';
   
-  const alertMessage = `${emoji} *VPN 系統警報* ${environmentEmoji}\n` +
-                      `*環境：* ${environmentName} (${environment})\n` +
-                      `*嚴重程度：* ${severityName}\n` +
-                      `*訊息：* ${userFriendlyMessage}\n` +
-                      `*時間：* ${formattedTime} (台灣時間)`;
-  
-  await sendSlackNotification(alertMessage);
+  await sendSlackNotification({
+    text: `${emoji} VPN 系統警報 ${environmentEmoji}`,
+    attachments: [{
+      color: severity === 'critical' ? 'danger' : 'warning',
+      fields: [
+        {
+          title: '環境 Environment',
+          value: `${environmentName} (${environment})`,
+          short: true
+        },
+        {
+          title: '嚴重程度 Severity',
+          value: severityName,
+          short: true
+        },
+        {
+          title: '訊息 Message',
+          value: userFriendlyMessage,
+          short: false
+        },
+        {
+          title: '時間 Time',
+          value: `${formattedTime} (台灣時間)`,
+          short: true
+        }
+      ],
+      footer: 'VPN System Alert | VPN 系統警報',
+      ts: Math.floor(Date.now() / 1000)
+    }]
+  });
 }
 
 /**

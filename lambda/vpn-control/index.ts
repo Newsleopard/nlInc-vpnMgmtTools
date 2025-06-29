@@ -332,14 +332,44 @@ async function handleAdminOverride(command: VpnCommandRequest): Promise<VpnComma
     await stateStore.writeParameter(`/vpn/automation/admin_override/${ENVIRONMENT}`, overrideValue);
     await publishMetric('AdminOverrideEnabled', 1);
     
-    await slack.sendSlackNotification(
-      `🛑 **Administrative Override Enabled** ${ENVIRONMENT === 'production' ? '🔴' : '🟡'}\n` +
-      `👤 **Admin**: ${command.user}\n` +
-      `⏰ **Duration**: 24 hours\n` +
-      `⏱️ **Expires**: ${expiryTime.toLocaleString()}\n` +
-      `🚫 **Effect**: Auto-close disabled\n` +
-      `📝 **Note**: Use \`/vpn admin clear-override ${ENVIRONMENT}\` to re-enable`
-    );
+    await slack.sendSlackNotification({
+      text: "🛑 Administrative Override Enabled",
+      attachments: [{
+        color: "warning",
+        fields: [
+          {
+            title: `${ENVIRONMENT === 'production' ? '🚀' : '🔧'} Environment`,
+            value: ENVIRONMENT,
+            short: true
+          },
+          {
+            title: "👤 Admin",
+            value: command.user,
+            short: true
+          },
+          {
+            title: "⏰ Duration",
+            value: "24 hours",
+            short: true
+          },
+          {
+            title: "⏱️ Expires",
+            value: expiryTime.toLocaleString(),
+            short: true
+          },
+          {
+            title: "🚫 Effect",
+            value: "Auto-close disabled",
+            short: true
+          },
+          {
+            title: "📝 Note",
+            value: `Use \`/vpn admin clear-override ${ENVIRONMENT}\` to re-enable`,
+            short: false
+          }
+        ]
+      }]
+    });
     
     return {
       success: true,
@@ -361,12 +391,34 @@ async function handleClearOverride(command: VpnCommandRequest): Promise<VpnComma
     await stateStore.writeParameter(`/vpn/automation/admin_override/${ENVIRONMENT}`, '');
     await publishMetric('AdminOverrideCleared', 1);
     
-    await slack.sendSlackNotification(
-      `✅ **Administrative Override Cleared** ${ENVIRONMENT === 'production' ? '🔴' : '🟡'}\n` +
-      `👤 **Admin**: ${command.user}\n` +
-      `🔄 **Effect**: Auto-close re-enabled\n` +
-      `⏱️ **Monitoring**: Idle detection resumed`
-    );
+    await slack.sendSlackNotification({
+      text: "✅ Administrative Override Cleared",
+      attachments: [{
+        color: "good",
+        fields: [
+          {
+            title: `${ENVIRONMENT === 'production' ? '🚀' : '🔧'} Environment`,
+            value: ENVIRONMENT,
+            short: true
+          },
+          {
+            title: "👤 Admin",
+            value: command.user,
+            short: true
+          },
+          {
+            title: "🔄 Effect",
+            value: "Auto-close re-enabled",
+            short: true
+          },
+          {
+            title: "⏱️ Monitoring",
+            value: "Idle detection resumed",
+            short: true
+          }
+        ]
+      }]
+    });
     
     return {
       success: true,
@@ -434,13 +486,39 @@ async function handleForceClose(command: VpnCommandRequest): Promise<VpnCommandR
     const status = await vpnManager.fetchStatus();
     await publishMetric('AdminForceCloseOperations', 1);
     
-    await slack.sendSlackNotification(
-      `⚠️ **Force Close Executed** ${ENVIRONMENT === 'production' ? '🔴' : '🟡'}\n` +
-      `👤 **Admin**: ${command.user}\n` +
-      `🔧 **Action**: Bypassed all safety mechanisms\n` +
-      `🔄 **Cooldown**: Cleared for immediate re-association\n` +
-      `⏱️ **Timestamp**: ${new Date().toLocaleString()}`
-    );
+    await slack.sendSlackNotification({
+      text: "⚠️ Force Close Executed",
+      attachments: [{
+        color: "danger",
+        fields: [
+          {
+            title: `${ENVIRONMENT === 'production' ? '🚀' : '🔧'} Environment`,
+            value: ENVIRONMENT,
+            short: true
+          },
+          {
+            title: "👤 Admin",
+            value: command.user,
+            short: true
+          },
+          {
+            title: "🔧 Action",
+            value: "Bypassed all safety mechanisms",
+            short: true
+          },
+          {
+            title: "🔄 Cooldown",
+            value: "Cleared for immediate re-association",
+            short: true
+          },
+          {
+            title: "⏱️ Timestamp",
+            value: new Date().toLocaleString(),
+            short: false
+          }
+        ]
+      }]
+    });
     
     return {
       success: true,
