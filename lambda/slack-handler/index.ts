@@ -642,8 +642,10 @@ async function invokeProductionViaAPIGateway(command: VpnCommandRequest, logger:
       });
 
       // Add timeout to fetch request
+      // VPN operations (open/close) can take 1-3 minutes, so use longer timeout
+      const timeoutMs = ['open', 'close'].includes(command.action) ? 240000 : 30000; // 4 minutes for VPN ops, 30s for others
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
       const requestStart = Date.now();
       
       try {
@@ -719,10 +721,10 @@ async function invokeProductionViaAPIGateway(command: VpnCommandRequest, logger:
         if (fetchError.name === 'AbortError') {
           childLogger.warn('Cross-account request timeout', {
             attempt: attempt,
-            timeout: 30000,
+            timeout: timeoutMs,
             requestTime: requestTime
           });
-          throw new Error('Request timeout - production API did not respond within 30 seconds');
+          throw new Error(`Request timeout - production API did not respond within ${timeoutMs/1000} seconds`);
         }
         throw fetchError;
       }
