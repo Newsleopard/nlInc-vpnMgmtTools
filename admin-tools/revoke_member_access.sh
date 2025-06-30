@@ -2,36 +2,92 @@
 
 # AWS Client VPN 撤銷團隊成員訪問權限腳本
 # 用途：安全撤銷特定團隊成員的 VPN 訪問權限
-# 版本：1.1 (環境感知版本)
+# 版本：1.2 (直接 Profile 選擇版本)
+#
+# ⚠️  重要警告：此腳本尚未在實際 AWS 用戶上進行測試 ⚠️ 
+# WARNING: This script has NOT been tested on actual AWS users yet
+# 建議在生產環境使用前，先在測試環境進行充分驗證
+# Recommend thorough testing in development environment before production use
 
 # 全域變數
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PARENT_DIR="$(dirname "$SCRIPT_DIR")"
 
-# 載入環境管理器 (必須第一個載入)
-source "$SCRIPT_DIR/../lib/env_manager.sh"
+# Parse command line arguments
+AWS_PROFILE=""
+TARGET_ENVIRONMENT=""
+USERNAME=""  # Initialize USERNAME variable
 
-# 初始化環境
-if ! env_init_for_script "revoke_member_access.sh"; then
-    echo -e "${RED}錯誤: 無法初始化環境管理器${NC}"
+# 載入新的 Profile Selector (替代 env_manager.sh)
+source "$SCRIPT_DIR/../lib/profile_selector.sh"
+
+# 載入環境核心函式 (用於顯示功能)
+source "$SCRIPT_DIR/../lib/env_core.sh"
+# Parse command line arguments for help
+for arg in "$@"; do
+    if [[ "$arg" == "-h" || "$arg" == "--help" ]]; then
+        cat << 'EOF'
+⚠️  重要警告：此腳本尚未在實際 AWS 用戶上進行測試 ⚠️
+WARNING: This script has NOT been tested on actual AWS users yet
+
+用法: $0 [選項] [使用者名稱]
+
+選項:
+  -p, --profile PROFILE     AWS CLI profile
+  -e, --environment ENV     目標環境 (staging/production)
+  -h, --help               顯示此幫助訊息
+
+如果未指定使用者名稱，將進入互動模式
+
+注意：建議在生產環境使用前，先在測試環境進行充分驗證
+EOF
+        exit 0
+    fi
+done
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --profile|-p)
+            AWS_PROFILE="$2"
+            shift 2
+            ;;
+        --environment|-e)
+            TARGET_ENVIRONMENT="$2"
+            shift 2
+            ;;
+        --help|-h)
+            # Already handled above
+            shift
+            ;;
+        -*)
+            echo "Unknown option: $1"
+            exit 1
+            ;;
+        *)
+            USERNAME="$1"
+            shift
+            ;;
+    esac
+done
+
+# Display warning before profile selection
+echo -e "${YELLOW}⚠️  重要警告：此腳本尚未在實際 AWS 用戶上進行測試${NC}"
+echo -e "${YELLOW}WARNING: This script has NOT been tested on actual AWS users yet${NC}"
+echo -e "${YELLOW}建議在生產環境使用前，先在測試環境進行充分驗證${NC}"
+echo -e ""
+
+# Select and validate profile
+if ! select_and_validate_profile --profile "$AWS_PROFILE" --environment "$TARGET_ENVIRONMENT"; then
+    echo -e "${RED}錯誤: Profile 選擇失敗${NC}"
     exit 1
 fi
-
-# 驗證 AWS Profile 整合
-echo -e "${BLUE}正在驗證 AWS Profile 設定...${NC}"
-if ! env_validate_profile_integration "$CURRENT_ENVIRONMENT" "true"; then
-    echo -e "${RED}錯誤: AWS Profile 設定有問題，無法安全執行撤銷操作${NC}"
-    echo -e "${YELLOW}請先使用管理員工具設定正確的 AWS Profile${NC}"
-    exit 1
-fi
-
-# 設定環境特定路徑
-env_setup_paths
 
 # 環境感知的配置檔案
-REVOCATION_LOG_DIR="$ENV_LOG_DIR/revocation"
+REVOCATION_LOG_DIR="$VPN_LOG_DIR/revocation"
 LOG_FILE="$REVOCATION_LOG_DIR/revocation.log"
-CONFIG_FILE="$VPN_ENDPOINT_CONFIG_FILE"
-EASYRSA_DIR_REVOKE="$ENV_CERT_DIR/easy-rsa-env"
+CONFIG_FILE="$VPN_CONFIG_DIR/vpn_endpoint.conf"
+EASYRSA_DIR_REVOKE="$VPN_CERT_DIR/easy-rsa-env"
 
 # 載入核心函式庫
 source "$SCRIPT_DIR/../lib/core_functions.sh"
@@ -49,7 +105,7 @@ log_revocation_message() {
 # 顯示歡迎訊息
 show_welcome() {
     clear
-    show_env_aware_header "AWS Client VPN 訪問權限撤銷工具"
+    show_team_env_header "AWS Client VPN 訪問權限撤銷工具"
     echo -e ""
     echo -e "${YELLOW}此工具用於撤銷團隊成員的 VPN 訪問權限${NC}"
     echo -e "${YELLOW}適用於以下情況：${NC}"
@@ -62,12 +118,11 @@ show_welcome() {
     echo -e ""
     
     # 顯示 AWS Profile 資訊
-    local current_profile
-    current_profile=$(env_get_profile "$CURRENT_ENVIRONMENT" 2>/dev/null)
+    local current_profile="$SELECTED_AWS_PROFILE"
     if [[ -n "$current_profile" ]]; then
         local account_id region
-        account_id=$(aws_with_profile sts get-caller-identity --query Account --output text 2>/dev/null)
-        region=$(aws_with_profile configure get region 2>/dev/null)
+        account_id=$(aws sts get-caller-identity --profile "$current_profile" --query Account --output text 2>/dev/null)
+        region=$(aws configure get region --profile "$current_profile" 2>/dev/null)
         
         echo -e "${CYAN}AWS 配置狀態:${NC}"
         echo -e "  Profile: ${GREEN}$current_profile${NC}"
@@ -90,6 +145,9 @@ show_welcome() {
 # 檢查必要工具和權限
 check_revocation_prerequisites() {
     echo -e "\\n${YELLOW}[1/7] 檢查必要工具和權限...${NC}"
+    
+    # Safety check - remind about untested status
+    echo -e "${RED}⚠️  提醒：此腳本尚未在實際環境中測試，請謹慎操作${NC}"
     
     # macOS 特定檢查
     if [ "$(uname)" = "Darwin" ]; then
@@ -163,7 +221,7 @@ check_revocation_prerequisites() {
     # 測試 AWS 連接和權限
     echo -e "${BLUE}測試 AWS 連接和權限...${NC}"
     local aws_user
-    aws_user=$(aws_with_profile sts get-caller-identity --query 'Arn' --output text 2>/dev/null || echo "failed")
+    aws_user=$(aws sts get-caller-identity --profile "$SELECTED_AWS_PROFILE" --query 'Arn' --output text 2>/dev/null || echo "failed")
     
     if [[ "$aws_user" == "failed" ]]; then
         echo -e "${RED}AWS 連接失敗${NC}"
@@ -177,7 +235,7 @@ check_revocation_prerequisites() {
     
     # 檢查管理員權限
     local admin_check
-    admin_check=$(aws_with_profile ec2 describe-client-vpn-endpoints --max-items 1 2>/dev/null || echo "failed")
+    admin_check=$(aws ec2 describe-client-vpn-endpoints --profile "$SELECTED_AWS_PROFILE" --max-items 1 2>/dev/null || echo "failed")
     
     if [[ "$admin_check" == "failed" ]]; then
         echo -e "${RED}權限不足：無法訪問 Client VPN 端點${NC}"
@@ -199,7 +257,7 @@ get_revocation_info() {
     read_secure_input "用戶名: " username "validate_username" || exit 1
     
     # 使用 validate_aws_region 獲取 AWS 區域
-    aws_region=$(aws_with_profile configure get region)
+    aws_region=$(aws configure get region --profile "$SELECTED_AWS_PROFILE")
     if [ -z "$aws_region" ] || ! validate_aws_region "$aws_region"; then
         read_secure_input "請輸入 AWS 區域: " aws_region "validate_aws_region" || exit 1
     fi
@@ -207,14 +265,14 @@ get_revocation_info() {
     # 獲取 VPN 端點 ID
     echo -e "\\n${BLUE}可用的 Client VPN 端點：${NC}"
     local endpoints
-    endpoints=$(aws_with_profile ec2 describe-client-vpn-endpoints --region "$aws_region")
+    endpoints=$(aws ec2 describe-client-vpn-endpoints --profile "$SELECTED_AWS_PROFILE" --region "$aws_region")
     echo "$endpoints" | jq -r '.ClientVpnEndpoints[] | "端點 ID: \(.ClientVpnEndpointId), 狀態: \(.Status.Code), 名稱: \(.Tags[]? | select(.Key=="Name") | .Value // "無名稱")"'
     
     read_secure_input "請輸入 Client VPN 端點 ID: " endpoint_id "validate_endpoint_id" || exit 1
     
     # 驗證端點 ID
     local endpoint_check
-    endpoint_check=$(aws_with_profile ec2 describe-client-vpn-endpoints --client-vpn-endpoint-ids "$endpoint_id" --region "$aws_region" 2>/dev/null || echo "not_found")
+    endpoint_check=$(aws ec2 describe-client-vpn-endpoints --profile "$SELECTED_AWS_PROFILE" --client-vpn-endpoint-ids "$endpoint_id" --region "$aws_region" 2>/dev/null || echo "not_found")
     
     if [[ "$endpoint_check" == "not_found" ]]; then
         echo -e "${RED}無法找到指定的 VPN 端點${NC}"
@@ -266,7 +324,7 @@ find_user_certificates() {
     
     # 列出所有證書
     local certificates
-    certificates=$(aws_with_profile acm list-certificates --region "$aws_region")
+    certificates=$(aws acm list-certificates --profile "$SELECTED_AWS_PROFILE" --region "$aws_region")
     
     # 搜索包含用戶名的證書
     user_cert_arns=()
@@ -275,7 +333,7 @@ find_user_certificates() {
     while IFS= read -r cert_arn; do
         if [ ! -z "$cert_arn" ]; then
             local cert_details domain_name
-            cert_details=$(aws_with_profile acm describe-certificate --certificate-arn "$cert_arn" --region "$aws_region")
+            cert_details=$(aws acm describe-certificate --profile "$SELECTED_AWS_PROFILE" --certificate-arn "$cert_arn" --region "$aws_region")
             if ! domain_name=$(echo "$cert_details" | jq -r '.Certificate.DomainName // ""' 2>/dev/null); then
                 # 備用解析方法：使用 grep 和 sed 提取域名
                 domain_name=$(echo "$cert_details" | grep -o '"DomainName":"[^"]*"' | sed 's/"DomainName":"//g' | sed 's/"//g' | head -1)
@@ -298,7 +356,7 @@ find_user_certificates() {
     while IFS= read -r cert_arn; do
         if [ ! -z "$cert_arn" ]; then
             local tags contains_username
-            tags=$(aws_with_profile acm list-tags-for-certificate --certificate-arn "$cert_arn" --region "$aws_region" 2>/dev/null || echo '{"Tags":[]}')
+            tags=$(aws acm list-tags-for-certificate --profile "$SELECTED_AWS_PROFILE" --certificate-arn "$cert_arn" --region "$aws_region" 2>/dev/null || echo '{"Tags":[]}')
             if ! contains_username=$(echo "$tags" | jq -r --arg username "$username" 'select(.Tags[] | select(.Key=="Name" or .Key=="User") | .Value | contains($username)) | true' 2>/dev/null); then
                 # 備用解析方法：使用 grep 檢查標籤
                 if echo "$tags" | grep -q "\"$username\""; then
@@ -339,7 +397,8 @@ check_current_connections() {
     
     # 獲取當前連接
     local connections user_connections
-    connections=$(aws_with_profile ec2 describe-client-vpn-connections \
+    connections=$(aws ec2 describe-client-vpn-connections \
+      --profile "$SELECTED_AWS_PROFILE" \
       --client-vpn-endpoint-id "$endpoint_id" \
       --region "$aws_region")
     
@@ -371,7 +430,8 @@ check_current_connections() {
         if [[ "$disconnect_choice" =~ ^[Yy]$ ]]; then
             echo "$user_connections" | while read connection_id; do
                 echo -e "${BLUE}斷開連接 $connection_id...${NC}"
-                aws_with_profile ec2 terminate-client-vpn-connections \
+                aws ec2 terminate-client-vpn-connections \
+                  --profile "$SELECTED_AWS_PROFILE" \
                   --client-vpn-endpoint-id "$endpoint_id" \
                   --connection-id "$connection_id" \
                   --region "$aws_region"
@@ -417,7 +477,7 @@ revoke_certificates() {
             
             # 從 ACM 獲取證書詳情和標籤
             local cert_tags
-            cert_tags=$(aws_with_profile acm list-tags-for-certificate --certificate-arn "$cert_arn" --region "$aws_region" 2>/dev/null)
+            cert_tags=$(aws acm list-tags-for-certificate --profile "$SELECTED_AWS_PROFILE" --certificate-arn "$cert_arn" --region "$aws_region" 2>/dev/null)
             
             if [ $? -eq 0 ]; then
                 # 嘗試從標籤中提取用戶名作為證書名稱
@@ -489,7 +549,7 @@ revoke_certificates() {
         
         # 嘗試刪除證書
         local delete_result
-        delete_result=$(aws_with_profile acm delete-certificate --certificate-arn "$cert_arn" --region "$aws_region" 2>&1 || echo "failed")
+        delete_result=$(aws acm delete-certificate --profile "$SELECTED_AWS_PROFILE" --certificate-arn "$cert_arn" --region "$aws_region" 2>&1 || echo "failed")
         
         if [[ "$delete_result" == "failed" ]] || [[ "$delete_result" == *"error"* ]]; then
             echo -e "${RED}✗ 無法刪除 ACM 證書 $cert_arn${NC}"
@@ -498,7 +558,8 @@ revoke_certificates() {
             
             # 嘗試標記證書為已撤銷
             local tag_result
-            tag_result=$(aws_with_profile acm add-tags-to-certificate \
+            tag_result=$(aws acm add-tags-to-certificate \
+              --profile "$SELECTED_AWS_PROFILE" \
               --certificate-arn "$cert_arn" \
               --tags Key=Status,Value=Revoked Key=RevokedBy,Value="$(whoami)" Key=RevokedDate,Value="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
               --region "$aws_region" 2>&1 || echo "tag_failed")
@@ -563,7 +624,7 @@ check_iam_permissions() {
     
     # 檢查是否有同名的 IAM 用戶
     local iam_user_exists
-    iam_user_exists=$(aws_with_profile iam get-user --user-name "$username" 2>/dev/null || echo "not_found")
+    iam_user_exists=$(aws iam get-user --profile "$SELECTED_AWS_PROFILE" --user-name "$username" 2>/dev/null || echo "not_found")
     
     if [[ "$iam_user_exists" != "not_found" ]]; then
         echo -e "${BLUE}找到 IAM 用戶: $username${NC}"
@@ -577,36 +638,36 @@ check_iam_permissions() {
             # 列出並停用訪問密鑰
             echo -e "${BLUE}處理訪問密鑰...${NC}"
             local access_keys
-            access_keys=$(aws_with_profile iam list-access-keys --user-name "$username" --query 'AccessKeyMetadata[*].AccessKeyId' --output text)
+            access_keys=$(aws iam list-access-keys --profile "$SELECTED_AWS_PROFILE" --user-name "$username" --query 'AccessKeyMetadata[*].AccessKeyId' --output text)
             
             for key_id in $access_keys; do
                 echo -e "${BLUE}停用訪問密鑰: $key_id${NC}"
-                aws_with_profile iam update-access-key --access-key-id "$key_id" --status Inactive --user-name "$username"
+                aws iam update-access-key --profile "$SELECTED_AWS_PROFILE" --access-key-id "$key_id" --status Inactive --user-name "$username"
             done
             
             # 分離政策
             echo -e "${BLUE}分離用戶政策...${NC}"
             local attached_policies
-            attached_policies=$(aws_with_profile iam list-attached-user-policies --user-name "$username" --query 'AttachedPolicies[*].PolicyArn' --output text)
+            attached_policies=$(aws iam list-attached-user-policies --profile "$SELECTED_AWS_PROFILE" --user-name "$username" --query 'AttachedPolicies[*].PolicyArn' --output text)
             for policy in $attached_policies; do
                 echo -e "${BLUE}分離政策: $policy${NC}"
-                aws_with_profile iam detach-user-policy --user-name "$username" --policy-arn "$policy"
+                aws iam detach-user-policy --profile "$SELECTED_AWS_PROFILE" --user-name "$username" --policy-arn "$policy"
             done
             
             # 移除內嵌政策
             local inline_policies
-            inline_policies=$(aws_with_profile iam list-user-policies --user-name "$username" --query 'PolicyNames' --output text)
+            inline_policies=$(aws iam list-user-policies --profile "$SELECTED_AWS_PROFILE" --user-name "$username" --query 'PolicyNames' --output text)
             for policy in $inline_policies; do
                 echo -e "${BLUE}刪除內嵌政策: $policy${NC}"
-                aws_with_profile iam delete-user-policy --user-name "$username" --policy-name "$policy"
+                aws iam delete-user-policy --profile "$SELECTED_AWS_PROFILE" --user-name "$username" --policy-name "$policy"
             done
             
             # 從群組中移除
             local user_groups
-            user_groups=$(aws_with_profile iam list-groups-for-user --user-name "$username" --query 'Groups[*].GroupName' --output text)
+            user_groups=$(aws iam list-groups-for-user --profile "$SELECTED_AWS_PROFILE" --user-name "$username" --query 'Groups[*].GroupName' --output text)
             for group in $user_groups; do
                 echo -e "${BLUE}從群組移除: $group${NC}"
-                aws_with_profile iam remove-user-from-group --user-name "$username" --group-name "$group"
+                aws iam remove-user-from-group --profile "$SELECTED_AWS_PROFILE" --user-name "$username" --group-name "$group"
             done
             
             echo -e "${GREEN}✓ IAM 用戶權限已撤銷${NC}"
@@ -619,11 +680,11 @@ check_iam_permissions() {
                 # 刪除訪問密鑰
                 for key_id in $access_keys; do
                     echo -e "${BLUE}刪除訪問密鑰: $key_id${NC}"
-                    aws_with_profile iam delete-access-key --access-key-id "$key_id" --user-name "$username"
+                    aws iam delete-access-key --profile "$SELECTED_AWS_PROFILE" --access-key-id "$key_id" --user-name "$username"
                 done
                 
                 # 刪除用戶
-                aws_with_profile iam delete-user --user-name "$username"
+                aws iam delete-user --profile "$SELECTED_AWS_PROFILE" --user-name "$username"
                 echo -e "${GREEN}✓ IAM 用戶已刪除${NC}"
             fi
         fi
@@ -646,7 +707,7 @@ generate_revocation_report() {
 
 撤銷時間: $(date)
 操作者: $(whoami)
-AWS 身份: $(aws_with_profile sts get-caller-identity --query 'Arn' --output text)
+AWS 身份: $(aws sts get-caller-identity --profile "$SELECTED_AWS_PROFILE" --query 'Arn' --output text)
 
 被撤銷用戶資訊:
   用戶名: $username
@@ -798,7 +859,7 @@ show_final_instructions() {
         echo -e "   ${BLUE}a.${NC} 進入目錄: ${CYAN}cd $EASYRSA_DIR_REVOKE${NC}"
         echo -e "   ${BLUE}b.${NC} 撤銷證書: ${CYAN}./easyrsa revoke $username${NC}"
         echo -e "   ${BLUE}c.${NC} 生成 CRL: ${CYAN}./easyrsa gen-crl${NC}"
-        echo -e "   ${BLUE}d.${NC} 導入 CRL: ${CYAN}aws_with_profile ec2 import-client-vpn-client-certificate-revocation-list --client-vpn-endpoint-id $endpoint_id --certificate-revocation-list fileb://pki/crl.pem --region $aws_region${NC}"
+        echo -e "   ${BLUE}d.${NC} 導入 CRL: ${CYAN}aws ec2 import-client-vpn-client-certificate-revocation-list --profile \"$SELECTED_AWS_PROFILE\" --client-vpn-endpoint-id $endpoint_id --certificate-revocation-list fileb://pki/crl.pem --region $aws_region${NC}"
     fi
     
     echo -e ""
@@ -857,13 +918,8 @@ confirm_revocation() {
 
 # 主函數
 main() {
-    # 環境操作驗證
-    if ! env_validate_operation "REVOKE_ACCESS"; then
-        return 1
-    fi
-    
     # 記錄操作開始
-    log_env_action "REVOKE_ACCESS_START" "開始撤銷用戶訪問權限"
+    log_revocation_message "開始撤銷用戶訪問權限"
     
     # 顯示歡迎訊息
     show_welcome
@@ -885,7 +941,7 @@ main() {
     # 顯示最終指示
     show_final_instructions
     
-    log_env_action "REVOKE_ACCESS_COMPLETE" "訪問權限撤銷操作完成"
+    log_revocation_message "REVOKE_ACCESS_COMPLETE: 訪問權限撤銷操作完成"
 }
 
 # 記錄腳本啟動

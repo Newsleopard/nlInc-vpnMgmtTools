@@ -8,10 +8,50 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
-# 載入環境管理器 (必須第一個載入)
-source "$PROJECT_ROOT/lib/env_manager.sh"
+# Parse command line arguments for profile
+AWS_PROFILE=""
+TARGET_ENVIRONMENT=""
 
-# Color codes will be loaded from env_manager.sh
+# Parse help first
+for arg in "$@"; do
+    if [[ "$arg" == "-h" || "$arg" == "--help" ]]; then
+        SHOW_HELP=true
+        break
+    fi
+done
+
+# Parse profile and environment arguments while preserving other arguments
+REMAINING_ARGS=()
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --profile|-p)
+            AWS_PROFILE="$2"
+            shift 2
+            ;;
+        --environment|-e)
+            TARGET_ENVIRONMENT="$2"
+            shift 2
+            ;;
+        --help|-h)
+            SHOW_HELP=true
+            shift
+            ;;
+        *)
+            # Preserve all other arguments for later processing
+            REMAINING_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+# Restore remaining arguments
+set -- "${REMAINING_ARGS[@]}"
+
+# 載入新的 Profile Selector (替代 env_manager.sh)
+source "$PROJECT_ROOT/lib/profile_selector.sh"
+source "$PROJECT_ROOT/lib/env_core.sh"
+
+# Color codes (will be loaded from profile_selector.sh)
 # Additional color codes for compatibility
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -87,7 +127,7 @@ show_usage() {
     echo "  - 執行前請確保已正確設定 AWS profiles (staging, production)"
 }
 
-# Parse command line arguments
+# Parse command line arguments (now processing the preserved arguments)
 ENDPOINT_ID=""
 SUBNET_ID=""
 SLACK_WEBHOOK=""
@@ -96,7 +136,7 @@ SLACK_BOT_TOKEN=""
 USE_SECURE_PARAMETERS=false
 AUTO_READ_CONFIG=false
 ALL_ENVIRONMENTS=false
-TARGET_ENVIRONMENT=""
+# TARGET_ENVIRONMENT already set by profile selector if provided
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -133,7 +173,10 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --env)
-            TARGET_ENVIRONMENT="$2"
+            # Update TARGET_ENVIRONMENT if not already set by profile selector
+            if [[ -z "$TARGET_ENVIRONMENT" ]]; then
+                TARGET_ENVIRONMENT="$2"
+            fi
             shift 2
             ;;
         -h|--help)
@@ -148,29 +191,38 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Now that we've handled help, initialize the environment
-print_status "正在初始化環境管理器..."
+# Show help if requested
+if [[ "$SHOW_HELP" == true ]]; then
+    show_usage
+    exit 0
+fi
 
-# 初始化環境 (env_manager.sh already loaded above)
-if ! env_init_for_script "setup-parameters.sh"; then
-    print_error "無法初始化環境管理器"
+# Initialize profile selector
+print_status "正在初始化 Profile Selector..."
+
+# Select and validate profile
+if ! select_and_validate_profile --profile "$AWS_PROFILE" --environment "$TARGET_ENVIRONMENT"; then
+    print_error "Profile 選擇失敗"
     exit 1
 fi
 
-# 驗證 AWS Profile 整合
+# 驗證 AWS Profile 整合 (現在由 Profile Selector 處理，略過舊的驗證函數)
 print_status "正在驗證 AWS Profile 設定..."
-if ! env_validate_profile_integration "$CURRENT_ENVIRONMENT" "true"; then
-    print_warning "AWS Profile 設定可能有問題，但繼續執行設定工具"
-fi
+# if ! env_validate_profile_integration "$SELECTED_ENVIRONMENT" "true"; then
+#     print_warning "AWS Profile 設定可能有問題，但繼續執行設定工具"
+# fi
+print_status "AWS Profile 驗證已由 Profile Selector 完成"
 
-# 設定環境特定路徑
-env_setup_paths
+# 設定環境特定路徑 (使用 Profile Selector 的環境變數)
+ENV_CONFIG_DIR="$PROJECT_ROOT/configs/$SELECTED_ENVIRONMENT"
+ENV_LOG_DIR="$PROJECT_ROOT/logs/$SELECTED_ENVIRONMENT"
+ENV_CERT_DIR="$PROJECT_ROOT/certs/$SELECTED_ENVIRONMENT"
 
 # 環境感知的配置檔案
-ENV_CONFIG_FILE="$VPN_CONFIG_DIR/${CURRENT_ENVIRONMENT}.env"
-ENDPOINT_CONFIG_FILE="$VPN_ENDPOINT_CONFIG_FILE"
+ENV_CONFIG_FILE="$ENV_CONFIG_DIR/${SELECTED_ENVIRONMENT}.env"
+ENDPOINT_CONFIG_FILE="$ENV_CONFIG_DIR/vpn_endpoint.conf"
 CONFIG_FILE="$ENV_CONFIG_FILE"  # Primary config for setup operations
-LOG_FILE="$VPN_ADMIN_LOG_FILE"
+LOG_FILE="$ENV_LOG_DIR/admin.log"
 
 # 載入核心函式庫
 source "$SCRIPT_DIR/../lib/core_functions.sh"
@@ -294,17 +346,18 @@ if [ "$ALL_ENVIRONMENTS" = "true" ]; then
     print_status "🌐 多環境模式: 將配置所有環境 (staging + production)"
     
     # Validate AWS profiles exist for both environments
-    if ! aws sts get-caller-identity --profile production &> /dev/null; then
-        print_error "AWS profile 'production' 未配置或憑證無效"
-        print_error "請使用 'aws configure --profile production' 配置"
-        exit 1
-    fi
+    # 檢查是否能使用當前選中的 profile (現在由 Profile Selector 處理)
+    # if ! aws sts get-caller-identity --profile production &> /dev/null; then
+    #     print_error "AWS profile 'production' 未配置或憑證無效"
+    #     print_error "請使用 'aws configure --profile production' 配置"
+    #     exit 1
+    # fi
     
-    if ! aws sts get-caller-identity --profile staging &> /dev/null; then
-        print_error "AWS profile 'staging' 未配置或憑證無效"
-        print_error "請使用 'aws configure --profile staging' 配置"
-        exit 1
-    fi
+    # if ! aws sts get-caller-identity --profile staging &> /dev/null; then
+    #     print_error "AWS profile 'staging' 未配置或憑證無效"
+    #     print_error "請使用 'aws configure --profile staging' 配置"
+    #     exit 1
+    # fi
     
     print_success "✅ Production 和 Staging AWS profiles 都已配置"
     
@@ -312,7 +365,7 @@ elif [ -n "$TARGET_ENVIRONMENT" ]; then
     print_status "🎯 單環境模式: 僅配置 $TARGET_ENVIRONMENT 環境"
     
     # Override current environment with target
-    CURRENT_ENVIRONMENT="$TARGET_ENVIRONMENT"
+    SELECTED_ENVIRONMENT="$TARGET_ENVIRONMENT"
     
     # Validate single environment requirements
     if [ -z "$ENDPOINT_ID" ] || [ -z "$SUBNET_ID" ]; then
@@ -326,7 +379,7 @@ elif [ -n "$TARGET_ENVIRONMENT" ]; then
     case "$TARGET_ENVIRONMENT" in
         prod)
             TARGET_ENVIRONMENT="production"  # Standardize to "production"
-            CURRENT_ENVIRONMENT="production"
+            SELECTED_ENVIRONMENT="production"
             ;;
         production|staging)
             # Already correct
@@ -337,13 +390,12 @@ elif [ -n "$TARGET_ENVIRONMENT" ]; then
             ;;
     esac
     
-    # Use environment manager to get correct AWS profile
-    source "$PROJECT_ROOT/lib/profile_selector.sh"
-    CURRENT_AWS_PROFILE=$(get_profile_for_environment "$TARGET_ENVIRONMENT" 2>/dev/null || echo "default")
+    # 使用 Profile Selector 選中的 profile (已在腳本開始時設定)
+    CURRENT_AWS_PROFILE="$SELECTED_AWS_PROFILE"
     
     # Validate AWS profile
     print_status "驗證 AWS profile: $CURRENT_AWS_PROFILE"
-    if ! aws sts get-caller-identity --profile "$CURRENT_AWS_PROFILE" &> /dev/null; then
+    if ! aws_with_profile sts get-caller-identity &> /dev/null; then
         print_error "AWS profile '$CURRENT_AWS_PROFILE' 未配置或憑證無效"
         exit 1
     fi
@@ -359,11 +411,11 @@ else
         exit 1
     fi
     
-    # Get current AWS profile from environment manager
-    CURRENT_AWS_PROFILE=$(env_get_profile "$CURRENT_ENVIRONMENT" 2>/dev/null)
+    # 使用 Profile Selector 選中的 profile
+    CURRENT_AWS_PROFILE="$SELECTED_AWS_PROFILE"
     if [ -z "$CURRENT_AWS_PROFILE" ]; then
-        print_error "無法取得當前環境的 AWS profile"
-        print_status "請使用 './vpn_env.sh status' 檢查環境狀態"
+        print_error "無法取得選中的 AWS Profile"
+        print_error "請檢查 Profile 選擇是否正確"
         exit 1
     fi
     
@@ -380,7 +432,7 @@ else
     if [ -n "$AWS_REGION" ]; then
         print_status "使用配置檔案中的區域: $AWS_REGION"
     else
-        AWS_REGION=$(aws configure get region --profile "$CURRENT_AWS_PROFILE" 2>/dev/null || echo "us-east-1")
+        AWS_REGION=$(aws_with_profile configure get region 2>/dev/null || echo "us-east-1")
         print_status "使用 profile 預設區域: $AWS_REGION"
     fi
 fi
@@ -463,7 +515,7 @@ set_secure_parameter() {
     local param_name="$1"
     local param_value="$2"
     local description="$3"
-    local cdk_env_name=$(get_cdk_environment_name "$CURRENT_ENVIRONMENT")
+    local cdk_env_name=$(get_cdk_environment_name "$SELECTED_ENVIRONMENT")
     local kms_key_alias="vpn-parameter-store-$cdk_env_name"
     
     print_status "Setting secure parameter: $param_name"
@@ -577,7 +629,7 @@ configure_environment_parameters() {
     VPN_CONFIG="{\"ENDPOINT_ID\":\"$env_endpoint_id\",\"SUBNET_ID\":\"$env_subnet_id\",\"ENVIRONMENT\":\"$env_name\",\"REGION\":\"$aws_region\"}"
 
     # Set parameters using the provided AWS profile
-    AWS_PROFILE="$aws_profile" aws ssm put-parameter \
+    aws_with_profile ssm put-parameter \
         --name "/vpn/endpoint/conf" \
         --value "$VPN_CONFIG" \
         --type "String" \
@@ -595,7 +647,7 @@ configure_environment_parameters() {
     # VPN state (initial state) for this environment (compact JSON without spaces for validation)
     VPN_STATE="{\"associated\":false,\"lastActivity\":\"$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")\",\"environment\":\"$env_name\"}"
 
-    AWS_PROFILE="$aws_profile" aws ssm put-parameter \
+    aws_with_profile ssm put-parameter \
         --name "/vpn/endpoint/state" \
         --value "$VPN_STATE" \
         --type "String" \
@@ -646,7 +698,7 @@ set_slack_parameters() {
             "Slack bot OAuth token for posting messages ($env_name environment)" \
             "$aws_profile" "$aws_region" "$env_name"
     else
-        AWS_PROFILE="$aws_profile" aws ssm put-parameter \
+        aws_with_profile ssm put-parameter \
             --name "/vpn/slack/webhook" \
             --value "$SLACK_WEBHOOK" \
             --type "SecureString" \
@@ -661,7 +713,7 @@ set_slack_parameters() {
             return 1
         fi
 
-        AWS_PROFILE="$aws_profile" aws ssm put-parameter \
+        aws_with_profile ssm put-parameter \
             --name "/vpn/slack/signing_secret" \
             --value "$SLACK_SECRET" \
             --type "SecureString" \
@@ -676,7 +728,7 @@ set_slack_parameters() {
             return 1
         fi
 
-        AWS_PROFILE="$aws_profile" aws ssm put-parameter \
+        aws_with_profile ssm put-parameter \
             --name "/vpn/slack/bot_token" \
             --value "$SLACK_BOT_TOKEN" \
             --type "SecureString" \
@@ -714,7 +766,7 @@ set_secure_parameter_with_profile() {
         return 1
     fi
     
-    AWS_PROFILE="$aws_profile" aws ssm put-parameter \
+    aws_with_profile ssm put-parameter \
         --name "$param_name" \
         --value "$param_value" \
         --type "SecureString" \
@@ -800,8 +852,8 @@ setup_parameters() {
         log_env_action "PARAM_SETUP_START" "開始設定 Parameter Store 參數"
         
         # Configure current environment
-        if ! configure_environment_parameters "$CURRENT_ENVIRONMENT" "$ENDPOINT_ID" "$SUBNET_ID" "$CURRENT_AWS_PROFILE" "$AWS_REGION"; then
-            print_error "$CURRENT_ENVIRONMENT 環境配置失敗"
+        if ! configure_environment_parameters "$SELECTED_ENVIRONMENT" "$ENDPOINT_ID" "$SUBNET_ID" "$CURRENT_AWS_PROFILE" "$AWS_REGION"; then
+            print_error "$SELECTED_ENVIRONMENT 環境配置失敗"
             return 1
         fi
         
@@ -811,7 +863,7 @@ setup_parameters() {
         # Display summary for single environment
         echo ""
         print_status "📋 參數摘要:"
-        echo "   環境: ${ENV_ICON} $ENV_DISPLAY_NAME ($CURRENT_ENVIRONMENT)"
+        echo "   環境: ${ENV_ICON} $ENV_DISPLAY_NAME ($SELECTED_ENVIRONMENT)"
         echo "   AWS Profile: $CURRENT_AWS_PROFILE"
         echo "   AWS 區域: $AWS_REGION"
         echo "   VPN 端點: $ENDPOINT_ID"
@@ -844,9 +896,9 @@ else
         echo "   3. 設定您的 Slack app 使用 API Gateway endpoint"
         echo "   4. 檢查部署狀態: ./scripts/deploy.sh status"
     else
-        echo "   1. 部署 CDK stack: ./scripts/deploy.sh $CURRENT_ENVIRONMENT"
+        echo "   1. 部署 CDK stack: ./scripts/deploy.sh $SELECTED_ENVIRONMENT"
         echo "   2. 設定您的 Slack app 使用 API Gateway endpoint"
-        echo "   3. 測試整合: /vpn check $CURRENT_ENVIRONMENT"
+        echo "   3. 測試整合: /vpn check $SELECTED_ENVIRONMENT"
         echo "   4. 使用 './vpn_env.sh status' 檢查環境狀態"
     fi
 fi

@@ -11,6 +11,9 @@ PARENT_DIR="$(dirname "$SCRIPT_DIR")"
 # 載入新的 Profile Selector (替代 env_manager.sh)
 source "$PARENT_DIR/lib/profile_selector.sh"
 
+# 載入環境核心函式 (用於顯示功能)
+source "$PARENT_DIR/lib/env_core.sh"
+
 # 參數初始化
 AWS_PROFILE=""
 TARGET_ENVIRONMENT=""
@@ -866,7 +869,7 @@ main() {
     mkdir -p "$(dirname "$LOG_FILE")"
     
     echo -e "${CYAN}========================================${NC}"
-    show_env_aware_header "S3 CSR 交換桶設置工具"
+    show_team_env_header "S3 CSR 交換桶設置工具"
     
     # 顯示 AWS Profile 資訊
     local current_profile

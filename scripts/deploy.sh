@@ -5,6 +5,13 @@
 
 set -e
 
+# Configuration constants
+readonly MIN_NODE_VERSION=18
+readonly STACK_NAME_PREFIX="VpnAutomation"
+readonly SECURE_STACK_PREFIX="VpnSecureParameters"
+readonly DEFAULT_REGION="us-east-1"
+readonly TIMEOUT_SECONDS=300
+
 # Color codes for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -17,13 +24,96 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 CDK_DIR="$PROJECT_ROOT/cdklib"
 
+# Global variables initialization
+PRODUCTION_URL=""
+API_KEY_VALUE=""
+DRY_RUN=${DRY_RUN:-false}
+
+# Create logs directory if it doesn't exist
+mkdir -p "$PROJECT_ROOT/logs"
+
 # Load profile selector for AWS profile awareness
-source "$PROJECT_ROOT/lib/profile_selector.sh" 2>/dev/null || true
+source "$PROJECT_ROOT/lib/profile_selector.sh" 2>/dev/null || {
+    print_error "Failed to load profile selector library"
+    exit 1
+}
+
+# Configuration management functions
+load_deploy_config() {
+    if [[ -f "$DEPLOY_CONFIG_FILE" ]]; then
+        source "$DEPLOY_CONFIG_FILE"
+        log_operation "INFO" "Loaded deployment configuration from $DEPLOY_CONFIG_FILE"
+    fi
+}
+
+save_deploy_config() {
+    local staging_profile="$1"
+    local production_profile="$2"
+    
+    cat > "$DEPLOY_CONFIG_FILE" << EOF
+# Deployment configuration - automatically generated on $(date)
+# Override these values by setting environment variables
+
+STAGING_PROFILE="${staging_profile}"
+PRODUCTION_PROFILE="${production_profile}"
+USE_SECURE_PARAMETERS="${USE_SECURE_PARAMETERS:-false}"
+
+# Last deployment information
+LAST_DEPLOYMENT_TIME="$(date '+%Y-%m-%d %H:%M:%S')"
+LAST_DEPLOYMENT_USER="$(whoami)"
+EOF
+    chmod 600 "$DEPLOY_CONFIG_FILE"
+    log_operation "INFO" "Saved deployment configuration to $DEPLOY_CONFIG_FILE"
+}
+
+# Load deployment configuration at startup
+load_deploy_config
+
+# Utility functions for reusable operations
+get_stack_name() {
+    local environment="$1"
+    echo "${STACK_NAME_PREFIX}-${environment}"
+}
+
+get_secure_stack_name() {
+    local environment="$1"
+    echo "${SECURE_STACK_PREFIX}-${environment}"
+}
+
+# Get stack output value
+get_stack_output() {
+    local stack_name="$1"
+    local output_key="$2"
+    local profile="$3"
+    
+    aws cloudformation describe-stacks \
+        --stack-name "$stack_name" \
+        --query "Stacks[0].Outputs[?OutputKey==\`$output_key\`].OutputValue" \
+        --output text \
+        --profile "$profile" 2>/dev/null || echo ""
+}
+
+# Validate input function
+validate_yes_no_input() {
+    local prompt="$1"
+    local response
+    while true; do
+        read -p "$prompt (y/N): " -n 1 -r response
+        echo
+        case "$response" in
+            [Yy]) return 0 ;;
+            [Nn]|"") return 1 ;;
+            *) print_warning "Please enter 'y' or 'n'" ;;
+        esac
+    done
+}
 
 # Enhanced profile detection using new profile selector
 get_env_profile() {
     local environment="$1"
     local interactive="${2:-false}"
+    
+    log_operation "INFO" "Getting profile for environment: $environment"
     
     # Try to get profile for specific environment
     local profile=$(get_profile_for_environment "$environment" 2>/dev/null)
@@ -51,6 +141,27 @@ get_env_profile() {
     esac
 }
 
+# Enhanced error handling
+handle_aws_error() {
+    local exit_code=$1
+    local operation="$2"
+    if [ $exit_code -ne 0 ]; then
+        print_error "AWS operation failed: $operation"
+        return 1
+    fi
+}
+
+# Safe AWS call wrapper
+safe_aws_call() {
+    local operation="$1"
+    shift
+    
+    if ! "$@" 2>/dev/null; then
+        print_error "AWS operation failed: $operation"
+        return 1
+    fi
+}
+
 # Function to print colored output
 print_status() {
     echo -e "${BLUE}[INFO]${NC} $1"
@@ -68,17 +179,30 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-# Function to store Slack URL history
+# Logging function
+log_operation() {
+    local level="$1"
+    local message="$2"
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[$timestamp] [$level] $message" >> "$PROJECT_ROOT/logs/deploy.log"
+}
+
+# Function to store Slack URL history with secure permissions
 store_slack_url() {
     local environment=$1
     local slack_url=$2
     local history_file="$PROJECT_ROOT/.slack-urls-history"
     
-    # Create history file if it doesn't exist
-    [ ! -f "$history_file" ] && touch "$history_file"
+    # Create history file if it doesn't exist with secure permissions
+    if [ ! -f "$history_file" ]; then
+        umask 077
+        touch "$history_file"
+        chmod 600 "$history_file"
+    fi
     
     # Store the URL with timestamp
     echo "${environment}|${slack_url}|$(date +%Y%m%d_%H%M%S)" >> "$history_file"
+    log_operation "INFO" "Stored Slack URL for $environment"
 }
 
 # Function to get previous Slack URL
@@ -284,17 +408,27 @@ validate_aws_profile() {
     local environment=$2
     
     print_status "Validating AWS profile: $profile for $environment environment"
+    log_operation "INFO" "Validating AWS profile: $profile for $environment"
     
     # Test AWS credentials
-    if ! aws sts get-caller-identity --profile "$profile" &> /dev/null; then
+    if ! safe_aws_call "test credentials" aws sts get-caller-identity --profile "$profile"; then
         print_error "AWS profile '$profile' is not configured or credentials are invalid"
         print_error "Please configure your AWS profile with: aws configure --profile $profile"
+        log_operation "ERROR" "Invalid AWS profile: $profile"
         exit 1
     fi
     
-    # Get account ID
-    ACCOUNT_ID=$(aws sts get-caller-identity --profile "$profile" --query Account --output text)
+    # Get account ID safely
+    local account_id
+    account_id=$(aws sts get-caller-identity --profile "$profile" --query Account --output text 2>/dev/null)
+    if [[ -z "$account_id" ]]; then
+        print_error "Failed to get account ID for profile: $profile"
+        return 1
+    fi
+    
+    ACCOUNT_ID="$account_id"
     print_status "Account ID: $ACCOUNT_ID"
+    log_operation "INFO" "Validated profile $profile, Account ID: $ACCOUNT_ID"
     
     # Check if CDK is bootstrapped for this account/region
     REGION=$(aws configure get region --profile "$profile" || echo "us-east-1")
@@ -363,7 +497,7 @@ validate_deployment_environment() {
     local environment=$1
     local profile=$2
     
-    print_status "驗證部署環境: $environment"
+    print_status "Validating deployment environment: $environment"
     
     # Auto-set CDK environment variables if not already set
     if ! auto_set_cdk_environment "$profile"; then
@@ -385,7 +519,7 @@ validate_deployment_environment() {
         print_warning "無法驗證 profile 的 IAM 權限: $profile"
         print_warning "請確保 AWS profile 已正確配置"
     else
-        print_success "AWS profile 驗證成功: $profile"
+        print_success "AWS profile validation successful: $profile"
     fi
     
     # Validate CDK is properly installed
@@ -428,19 +562,22 @@ update_staging_lambda_config() {
                 --arg key "$production_api_key" \
                 '.PRODUCTION_API_ENDPOINT = $endpoint | .PRODUCTION_API_KEY = $key')
             
-            # Apply the updated environment variables
-            aws lambda update-function-configuration \
+            # Apply the updated environment variables with better error handling
+            if aws lambda update-function-configuration \
                 --function-name "$slack_function_name" \
                 --environment "Variables=$updated_env" \
                 --profile "$staging_profile" \
-                --output table \
-                --query 'Environment.Variables.{ProductionEndpoint:PRODUCTION_API_ENDPOINT,ProductionKey:PRODUCTION_API_KEY}' \
-                > /dev/null 2>&1
-            
-            if [ $? -eq 0 ]; then
+                --output json > /dev/null 2>&1; then
                 print_success "✅ Lambda environment variables updated successfully"
+                log_operation "INFO" "Updated Lambda environment variables for $slack_function_name"
             else
-                print_warning "⚠️  Failed to update Lambda environment variables"
+                local error_msg=$(aws lambda update-function-configuration \
+                    --function-name "$slack_function_name" \
+                    --environment "Variables=$updated_env" \
+                    --profile "$staging_profile" 2>&1 || echo "Unknown error")
+                print_warning "⚠️  Failed to update Lambda environment variables: ${error_msg:0:100}"
+                log_operation "ERROR" "Failed to update Lambda environment variables: $error_msg"
+                # Continue anyway as this is not critical for deployment
             fi
         else
             print_warning "⚠️  Could not retrieve current Lambda environment variables"
@@ -509,7 +646,7 @@ EOF
 
 # Function to deploy production environment
 deploy_production() {
-    print_status "🚀 部署到生產環境"
+    print_status "🚀 Deploying to production environment"
     
     local profile=${PRODUCTION_PROFILE:-$(get_env_profile "prod" 2>/dev/null || echo "prod")}
     local use_secure_params=${USE_SECURE_PARAMETERS:-false}
@@ -586,75 +723,69 @@ deploy_production() {
     print_status "💡 To deploy staging, run: $0 staging"
 }
 
-# Function to deploy staging environment
-deploy_staging() {
-    print_status "🚀 部署到測試環境"
-    
-    # Add environment validation
-    if ! validate_deployment_environment "staging" "$STAGING_PROFILE"; then
-        print_error "測試環境驗證失敗"
-        return 1
-    fi
-    
-    local profile=${STAGING_PROFILE:-$(get_env_profile "staging" 2>/dev/null || echo "default")}
-    local use_secure_params=${USE_SECURE_PARAMETERS:-false}
-    
-    validate_aws_profile "$profile" "staging"
+# Get production API details for staging deployment
+get_production_api_details() {
+    local production_profile="$1"
+    local production_url=""
+    local api_key_value=""
     
     print_status "📡 Getting production API Gateway URL..."
     
     # Try to get production URL from CloudFormation
-    local production_profile=${PRODUCTION_PROFILE:-$(get_env_profile "prod" 2>/dev/null || echo "prod")}
-    PRODUCTION_URL=$(aws cloudformation describe-stacks \
+    production_url=$(safe_aws_call "get production URL" aws cloudformation describe-stacks \
         --stack-name VpnAutomation-production \
         --query 'Stacks[0].Outputs[?OutputKey==`ApiGatewayUrl`].OutputValue' \
         --output text \
         --profile "$production_profile" 2>/dev/null || echo "")
     
     # Try to get API key from production stack
-    API_KEY_ID=""
-    API_KEY_VALUE=""
-    if [ -n "$PRODUCTION_URL" ] && [ "$PRODUCTION_URL" != "None" ]; then
-        API_KEY_ID=$(aws cloudformation describe-stacks \
+    if [ -n "$production_url" ] && [ "$production_url" != "None" ]; then
+        local api_key_id
+        api_key_id=$(safe_aws_call "get API key ID" aws cloudformation describe-stacks \
             --stack-name VpnAutomation-production \
             --query 'Stacks[0].Outputs[?OutputKey==`ApiKeyId`].OutputValue' \
             --output text \
             --profile "$production_profile" 2>/dev/null || echo "")
         
-        if [ -n "$API_KEY_ID" ] && [ "$API_KEY_ID" != "None" ]; then
-            API_KEY_VALUE=$(aws apigateway get-api-key \
-                --api-key "$API_KEY_ID" \
+        if [ -n "$api_key_id" ] && [ "$api_key_id" != "None" ]; then
+            api_key_value=$(safe_aws_call "get API key value" aws apigateway get-api-key \
+                --api-key "$api_key_id" \
                 --include-value \
                 --query 'value' \
                 --output text \
                 --profile "$production_profile" 2>/dev/null || echo "")
             
-            if [ -n "$API_KEY_VALUE" ]; then
-                export PRODUCTION_API_KEY="$API_KEY_VALUE"
+            if [ -n "$api_key_value" ]; then
                 print_status "✅ Retrieved production API key for cross-account authentication"
             fi
         fi
     fi
     
     # Try to load from saved file if CloudFormation query failed
-    if [ -z "$PRODUCTION_URL" ] && [ -f "$PROJECT_ROOT/.production-url" ]; then
+    if [ -z "$production_url" ] && [ -f "$PROJECT_ROOT/.production-url" ]; then
         source "$PROJECT_ROOT/.production-url"
-        PRODUCTION_URL=$(echo "$PRODUCTION_API_ENDPOINT" | sed 's/vpn$//')
+        production_url=$(echo "$PRODUCTION_API_ENDPOINT" | sed 's/vpn$//')
         
         if [ -n "$PRODUCTION_API_KEY" ]; then
+            api_key_value="$PRODUCTION_API_KEY"
             print_status "✅ Found saved production API configuration with authentication"
         fi
     fi
     
-    if [ -z "$PRODUCTION_URL" ] || [ "$PRODUCTION_URL" = "None" ]; then
-        print_error "❌ Cannot get production API Gateway URL."
-        print_error "Please ensure production is deployed first: $0 production"
-        exit 1
-    fi
+    # Return values via global variables
+    PRODUCTION_URL="$production_url"
+    API_KEY_VALUE="$api_key_value"
+}
+
+# Deploy staging environment with CDK
+deploy_staging_cdk() {
+    local profile="$1"
+    local use_secure_params="$2"
     
-    print_success "✅ Found production URL: $PRODUCTION_URL"
-    
-    cd "$CDK_DIR"
+    cd "$CDK_DIR" || {
+        print_error "Failed to change to CDK directory: $CDK_DIR"
+        return 1
+    }
     
     if [ "$use_secure_params" = "true" ]; then
         print_status "🔒 Deploying staging with secure parameter management..."
@@ -668,36 +799,29 @@ deploy_staging() {
         export AWS_PROFILE="$profile"
         
         # Include API key if available
-        if [ -n "$PRODUCTION_API_KEY" ]; then
-            export PRODUCTION_API_KEY="$PRODUCTION_API_KEY"
+        if [ -n "$API_KEY_VALUE" ]; then
+            export PRODUCTION_API_KEY="$API_KEY_VALUE"
             print_status "🔐 Deploying with production API authentication"
         else
             print_status "ℹ️  Deploying without production API key - cross-account calls will use existing configuration"
         fi
         
-        cdk deploy --all --app "npx ts-node bin/vpn-automation.ts" --require-approval never --context environment="staging"
+        if ! safe_aws_call "CDK deploy staging" cdk deploy --all --app "npx ts-node bin/vpn-automation.ts" --require-approval never --context environment="staging"; then
+            print_error "Failed to deploy staging environment"
+            return 1
+        fi
     fi
+}
+
+# Configure staging cross-account routing
+configure_staging_cross_account() {
+    local profile="$1"
+    local production_profile="$2"
     
-    print_success "✅ Staging deployment completed!"
-    print_success "🔗 Staging will route production commands to: $PRODUCTION_URL"
-    
-    # Get and check Slack endpoint URL for staging
-    SLACK_ENDPOINT=$(aws cloudformation describe-stacks \
-        --stack-name VpnAutomation-staging \
-        --query 'Stacks[0].Outputs[?OutputKey==`SlackEndpoint`].OutputValue' \
-        --output text \
-        --profile "$profile" 2>/dev/null || echo "")
-    
-    if [ -n "$SLACK_ENDPOINT" ]; then
-        notify_slack_url_change "staging" "$SLACK_ENDPOINT"
-    fi
-    
-    # Automatically update staging parameter store with production API information
     print_status "🔧 Automatically configuring cross-account routing parameters..."
     update_staging_cross_account_config "$profile" "$PRODUCTION_URL" "$production_profile"
     
     # Always update the Lambda environment variables for immediate effect
-    # Re-fetch production API details to ensure we have the latest configuration
     print_status "🔄 Re-fetching production API details for Lambda configuration..."
     
     local final_production_url=""
@@ -705,7 +829,7 @@ deploy_staging() {
     
     # Try to get fresh production API details
     if [ -n "$production_profile" ]; then
-        final_production_url=$(aws cloudformation describe-stacks \
+        final_production_url=$(safe_aws_call "get final production URL" aws cloudformation describe-stacks \
             --stack-name VpnAutomation-production \
             --query 'Stacks[0].Outputs[?OutputKey==`ApiGatewayUrl`].OutputValue' \
             --output text \
@@ -715,14 +839,15 @@ deploy_staging() {
             final_production_url="${final_production_url}vpn"
             
             # Get API key
-            local api_key_id=$(aws cloudformation describe-stacks \
+            local api_key_id
+            api_key_id=$(safe_aws_call "get final API key ID" aws cloudformation describe-stacks \
                 --stack-name VpnAutomation-production \
                 --query 'Stacks[0].Outputs[?OutputKey==`ApiKeyId`].OutputValue' \
                 --output text \
                 --profile "$production_profile" 2>/dev/null || echo "")
             
             if [ -n "$api_key_id" ] && [ "$api_key_id" != "None" ]; then
-                final_production_api_key=$(aws apigateway get-api-key \
+                final_production_api_key=$(safe_aws_call "get final API key value" aws apigateway get-api-key \
                     --api-key "$api_key_id" \
                     --include-value \
                     --query 'value' \
@@ -748,9 +873,66 @@ deploy_staging() {
     fi
 }
 
+# Function to deploy staging environment
+deploy_staging() {
+    print_status "🚀 Deploying to staging environment"
+    
+    local profile=${STAGING_PROFILE:-$(get_env_profile "staging" 2>/dev/null || echo "default")}
+    local use_secure_params=${USE_SECURE_PARAMETERS:-false}
+    
+    # Validate environment
+    if ! validate_deployment_environment "staging" "$profile"; then
+        print_error "Staging environment validation failed"
+        return 1
+    fi
+    
+    validate_aws_profile "$profile" "staging"
+    
+    # Get production profile and API details
+    local production_profile=${PRODUCTION_PROFILE:-$(get_env_profile "prod" 2>/dev/null || echo "prod")}
+    get_production_api_details "$production_profile"
+    
+    if [ -z "$PRODUCTION_URL" ] || [ "$PRODUCTION_URL" = "None" ]; then
+        print_error "❌ Cannot get production API Gateway URL."
+        print_error "Please ensure production is deployed first: $0 production"
+        return 1
+    fi
+    
+    print_success "✅ Found production URL: $PRODUCTION_URL"
+    
+    # Deploy staging environment
+    if ! deploy_staging_cdk "$profile" "$use_secure_params"; then
+        return 1
+    fi
+    
+    print_success "✅ Staging deployment completed!"
+    print_success "🔗 Staging will route production commands to: $PRODUCTION_URL"
+    
+    # Get and check Slack endpoint URL for staging
+    local slack_endpoint
+    slack_endpoint=$(safe_aws_call "get Slack endpoint" aws cloudformation describe-stacks \
+        --stack-name VpnAutomation-staging \
+        --query 'Stacks[0].Outputs[?OutputKey==`SlackEndpoint`].OutputValue' \
+        --output text \
+        --profile "$profile" 2>/dev/null || echo "")
+    
+    if [ -n "$slack_endpoint" ]; then
+        notify_slack_url_change "staging" "$slack_endpoint"
+    fi
+    
+    # Configure cross-account routing
+    configure_staging_cross_account "$profile" "$production_profile"
+}
+
 # Function to deploy both environments
 deploy_both() {
     print_status "🚀 Deploying both environments..."
+    
+    local staging_profile=${STAGING_PROFILE:-$(get_env_profile "staging" 2>/dev/null || echo "default")}
+    local production_profile=${PRODUCTION_PROFILE:-$(get_env_profile "prod" 2>/dev/null || echo "prod")}
+    
+    # Save configuration for future deployments
+    save_deploy_config "$staging_profile" "$production_profile"
     
     # Deploy production first to get API details
     deploy_production
@@ -796,6 +978,20 @@ deploy_both() {
     fi
     
     print_success "🎉 Both environments deployed successfully!"
+    
+    # Final configuration summary
+    echo ""
+    print_status "=== Deployment Summary ==="
+    print_success "Production environment: Deployed with profile $production_profile"
+    print_success "Staging environment: Deployed with profile $staging_profile"
+    print_status "Configuration saved to: $DEPLOY_CONFIG_FILE"
+    
+    if [ "$USE_SECURE_PARAMETERS" = "true" ]; then
+        print_status "Next steps: Configure parameters with scripts/setup-parameters.sh --all --secure"
+    fi
+    
+    echo ""
+    print_status "📈 Deployment completed successfully! Check CloudWatch dashboards for monitoring."
 }
 
 # Function to destroy environment
@@ -991,6 +1187,44 @@ validate_cross_account_routing() {
     fi
     
     print_success "Cross-account routing validation completed"
+}
+
+# Function to validate secure parameters deployment
+validate_secure_parameters() {
+    local environment="$1"
+    local profile="$2"
+    
+    print_status "Validating secure parameters for $environment..."
+    
+    # Check if the secure parameter stack exists
+    local secure_stack_name="VpnSecureParameters-$environment"
+    if ! aws cloudformation describe-stacks --stack-name "$secure_stack_name" --profile "$profile" &> /dev/null; then
+        print_warning "Secure parameter stack not found: $secure_stack_name"
+        return 1
+    fi
+    
+    # Check if basic parameters exist
+    local required_params=(
+        "/vpn/$environment/endpoint/id"
+        "/vpn/$environment/cost/optimization_config"
+        "/vpn/slack/webhook"
+    )
+    
+    local missing_params=0
+    for param in "${required_params[@]}"; do
+        if ! aws ssm get-parameter --name "$param" --profile "$profile" &> /dev/null; then
+            print_warning "Missing parameter: $param"
+            ((missing_params++))
+        fi
+    done
+    
+    if [ $missing_params -eq 0 ]; then
+        print_success "All required parameters are present"
+        return 0
+    else
+        print_warning "$missing_params parameters are missing"
+        return 1
+    fi
 }
 
 # Function to show deployment status
@@ -1311,86 +1545,133 @@ Examples:
 EOF
 }
 
-# Main script logic
+# Cleanup function
+cleanup() {
+    local exit_code=$?
+    # Only report error if it's an actual error (not usage display)
+    if [ $exit_code -ne 0 ] && [ $exit_code -ne 130 ]; then  # 130 is Ctrl+C
+        print_error "Deployment failed with exit code $exit_code"
+        log_operation "ERROR" "Deployment failed with exit code $exit_code"
+    fi
+    # Cleanup temporary files if any
+    if [[ -f "$PROJECT_ROOT/.production-url" ]] && [[ ! -s "$PROJECT_ROOT/.production-url" ]]; then
+        rm -f "$PROJECT_ROOT/.production-url"
+    fi
+    exit $exit_code
+}
+
+# Set up error handling
+trap cleanup EXIT
+
+# Main script logic with enhanced error handling
 main() {
     # Parse all arguments first
     ARGS=()
     parse_arguments "$@"
     
+    local command="${ARGS[0]:-}"
+    if [[ -z "$command" ]]; then
+        show_usage
+        exit 0  # Show usage is not an error condition
+    fi
+    
+    log_operation "INFO" "Starting deployment command: $command"
+    
     # Use the parsed command
-    case "${ARGS[0]:-}" in
+    case "$command" in
         "production")
-            check_prerequisites
-            setup_lambda_dependencies
-            setup_cdk_dependencies
-            deploy_production
+            if ! check_prerequisites; then
+                print_error "Prerequisites check failed"
+                exit 1
+            fi
+            setup_lambda_dependencies || exit 1
+            setup_cdk_dependencies || exit 1
+            deploy_production || exit 1
             ;;
         "staging")
-            check_prerequisites
-            setup_lambda_dependencies
-            setup_cdk_dependencies
-            deploy_staging
+            if ! check_prerequisites; then
+                print_error "Prerequisites check failed"
+                exit 1
+            fi
+            setup_lambda_dependencies || exit 1
+            setup_cdk_dependencies || exit 1
+            deploy_staging || exit 1
             ;;
         "both")
-            check_prerequisites
-            setup_lambda_dependencies
-            setup_cdk_dependencies
-            deploy_both
+            if ! check_prerequisites; then
+                print_error "Prerequisites check failed"
+                exit 1
+            fi
+            setup_lambda_dependencies || exit 1
+            setup_cdk_dependencies || exit 1
+            deploy_both || exit 1
             ;;
         "destroy-staging")
-            destroy_environment "staging"
+            destroy_environment "staging" || exit 1
             ;;
         "destroy-production")
-            destroy_environment "production"
+            destroy_environment "production" || exit 1
             ;;
         "diff-staging")
-            check_prerequisites
-            setup_lambda_dependencies
-            setup_cdk_dependencies
-            show_diff "staging"
+            if ! check_prerequisites; then
+                print_error "Prerequisites check failed"
+                exit 1
+            fi
+            setup_lambda_dependencies || exit 1
+            setup_cdk_dependencies || exit 1
+            show_diff "staging" || exit 1
             ;;
         "diff-production")
-            check_prerequisites
-            setup_lambda_dependencies
-            setup_cdk_dependencies
-            show_diff "production"
+            if ! check_prerequisites; then
+                print_error "Prerequisites check failed"
+                exit 1
+            fi
+            setup_lambda_dependencies || exit 1
+            setup_cdk_dependencies || exit 1
+            show_diff "production" || exit 1
             ;;
         "status")
-            show_deployment_status
+            show_deployment_status || exit 1
             ;;
         "validate-routing")
-            validate_cross_account_routing
+            validate_cross_account_routing || exit 1
             ;;
         *)
+            print_error "Unknown command: $command"
+            echo ""
             show_usage
             exit 1
             ;;
     esac
+    
+    log_operation "INFO" "Successfully completed deployment command: $command"
 }
 
-# Update usage message - around line 620
+# Enhanced usage message with standardized English
 usage() {
-    echo "使用方式: $0 {production|staging|both} [--secure-parameters]"
+    echo "Usage: $0 {production|staging|both} [--secure-parameters]"
     echo ""
-    echo "選項:"
-    echo "  production        僅部署到生產環境"
-    echo "  staging           僅部署到測試環境"
-    echo "  both              部署到兩個環境"
-    echo "  --secure-parameters 部署安全參數堆疊"
+    echo "Options:"
+    echo "  production        Deploy to production environment only"
+    echo "  staging           Deploy to staging environment only"
+    echo "  both              Deploy to both environments"
+    echo "  --secure-parameters Deploy with secure parameter stack"
     echo ""
-    echo "部署前準備步驟:"
-    echo "  1. 安裝依賴: npm install"
-    echo "  2. 設置 AWS profiles: 'production' 和 'staging'"
-    echo "  3. 設置環境變數:"
+    echo "Pre-deployment steps:"
+    echo "  1. Install dependencies: npm install"
+    echo "  2. Configure AWS profiles: 'production' and 'staging'"
+    echo "  3. Set environment variables:"
     echo "     export CDK_DEFAULT_ACCOUNT=your-account-id"
     echo "     export CDK_DEFAULT_REGION=your-region"
-    echo "  4. 配置參數 (部署後): scripts/setup-parameters.sh --all --auto-read --secure \\"
+    echo "  4. Configure parameters (after deployment): scripts/setup-parameters.sh --all --auto-read --secure \\"
     echo "       --slack-webhook 'https://hooks.slack.com/services/...' \\"
     echo "       --slack-secret 'your-signing-secret' \\"
     echo "       --slack-bot-token 'xoxb-your-bot-token'"
     echo ""
-    echo "範例:"
+    echo "Examples:"
     echo "  $0 both --secure-parameters"
+    echo "  $0 production --production-profile prod"
+    echo "  $0 staging --staging-profile dev"
 }
 
 # Run main function with all arguments

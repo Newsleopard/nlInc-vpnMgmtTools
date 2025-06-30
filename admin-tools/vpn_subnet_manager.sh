@@ -3,46 +3,88 @@
 # VPN 子網路關聯與解除關聯管理腳本
 # 用途：專門管理 AWS Client VPN 端點的子網路關聯與解除關聯操作
 # 作者：VPN 管理員
-# 版本：1.0
+# 版本：1.1 (直接 Profile 選擇版本)
 
 # 全域變數
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PARENT_DIR="$(dirname "$SCRIPT_DIR")"
 
-# 載入環境管理器 (必須第一個載入)
-source "$SCRIPT_DIR/../lib/env_manager.sh"
+# Parse command line arguments
+AWS_PROFILE=""
+TARGET_ENVIRONMENT=""
 
-# 初始化環境
-if ! env_init_for_script "vpn_subnet_manager.sh"; then
-    echo -e "${RED}錯誤: 無法初始化環境管理器${NC}"
+# Parse command line arguments for help
+for arg in "$@"; do
+    if [[ "$arg" == "-h" || "$arg" == "--help" ]]; then
+        cat << 'EOF'
+用法: $0 [選項]
+
+選項:
+  -p, --profile PROFILE     AWS CLI profile
+  -e, --environment ENV     目標環境 (staging/production)
+  -h, --help               顯示此幫助訊息
+
+功能說明:
+  此工具專門管理 AWS Client VPN 端點的子網路關聯與解除關聯操作
+EOF
+        exit 0
+    fi
+done
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --profile|-p)
+            AWS_PROFILE="$2"
+            shift 2
+            ;;
+        --environment|-e)
+            TARGET_ENVIRONMENT="$2"
+            shift 2
+            ;;
+        --help|-h)
+            # Already handled above
+            shift
+            ;;
+        -*)
+            echo "Unknown option: $1"
+            exit 1
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
+# 載入新的 Profile Selector (替代 env_manager.sh)
+source "$PARENT_DIR/lib/profile_selector.sh"
+
+# 載入環境核心函式 (用於顯示功能)
+source "$PARENT_DIR/lib/env_core.sh"
+
+# Select and validate profile
+if ! select_and_validate_profile --profile "$AWS_PROFILE" --environment "$TARGET_ENVIRONMENT"; then
+    echo -e "${RED}錯誤: Profile 選擇失敗${NC}"
     exit 1
 fi
 
-# 驗證 AWS Profile 整合
-echo -e "${BLUE}正在驗證 AWS Profile 設定...${NC}"
-if ! env_validate_profile_integration "$CURRENT_ENVIRONMENT" "true"; then
-    echo -e "${YELLOW}警告: AWS Profile 設定可能有問題，但繼續執行管理員工具${NC}"
-fi
-
-# 設定環境特定路徑
-env_setup_paths
-
 # 環境感知的配置檔案
-CONFIG_FILE="$VPN_ENDPOINT_CONFIG_FILE"
+CONFIG_FILE="$VPN_CONFIG_DIR/vpn_endpoint.conf"
 LOG_FILE="$VPN_ADMIN_LOG_FILE"
 
 # 載入核心函式庫
 source "$SCRIPT_DIR/../lib/core_functions.sh"
+source "$SCRIPT_DIR/../lib/env_core.sh"
 source "$SCRIPT_DIR/../lib/aws_setup.sh"
 source "$SCRIPT_DIR/../lib/endpoint_management.sh"
 
 # 顯示腳本標題和基本資訊
 show_script_header() {
     clear
-    show_env_aware_header "VPN 子網路關聯管理工具"
+    show_team_env_header "VPN 子網路關聯管理工具"
     
     # 顯示 AWS Profile 資訊
-    local current_profile
-    current_profile=$(env_get_profile "$CURRENT_ENVIRONMENT" 2>/dev/null)
+    local current_profile="$SELECTED_AWS_PROFILE"
     if [[ -n "$current_profile" ]]; then
         # 獲取 AWS 帳戶資訊
         if command -v aws &> /dev/null && aws configure list-profiles | grep -q "^$current_profile$"; then
@@ -75,7 +117,7 @@ show_main_menu() {
     echo -e "  ${GREEN}3.${NC} 解除 VPN 端點的子網路/VPC 關聯"
     echo -e "  ${GREEN}4.${NC} 查看可用的子網路列表"
     echo -e "  ${GREEN}5.${NC} 系統健康檢查"
-    echo -e "  ${YELLOW}E.${NC} 環境管理"
+    echo -e "  ${YELLOW}E.${NC} 環境資訊 (Profile 資訊)"
     echo -e "  ${RED}Q.${NC} 退出"
     echo -e ""
 }
@@ -98,6 +140,7 @@ view_endpoints_and_associations() {
     # 檢查端點是否存在
     local endpoint_status
     endpoint_status=$(aws ec2 describe-client-vpn-endpoints \
+        --profile "$SELECTED_AWS_PROFILE" \
         --client-vpn-endpoint-ids "$ENDPOINT_ID" \
         --region "$AWS_REGION" \
         --query 'ClientVpnEndpoints[0].Status.Code' \
@@ -204,7 +247,7 @@ view_available_subnets() {
     # 獲取可用的子網路
     echo -e "${BLUE}正在獲取可用的子網路...${NC}"
     local subnets_json
-    subnets_json=$(aws ec2 describe-subnets --region "$AWS_REGION" 2>/dev/null)
+    subnets_json=$(aws ec2 describe-subnets --profile "$SELECTED_AWS_PROFILE" --region "$AWS_REGION" 2>/dev/null)
     
     if [ $? -ne 0 ] || [ -z "$subnets_json" ]; then
         echo -e "${RED}錯誤: 無法獲取子網路列表。請檢查 AWS 憑證和區域設定。${NC}"
@@ -228,7 +271,7 @@ view_available_subnets() {
             
             for vpc_id in $vpcs; do
                 local vpc_name
-                vpc_name=$(aws ec2 describe-vpcs --vpc-ids "$vpc_id" --region "$AWS_REGION" \
+                vpc_name=$(aws ec2 describe-vpcs --profile "$SELECTED_AWS_PROFILE" --vpc-ids "$vpc_id" --region "$AWS_REGION" \
                     --query "Vpcs[0].Tags[?Key=='Name'].Value" --output text 2>/dev/null || echo "未命名")
                 
                 echo -e "${YELLOW}VPC: $vpc_id${NC} ${CYAN}($vpc_name)${NC}"
@@ -260,12 +303,92 @@ view_available_subnets() {
 perform_health_check() {
     echo -e "\n${CYAN}=== 系統健康檢查 ===${NC}"
     
-    # 調用環境健康檢查
-    env_health_check "$CURRENT_ENVIRONMENT" "true"
-    local result=$?
+    local has_issues=false
     
-    if [ "$result" -eq 0 ]; then
-        echo -e "${GREEN}✓ 系統健康檢查完成${NC}"
+    # 檢查 AWS Profile 配置
+    echo -e "${BLUE}檢查 AWS Profile 配置...${NC}"
+    if [[ -n "$SELECTED_AWS_PROFILE" ]]; then
+        if aws configure list-profiles 2>/dev/null | grep -q "^$SELECTED_AWS_PROFILE$"; then
+            echo -e "${GREEN}✓ AWS Profile 已配置: $SELECTED_AWS_PROFILE${NC}"
+            
+            # 檢查 AWS 連接
+            if aws sts get-caller-identity --profile "$SELECTED_AWS_PROFILE" &>/dev/null; then
+                local account_id=$(aws sts get-caller-identity --profile "$SELECTED_AWS_PROFILE" --query 'Account' --output text 2>/dev/null)
+                echo -e "${GREEN}✓ AWS 連接正常 (帳戶: $account_id)${NC}"
+            else
+                echo -e "${RED}✗ AWS 連接失敗${NC}"
+                has_issues=true
+            fi
+        else
+            echo -e "${RED}✗ AWS Profile 未找到: $SELECTED_AWS_PROFILE${NC}"
+            has_issues=true
+        fi
+    else
+        echo -e "${RED}✗ 未設置 AWS Profile${NC}"
+        has_issues=true
+    fi
+    
+    # 檢查環境配置
+    echo -e "\n${BLUE}檢查環境配置...${NC}"
+    if [[ -n "$SELECTED_ENVIRONMENT" ]]; then
+        echo -e "${GREEN}✓ 當前環境: $SELECTED_ENVIRONMENT${NC}"
+        
+        # 檢查配置文件
+        if [[ -f "$CONFIG_FILE" ]]; then
+            echo -e "${GREEN}✓ VPN 端點配置文件存在${NC}"
+            
+            # 檢查端點 ID
+            if [[ -n "$ENDPOINT_ID" ]]; then
+                echo -e "${GREEN}✓ 端點 ID 已配置: $ENDPOINT_ID${NC}"
+            else
+                echo -e "${RED}✗ 端點 ID 未配置${NC}"
+                has_issues=true
+            fi
+            
+            # 檢查區域
+            if [[ -n "$AWS_REGION" ]]; then
+                echo -e "${GREEN}✓ AWS 區域已配置: $AWS_REGION${NC}"
+            else
+                echo -e "${RED}✗ AWS 區域未配置${NC}"
+                has_issues=true
+            fi
+        else
+            echo -e "${RED}✗ VPN 端點配置文件不存在: $CONFIG_FILE${NC}"
+            has_issues=true
+        fi
+    else
+        echo -e "${RED}✗ 未設置環境${NC}"
+        has_issues=true
+    fi
+    
+    # 檢查必要的工具
+    echo -e "\n${BLUE}檢查必要工具...${NC}"
+    local tools=("aws" "jq" "openssl")
+    for tool in "${tools[@]}"; do
+        if command -v "$tool" &>/dev/null; then
+            echo -e "${GREEN}✓ $tool 已安裝${NC}"
+        else
+            echo -e "${RED}✗ $tool 未安裝${NC}"
+            has_issues=true
+        fi
+    done
+    
+    # 檢查目錄結構
+    echo -e "\n${BLUE}檢查目錄結構...${NC}"
+    local dirs=("$VPN_CONFIG_DIR" "$VPN_CERT_DIR" "$VPN_LOG_DIR")
+    for dir in "${dirs[@]}"; do
+        if [[ -d "$dir" ]]; then
+            echo -e "${GREEN}✓ 目錄存在: $(basename "$dir")${NC}"
+        else
+            echo -e "${YELLOW}⚠ 目錄不存在: $dir${NC}"
+            # 不算作嚴重問題，因為可能會自動創建
+        fi
+    done
+    
+    # 總結
+    echo -e "\n${CYAN}=== 健康檢查總結 ===${NC}"
+    if [ "$has_issues" = false ]; then
+        echo -e "${GREEN}✓ 系統健康檢查完成，一切正常${NC}"
     else
         echo -e "${YELLOW}⚠ 系統健康檢查發現一些問題，請檢查上面的報告${NC}"
     fi
@@ -274,10 +397,19 @@ perform_health_check() {
     read -n 1
 }
 
-# 環境管理
+# 環境管理 (已棄用)
 manage_environment() {
     echo -e "\n${CYAN}=== 環境管理 ===${NC}"
-    "$SCRIPT_DIR/../vpn_env.sh"
+    echo -e "${YELLOW}環境管理功能已更新為直接 Profile 選擇模式${NC}"
+    echo -e ""
+    echo -e "當前環境資訊:"
+    echo -e "  環境: ${GREEN}${SELECTED_ENVIRONMENT}${NC}"
+    echo -e "  AWS Profile: ${GREEN}${SELECTED_AWS_PROFILE}${NC}"
+    echo -e "  AWS 帳戶: ${GREEN}$(aws sts get-caller-identity --profile "$SELECTED_AWS_PROFILE" --query 'Account' --output text 2>/dev/null)${NC}"
+    echo -e "  區域: ${GREEN}${AWS_REGION}${NC}"
+    echo -e ""
+    echo -e "${BLUE}提示:${NC} 要切換環境，請重新執行腳本並選擇不同的 AWS Profile"
+    echo -e ""
     echo -e "\n${YELLOW}按任意鍵返回主選單...${NC}"
     read -n 1
 }

@@ -2,20 +2,83 @@
 
 # VPN Security Group Tracking Report Generator
 # Generates a human-readable report from vpn_security_groups_tracking.conf
+# 版本：1.1 (直接 Profile 選擇版本)
 
-set -e
-
-# Get script directory
+# 全域變數
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PARENT_DIR="$(dirname "$SCRIPT_DIR")"
 
-# Load environment management
-source "$SCRIPT_DIR/../lib/env_manager.sh"
+# Parse command line arguments
+AWS_PROFILE=""
+TARGET_ENVIRONMENT=""
 
-# Initialize environment
-if ! env_init_for_script "vpn_tracking_report.sh"; then
-    echo -e "${RED}错误: 环境初始化失败${NC}" >&2
+# Parse command line arguments for help first
+for arg in "$@"; do
+    if [[ "$arg" == "-h" || "$arg" == "--help" ]]; then
+        cat << 'EOF'
+VPN Security Group Tracking Report Generator
+
+用法: $0 [選項]
+
+選項:
+  -p, --profile PROFILE     AWS CLI profile
+  -e, --environment ENV     目標環境 (staging/production)
+  --summary, -s             只顯示摘要資訊
+  --commands, -c            包含移除指令
+  -h, --help               顯示此幫助訊息
+
+範例:
+  $0                        # 完整報告
+  $0 --summary              # 摘要報告
+  $0 --commands             # 包含移除指令
+EOF
+        exit 0
+    fi
+done
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --profile|-p)
+            AWS_PROFILE="$2"
+            shift 2
+            ;;
+        --environment|-e)
+            TARGET_ENVIRONMENT="$2"
+            shift 2
+            ;;
+        --summary|-s|--commands|-c)
+            # These will be handled later in main()
+            break
+            ;;
+        --help|-h)
+            # Already handled above
+            shift
+            ;;
+        -*) 
+            # Unknown options will be handled later
+            break
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
+# 載入新的 Profile Selector (替代 env_manager.sh)
+source "$PARENT_DIR/lib/profile_selector.sh"
+
+# 載入環境核心函式 (用於顯示功能)
+source "$PARENT_DIR/lib/env_core.sh"
+
+# Select and validate profile
+if ! select_and_validate_profile --profile "$AWS_PROFILE" --environment "$TARGET_ENVIRONMENT"; then
+    echo -e "${RED}錯誤: Profile 選擇失敗${NC}"
     exit 1
 fi
+
+# 載入核心函式庫
+source "$PARENT_DIR/lib/core_functions.sh"
 
 # Colors
 GREEN='\033[0;32m'
@@ -28,7 +91,7 @@ DIM='\033[2m'
 NC='\033[0m'
 
 # Get tracking file path
-TRACKING_FILE="$SCRIPT_DIR/../configs/${CURRENT_ENVIRONMENT}/vpn_security_groups_tracking.conf"
+TRACKING_FILE="$PARENT_DIR/configs/${SELECTED_ENVIRONMENT}/vpn_security_groups_tracking.conf"
 
 # Check if tracking file exists
 if [[ ! -f "$TRACKING_FILE" ]]; then
@@ -112,26 +175,36 @@ generate_detailed_list() {
     echo
     
     if [[ -n "$MODIFIED_GROUPS" ]]; then
-        IFS=';' read -ra GROUPS <<< "$MODIFIED_GROUPS"
+        # Create temporary file to group by service
+        local temp_grouped="/tmp/vpn_grouped_$$"
         
-        local current_service=""
-        for group in "${GROUPS[@]}"; do
-            if [[ -n "$group" ]]; then
-                IFS=':' read -r sg_id service_name port <<< "$group"
-                
-                # Group by service
-                if [[ "$service_name" != "$current_service" ]]; then
+        # Parse and group security groups by service
+        echo "$MODIFIED_GROUPS" | tr ';' '\n' | while IFS=':' read -r sg_id service_name port; do
+            if [[ -n "$sg_id" && -n "$service_name" && -n "$port" ]]; then
+                echo "$service_name:$port:$sg_id"
+            fi
+        done | sort > "$temp_grouped"
+        
+        if [[ -f "$temp_grouped" && -s "$temp_grouped" ]]; then
+            local current_service=""
+            local current_port=""
+            
+            while IFS=':' read -r service_name port sg_id; do
+                # Group by service and port
+                if [[ "$service_name:$port" != "$current_service:$current_port" ]]; then
                     if [[ -n "$current_service" ]]; then
                         echo
                     fi
                     echo -e "${BOLD}${YELLOW}📦 $service_name (Port $port):${NC}"
                     current_service="$service_name"
+                    current_port="$port"
                 fi
                 
                 # Get security group name if possible
                 local sg_name=""
                 if command -v aws >/dev/null 2>&1; then
-                    sg_name=$(aws_with_profile ec2 describe-security-groups \
+                    sg_name=$(aws ec2 describe-security-groups \
+                        --profile "$SELECTED_AWS_PROFILE" \
                         --group-ids "$sg_id" --region "${AWS_REGION:-us-east-1}" \
                         --query 'SecurityGroups[0].GroupName' --output text 2>/dev/null || echo "")
                 fi
@@ -141,8 +214,17 @@ generate_detailed_list() {
                 else
                     echo -e "  ${GREEN}•${NC} $sg_id"
                 fi
-            fi
-        done
+            done < "$temp_grouped"
+            echo
+        else
+            echo -e "${YELLOW}No detailed information available${NC}"
+            echo
+        fi
+        
+        # Clean up
+        rm -f "$temp_grouped"
+    else
+        echo -e "${YELLOW}No VPN access rules configured.${NC}"
         echo
     fi
 }
@@ -164,7 +246,7 @@ generate_audit_info() {
     echo -e "${CYAN}=== 📋 Configuration Audit Information ===${NC}"
     echo
     echo -e "${BOLD}VPN Security Group ID:${NC} $VPN_SG_ID"
-    echo -e "${BOLD}Environment:${NC} $CURRENT_ENVIRONMENT"
+    echo -e "${BOLD}Environment:${NC} $SELECTED_ENVIRONMENT"
     echo -e "${BOLD}Last Configuration:${NC} $LAST_CONFIG_TIME"
     echo -e "${BOLD}Configuration Method:${NC} $CONFIG_METHOD"
     echo -e "${BOLD}Total Modifications:${NC} $TOTAL_COUNT security group rules"
@@ -214,9 +296,17 @@ main() {
     local format="full"
     local show_commands=false
     
-    # Parse command line arguments
+    # Parse remaining command line arguments (profile args already handled)
     while [[ $# -gt 0 ]]; do
         case $1 in
+            --profile|-p)
+                # Skip profile arguments (already handled)
+                shift 2
+                ;;
+            --environment|-e)
+                # Skip environment arguments (already handled)
+                shift 2
+                ;;
             --summary|-s)
                 format="summary"
                 shift
@@ -226,21 +316,7 @@ main() {
                 shift
                 ;;
             --help|-h)
-                cat << EOF
-VPN Security Group Tracking Report Generator
-
-Usage: $0 [options]
-
-Options:
-  --summary, -s     Show only summary information
-  --commands, -c    Include removal commands
-  --help, -h        Show this help message
-
-Examples:
-  $0                # Full report
-  $0 --summary      # Summary only
-  $0 --commands     # Include removal commands
-EOF
+                # Help already handled earlier
                 exit 0
                 ;;
             *)
@@ -257,7 +333,7 @@ EOF
     echo
     echo -e "${BOLD}${BLUE}🔒 VPN Security Group Tracking Report${NC}"
     echo -e "${DIM}Generated: $(date)${NC}"
-    echo -e "${DIM}Environment: ${BOLD}$CURRENT_ENVIRONMENT${NC}"
+    echo -e "${DIM}Environment: ${BOLD}$SELECTED_ENVIRONMENT${NC}"
     echo "═══════════════════════════════════════════════════════════════════════"
     echo
     

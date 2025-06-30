@@ -1149,7 +1149,7 @@ show_admin_guide() {
 manage_aws_profiles() {
     while true; do
         clear
-        show_env_aware_header "AWS Profile 管理"
+        show_team_env_header "AWS Profile 管理"
         
         # 顯示當前環境的 profile 狀態
         echo -e "${CYAN}當前環境 Profile 狀態:${NC}"

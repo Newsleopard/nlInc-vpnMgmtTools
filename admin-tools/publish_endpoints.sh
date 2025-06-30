@@ -40,23 +40,20 @@ EOF
     fi
 done
 
-# 載入環境管理器 (必須第一個載入)
-source "$PARENT_DIR/lib/env_manager.sh"
+# Parse command line arguments
+AWS_PROFILE=""
+ENVIRONMENT=""
+BUCKET_NAME=""
+CA_ONLY=false
+ENDPOINTS_ONLY=false
+FORCE=false
+VERBOSE=false
 
-# 初始化環境
-if ! env_init_for_script "publish_endpoints.sh"; then
-    echo -e "${RED}錯誤: 無法初始化環境管理器${NC}"
-    exit 1
-fi
+# 載入新的 Profile Selector (替代 env_manager.sh)
+source "$PARENT_DIR/lib/profile_selector.sh"
 
-# 驗證 AWS Profile 整合
-echo -e "${BLUE}正在驗證 AWS Profile 設定...${NC}"
-if ! env_validate_profile_integration "$CURRENT_ENVIRONMENT" "true"; then
-    echo -e "${YELLOW}警告: AWS Profile 設定可能有問題，但繼續執行發布工具${NC}"
-fi
-
-# 設定環境特定路徑
-env_setup_paths
+# 載入環境核心函式 (用於顯示功能)
+source "$PARENT_DIR/lib/env_core.sh"
 
 # 載入核心函式庫
 source "$PARENT_DIR/lib/core_functions.sh"
@@ -391,9 +388,8 @@ show_publication_summary() {
 main() {
     # 預設值
     BUCKET_NAME="vpn-csr-exchange"  # 將在 check_aws_config 中重新生成
-    ENVIRONMENT="$CURRENT_ENVIRONMENT"  # 使用當前環境而不是 all
-    # Get AWS profile from environment manager
-    AWS_PROFILE="$(env_get_profile "$CURRENT_ENVIRONMENT" 2>/dev/null || echo default)"
+    ENVIRONMENT=""  # Will be set by profile selection
+    AWS_PROFILE=""  # Will be set by profile selection
     CA_ONLY=false
     ENDPOINTS_ONLY=false
     FORCE=false
@@ -445,6 +441,20 @@ main() {
         esac
     done
     
+    # Profile Selection and Environment Setup
+    local profile_args=""
+    [[ -n "$AWS_PROFILE" ]] && profile_args="--profile $AWS_PROFILE"
+    [[ -n "$ENVIRONMENT" ]] && profile_args="$profile_args --environment $ENVIRONMENT"
+    
+    if ! select_and_validate_profile $profile_args; then
+        echo -e "${RED}Profile selection failed${NC}"
+        exit 1
+    fi
+    
+    # Update environment from profile selection
+    ENVIRONMENT="$SELECTED_ENVIRONMENT"
+    AWS_PROFILE="$SELECTED_AWS_PROFILE"
+    
     # 驗證環境參數 - 檢查對應的配置文件是否存在
     local config_file="$PARENT_DIR/configs/$ENVIRONMENT/${ENVIRONMENT}.env"
     if [ ! -f "$config_file" ]; then
@@ -479,7 +489,7 @@ main() {
     LOG_FILE="$PARENT_DIR/logs/publish_endpoints.log"
     mkdir -p "$(dirname "$LOG_FILE")"
     
-    show_env_aware_header "VPN 公用資產發布工具"
+    show_team_env_header "VPN 公用資產發布工具"
     
     # 顯示 AWS Profile 資訊
     local current_profile

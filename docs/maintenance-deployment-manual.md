@@ -595,6 +595,16 @@ cdk deploy --rollback \
 
 ## 系統配置管理
 
+#### 配置系統更新 (2025-06-30)
+
+**重要改進**: 所有管理工具已從舊的 `env_manager.sh` 系統遷移至新的 **Profile Selector** 系統，提供更直接和安全的 AWS 環境管理。
+
+**核心改變:**
+- ⚠️ **破壞性變更**: 所有管理工具現在需要明確的 AWS Profile 選擇
+- 🔄 **環境變數更新**: `CURRENT_ENVIRONMENT` → `SELECTED_ENVIRONMENT`
+- 🎯 **直接 Profile 選擇**: 消除隱藏狀態，提供明確的環境控制
+- 🛡️ **跨帳戶驗證**: 增強安全檢查防止誤操作
+
 ### SSM Parameter Store 架構
 
 參數命名規範：
@@ -650,12 +660,34 @@ aws ssm put-parameter \
 ### 配置驗證
 
 ```bash
-# 驗證所有配置
-./admin-tools/tools/validate_config.sh
+# 驗證所有配置 (使用新的 Profile Selector)
+./admin-tools/tools/validate_config.sh --profile staging
 
-# 檢查參數完整性
-./scripts/setup-parameters.sh --validate
+# 檢查參數完整性 (新的參數格式)
+./scripts/setup-parameters.sh --profile staging --environment staging --auto-read \
+  --slack-webhook "YOUR_WEBHOOK" \
+  --slack-secret "YOUR_SECRET" \
+  --slack-bot-token "YOUR_TOKEN"
+
+# 驗證 Profile 配置
+./admin-tools/validate_aws_profile_config.sh --all-profiles
 ```
+
+#### 重要更新說明
+
+**新的命令格式:**
+```bash
+# 舊格式 (已不適用)
+./scripts/setup-parameters.sh --env staging --auto-read
+
+# 新格式 (必須指定 profile)
+./scripts/setup-parameters.sh --profile staging --environment staging --auto-read
+```
+
+**修復的問題:**
+- 🔧 **setup-parameters.sh**: 修復參數解析衝突問題
+- 🔧 **manage_vpn_service_access.sh**: 修復 `env_manager.sh` 缺失錯誤
+- 🔧 **employee_offboarding.sh**: 增強安全警告機制
 
 ## 監控與日誌
 
@@ -855,12 +887,27 @@ fields @timestamp, @billedDuration
 ```bash
 # 1. 修改程式碼
 # 2. 本地測試
-# 3. 部署到 Staging
-./scripts/deploy.sh staging
+# 3. 部署到 Staging (使用新的 Profile 系統)
+./scripts/deploy.sh staging --secure-parameters
 
-# 4. 測試驗證
+# 4. 測試驗證 (使用管理工具驗證)
+./admin-tools/aws_vpn_admin.sh --profile staging
+
 # 5. 部署到 Production
-./scripts/deploy.sh production
+./scripts/deploy.sh production --secure-parameters
+```
+
+#### 更新管理工具設定
+```bash
+# 更新系統參數 (新的命令格式)
+./scripts/setup-parameters.sh --profile staging --environment staging --auto-read \
+  --slack-webhook "YOUR_WEBHOOK" \
+  --slack-secret "YOUR_SECRET" \
+  --slack-bot-token "YOUR_TOKEN"
+
+# 驗證工具設定
+./admin-tools/manage_vpn_users.sh list --profile staging
+./admin-tools/manage_vpn_service_access.sh discover --profile staging
 ```
 
 #### 更新依賴套件
@@ -1205,28 +1252,98 @@ aws logs filter-log-events \
   --profile prod | jq '.events | length'
 ```
 
-### 常用命令速查
+### 常用命令速查 (更新版)
 
 ```bash
-# 部署
+# 部署 (使用新的 Profile 系統)
 ./scripts/deploy.sh both --secure-parameters
 
 # 查看日誌
-aws logs tail /aws/lambda/vpn-slack-handler-staging --follow
+aws logs tail /aws/lambda/vpn-slack-handler-staging --follow --profile staging
 
-# 更新參數
-./scripts/setup-parameters.sh --env staging --secure
+# 更新參數 (新的命令格式)
+./scripts/setup-parameters.sh --profile staging --environment staging --auto-read \
+  --slack-webhook "YOUR_WEBHOOK" --slack-secret "YOUR_SECRET" --slack-bot-token "YOUR_TOKEN"
 
-# 診斷問題
-./admin-tools/tools/debug_vpn_creation.sh
+# 診斷問題 (使用 Profile Selector)
+./admin-tools/tools/debug_vpn_creation.sh --profile staging
 
 # 分析效能
-./admin-tools/run-vpn-analysis.sh staging
+./admin-tools/run-vpn-analysis.sh --profile staging
+
+# 管理用戶權限
+./admin-tools/manage_vpn_users.sh list --profile staging
+
+# VPN 服務發現
+./admin-tools/manage_vpn_service_access.sh discover --profile staging
+
+# 驗證 Profile 配置
+./admin-tools/validate_aws_profile_config.sh --all-profiles
 ```
 
 ---
 
-**文件版本**：1.0  
-**最後更新**：2025-06-29  
-**適用系統版本**：3.0+  
+---
+
+## 📅 最新更新記錄
+
+### 2025-06-30 - 管理工具系統重大更新
+
+#### 🔄 系統迁移更新
+- **Profile Selector 系統**: 從 `env_manager.sh` 迁移至新的 `profile_selector.sh`
+- **環境變數統一**: 所有 `CURRENT_ENVIRONMENT` 更新為 `SELECTED_ENVIRONMENT`
+- **AWS Profile 直接選擇**: 消除隱藏狀態，提供明確的環境控制
+
+#### 🔧 修復的工具
+1. **scripts/setup-parameters.sh**
+   - 修復參數解析衝突問題
+   - 支援非互動式 Profile 指定
+   - 改善環境驗證邏輯
+
+2. **admin-tools/manage_vpn_service_access.sh**
+   - 修復 `env_manager.sh` 缺失錯誤
+   - 更新至 Profile Selector 系統
+   - 改善服務發現和管理功能
+
+3. **admin-tools/employee_offboarding.sh**
+   - 新增多重安全警告機制
+   - 增強風險確認流程
+   - 添加 'I-UNDERSTAND-THE-RISKS' 確認
+   - **重要**: 尚未在實際環境完整測試
+
+#### 📊 技術改善
+- **統一 AWS CLI 調用**: 所有工具使用 `aws_with_profile` wrapper
+- **跨帳戶驗證**: 增強帳戶 ID 驗證防止誤操作
+- **參數傳遞機制**: 改善命令列參數處理
+- **錯誤處理**: 提供更清晰的錯誤訊息和解決建議
+
+#### 📝 更新的命令格式
+**舊格式 (已不適用):**
+```bash
+./scripts/setup-parameters.sh --env staging --auto-read
+./admin-tools/manage_vpn_service_access.sh discover
+```
+
+**新格式 (必須使用):**
+```bash
+./scripts/setup-parameters.sh --profile staging --environment staging --auto-read
+./admin-tools/manage_vpn_service_access.sh discover --profile staging
+```
+
+#### ⚠️ 破壞性變更通知
+- 所有管理工具現在需要明確的 AWS Profile 選擇
+- 舊的環境切換命令 (`vpn_env.sh`) 已不適用
+- `employee_offboarding.sh` 包含未測試的高風險操作
+
+#### 👥 用戶行動項目
+1. **更新指令格式**: 所有管理工具現在需要 `--profile` 參數
+2. **驗證 Profile 設定**: 使用 `validate_aws_profile_config.sh` 驗證設定
+3. **更新文檔**: 閱讀更新的管理手冊了解新的操作流程
+4. **謹慎使用**: `employee_offboarding.sh` 在生產環境使用前需充分測試
+
+---
+
+**文件版本**：1.1  
+**最後更新**：2025-06-30  
+**適用系統版本**：3.1+  
 **開發團隊**：[Newsleopard 電子豹](https://newsleopard.com)

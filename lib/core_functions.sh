@@ -655,16 +655,29 @@ load_config_core() {
         return 1
     fi
     
-    # 如果傳入的是 VPN 端點配置文件，則使用環境管理器載入完整配置
+    # 如果傳入的是 VPN 端點配置文件，則載入該文件
     if [[ "$config_file" == *"vpn_endpoint.conf" ]]; then
         # 從文件路徑推斷環境名稱
         local env_name=$(basename "$(dirname "$config_file")")
         
-        # 使用環境管理器載入完整配置（包括環境配置和 VPN 端點配置）
-        if ! env_load_config "$env_name"; then
+        # 檢查文件是否存在
+        if [ ! -f "$config_file" ]; then
+            echo -e "${RED}錯誤：找不到配置文件 $config_file${NC}" >&2
+            return 1
+        fi
+        
+        # 載入配置文件
+        if ! source "$config_file"; then
             echo -e "${RED}錯誤：無法載入 $env_name 環境配置${NC}" >&2
             return 1
         fi
+        
+        # 同時載入環境配置文件（如果存在）
+        local env_config="$(dirname "$config_file")/${env_name}.env"
+        if [ -f "$env_config" ]; then
+            source "$env_config"
+        fi
+        
         return 0
     fi
     

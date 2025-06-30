@@ -2,14 +2,17 @@
 
 # VPN Service Access Manager - Environment-Aware
 # Discovers and manages VPN access to AWS services dynamically
-# Integrated with toolkit's environment management system
+# 版本：1.1 (直接 Profile 選擇版本)
 #
 # Usage: ./manage_vpn_service_access.sh <action> [vpn-sg-id] [options]
 
-set -e
-
-# 獲取腳本目錄
+# 全域變數
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PARENT_DIR="$(dirname "$SCRIPT_DIR")"
+
+# Parse command line arguments
+AWS_PROFILE=""
+TARGET_ENVIRONMENT=""
 
 # Check for help first before environment initialization
 for arg in "$@"; do
@@ -52,14 +55,57 @@ EOF
     fi
 done
 
-# 載入環境管理器 (必須第一個載入)
-source "$SCRIPT_DIR/../lib/env_manager.sh"
+# Parse profile and environment arguments early
+REMAINING_ARGS=()
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --profile|-p)
+            AWS_PROFILE="$2"
+            shift 2
+            ;;
+        --environment|-e)
+            TARGET_ENVIRONMENT="$2" 
+            shift 2
+            ;;
+        *)
+            # Preserve all other arguments for later processing
+            REMAINING_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
 
-# 初始化環境
-if ! env_init_for_script "manage_vpn_service_access.sh"; then
-    echo -e "${RED}錯誤: 環境初始化失敗${NC}" >&2
-    exit 1
+# Restore remaining arguments
+set -- "${REMAINING_ARGS[@]}"
+
+# 載入新的 Profile Selector (替代 env_manager.sh)
+source "$PARENT_DIR/lib/profile_selector.sh"
+
+# 載入環境核心函式 (用於顯示功能)
+source "$PARENT_DIR/lib/env_core.sh"
+
+# Select and validate profile (skip interactive if profile already specified)
+if [[ -n "$AWS_PROFILE" && -n "$TARGET_ENVIRONMENT" ]]; then
+    echo -e "${GREEN}[INFO]${NC} Using specified profile: $AWS_PROFILE for environment: $TARGET_ENVIRONMENT"
+    # Set the selected variables directly
+    SELECTED_AWS_PROFILE="$AWS_PROFILE"
+    SELECTED_ENVIRONMENT="$TARGET_ENVIRONMENT"
+    
+    # Basic validation
+    if ! aws configure list-profiles 2>/dev/null | grep -q "^$AWS_PROFILE$"; then
+        echo -e "${RED}錯誤: AWS Profile '$AWS_PROFILE' 不存在${NC}"
+        exit 1
+    fi
+else
+    # Use interactive profile selector
+    if ! select_and_validate_profile --profile "$AWS_PROFILE" --environment "$TARGET_ENVIRONMENT"; then
+        echo -e "${RED}錯誤: Profile 選擇失敗${NC}"
+        exit 1
+    fi
 fi
+
+# 載入核心函式庫
+source "$PARENT_DIR/lib/core_functions.sh"
 
 # Configuration
 AWS_REGION="${AWS_REGION:-us-east-1}"
@@ -141,8 +187,8 @@ is_cached_discovery_valid() {
     fi
     
     # Validate environment matches
-    if [[ "$cached_environment" != "$CURRENT_ENVIRONMENT" ]]; then
-        log_info "Cached discovery is for different environment ($cached_environment vs $CURRENT_ENVIRONMENT)"
+    if [[ "$cached_environment" != "$SELECTED_ENVIRONMENT" ]]; then
+        log_info "Cached discovery is for different environment ($cached_environment vs $SELECTED_ENVIRONMENT)"
         return 1
     fi
     
@@ -208,7 +254,7 @@ save_discovery_cache() {
 # Created: $(date)
 
 VPC_ID="$vpc_id"
-ENVIRONMENT="$CURRENT_ENVIRONMENT"
+ENVIRONMENT="$SELECTED_ENVIRONMENT"
 AWS_REGION="$AWS_REGION"
 DISCOVERY_TIMESTAMP="$current_time"
 DISCOVERY_TTL="$VPN_DISCOVERY_CACHE_TTL"
@@ -278,7 +324,7 @@ Environment Variables:
   VPN_DISCOVERY_FAST_MODE   - Use fast discovery mode (default: true)
 
 Environment:
-  Current environment: $CURRENT_ENVIRONMENT
+  Current environment: $SELECTED_ENVIRONMENT
   AWS Region: $AWS_REGION
   Cache enabled: $VPN_USE_CACHED_DISCOVERY
 EOF
@@ -1215,7 +1261,7 @@ track_security_group_modification() {
     local action="$5"  # "ADD" or "REMOVE"
     local rule_id="$6"  # Optional: security group rule ID
     
-    local tracking_file="$SCRIPT_DIR/../configs/${CURRENT_ENVIRONMENT}/vpn_security_groups_tracking.conf"
+    local tracking_file="$PARENT_DIR/configs/${SELECTED_ENVIRONMENT}/vpn_security_groups_tracking.conf"
     
     # Ensure directory exists
     local tracking_dir=$(dirname "$tracking_file")
@@ -1325,7 +1371,7 @@ EOF
 
 # Get list of security groups modified for VPN access
 get_modified_security_groups() {
-    local tracking_file="$SCRIPT_DIR/../configs/${CURRENT_ENVIRONMENT}/vpn_security_groups_tracking.conf"
+    local tracking_file="$PARENT_DIR/configs/${SELECTED_ENVIRONMENT}/vpn_security_groups_tracking.conf"
     
     if [[ ! -f "$tracking_file" ]]; then
         log_warning "No tracking file found: $tracking_file"
@@ -1342,7 +1388,7 @@ get_modified_security_groups() {
 
 # Get VPN security group ID from tracking file
 get_vpn_security_group_from_tracking() {
-    local tracking_file="$SCRIPT_DIR/../configs/${CURRENT_ENVIRONMENT}/vpn_security_groups_tracking.conf"
+    local tracking_file="$PARENT_DIR/configs/${SELECTED_ENVIRONMENT}/vpn_security_groups_tracking.conf"
     
     if [[ ! -f "$tracking_file" ]]; then
         log_warning "No tracking file found: $tracking_file"
@@ -1472,7 +1518,7 @@ remove_rules() {
     echo
     
     # Method 1: Use tracking file for precise cleanup
-    local tracking_file="$SCRIPT_DIR/../configs/${CURRENT_ENVIRONMENT}/vpn_security_groups_tracking.conf"
+    local tracking_file="$PARENT_DIR/configs/${SELECTED_ENVIRONMENT}/vpn_security_groups_tracking.conf"
     local tracked_groups=()
     
     if [[ -f "$tracking_file" ]]; then
@@ -1587,7 +1633,7 @@ remove_rules() {
 
 # Clean up tracking file after successful VPN endpoint removal
 cleanup_tracking_file() {
-    local tracking_file="$SCRIPT_DIR/../configs/${CURRENT_ENVIRONMENT}/vpn_security_groups_tracking.conf"
+    local tracking_file="$PARENT_DIR/configs/${SELECTED_ENVIRONMENT}/vpn_security_groups_tracking.conf"
     
     if [[ -f "$tracking_file" ]]; then
         # Reset tracking file to clean state
@@ -1688,9 +1734,9 @@ main() {
     log_info "Action: $ACTION | Region: $AWS_REGION | Environment: $CURRENT_ENVIRONMENT"
     if [[ -n "$VPN_SG" ]]; then
         log_info "VPN Security Group: $VPN_SG"
-        log_message_core "VPN Service Access Manager 執行開始: action=$ACTION, region=$AWS_REGION, environment=$CURRENT_ENVIRONMENT, vpn_sg=$VPN_SG"
+        log_message_core "VPN Service Access Manager 執行開始: action=$ACTION, region=$AWS_REGION, environment=$SELECTED_ENVIRONMENT, vpn_sg=$VPN_SG"
     else
-        log_message_core "VPN Service Access Manager 執行開始: action=$ACTION, region=$AWS_REGION, environment=$CURRENT_ENVIRONMENT"
+        log_message_core "VPN Service Access Manager 執行開始: action=$ACTION, region=$AWS_REGION, environment=$SELECTED_ENVIRONMENT"
     fi
     echo "================================"
     
@@ -1778,7 +1824,7 @@ main() {
     
     echo
     log_info "✅ Operation completed!"
-    log_message_core "VPN Service Access Manager 執行完成: action=$ACTION, environment=$CURRENT_ENVIRONMENT"
+    log_message_core "VPN Service Access Manager 執行完成: action=$ACTION, environment=$SELECTED_ENVIRONMENT"
 }
 
 # Main service discovery function - orchestrates the entire discovery process

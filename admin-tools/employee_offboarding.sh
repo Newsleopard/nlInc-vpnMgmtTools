@@ -2,30 +2,106 @@
 
 # AWS Client VPN 人員離職安全處理流程腳本
 # 用途：全面處理離職人員的所有 AWS 和 VPN 相關訪問權限
-# 版本：1.1 (環境感知版本)
+# 版本：1.2 (直接 Profile 選擇版本)
+#
+# ⚠️  重要警告：此腳本尚未在實際 AWS 用戶上進行完整測試 ⚠️ 
+# WARNING: This script has NOT been fully tested on actual AWS users yet
+# 建議在生產環境使用前，先在測試環境進行充分驗證
+# Recommend thorough testing in development environment before production use
+#
+# 🚨 此腳本執行以下高風險操作：
+# - 刪除 IAM 用戶和相關權限
+# - 撤銷和刪除 AWS ACM 證書
+# - 斷開所有 VPN 連接
+# - 停用和刪除 AWS 訪問密鑰
+# 請確保已充分測試並獲得適當授權
 
 # 全域變數
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PARENT_DIR="$(dirname "$SCRIPT_DIR")"
 
-# 載入環境管理器 (必須第一個載入)
-source "$SCRIPT_DIR/../lib/env_manager.sh"
+# Parse command line arguments
+AWS_PROFILE=""
+TARGET_ENVIRONMENT=""
 
-# 初始化環境
-if ! env_init_for_script "employee_offboarding.sh"; then
-    echo -e "${RED}錯誤: 無法初始化環境管理器${NC}"
+# Parse command line arguments for help
+for arg in "$@"; do
+    if [[ "$arg" == "-h" || "$arg" == "--help" ]]; then
+        cat << 'EOF'
+⚠️  重要警告：此腳本尚未在實際 AWS 用戶上進行完整測試 ⚠️
+WARNING: This script has NOT been fully tested on actual AWS users yet
+
+🚨 此腳本執行以下高風險操作：
+- 刪除 IAM 用戶和相關權限
+- 撤銷和刪除 AWS ACM 證書  
+- 斷開所有 VPN 連接
+- 停用和刪除 AWS 訪問密鑰
+
+用法: $0 [選項]
+
+選項:
+  -p, --profile PROFILE     AWS CLI profile
+  -e, --environment ENV     目標環境 (staging/production)
+  -h, --help               顯示此幫助訊息
+
+注意：建議在生產環境使用前，先在測試環境進行充分驗證
+EOF
+        exit 0
+    fi
+done
+
+# Parse remaining arguments for profile and environment
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --profile|-p)
+            AWS_PROFILE="$2"
+            shift 2
+            ;;
+        --environment|-e)
+            TARGET_ENVIRONMENT="$2"
+            shift 2
+            ;;
+        --help|-h)
+            # Already handled above
+            shift
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
+# Display warning before profile selection
+echo -e "${YELLOW}⚠️  重要警告：此腳本尚未在實際 AWS 用戶上進行完整測試${NC}"
+echo -e "${YELLOW}WARNING: This script has NOT been fully tested on actual AWS users yet${NC}"
+echo -e "${YELLOW}建議在生產環境使用前，先在測試環境進行充分驗證${NC}"
+echo -e "${RED}🚨 此腳本將執行高風險操作：刪除 IAM 用戶、撤銷證書、斷開 VPN 連接${NC}"
+echo -e ""
+
+# 載入新的 Profile Selector (替代 env_manager.sh)
+source "$PARENT_DIR/lib/profile_selector.sh"
+
+# 載入環境核心函式 (用於顯示功能)  
+source "$PARENT_DIR/lib/env_core.sh"
+
+# Select and validate profile
+if ! select_and_validate_profile --profile "$AWS_PROFILE" --environment "$TARGET_ENVIRONMENT"; then
+    echo -e "${RED}錯誤: Profile 選擇失敗${NC}"
     exit 1
 fi
 
 # 驗證 AWS Profile 整合
 echo -e "${BLUE}正在驗證 AWS Profile 設定...${NC}"
-if ! env_validate_profile_integration "$CURRENT_ENVIRONMENT" "true"; then
+if ! env_validate_profile_integration "$SELECTED_ENVIRONMENT" "true"; then
     echo -e "${RED}錯誤: AWS Profile 設定有問題，無法安全執行離職處理${NC}"
     echo -e "${YELLOW}請先使用管理員工具設定正確的 AWS Profile${NC}"
     exit 1
 fi
 
-# 設定環境特定路徑
-env_setup_paths
+# 設定環境特定路徑 (使用 Profile Selector 的環境變數)
+ENV_CONFIG_DIR="$PARENT_DIR/configs/$SELECTED_ENVIRONMENT"
+ENV_LOG_DIR="$PARENT_DIR/logs/$SELECTED_ENVIRONMENT"
+ENV_CERT_DIR="$PARENT_DIR/certs/$SELECTED_ENVIRONMENT"
 
 # 環境感知的配置檔案
 OFFBOARDING_LOG_DIR="$ENV_LOG_DIR/offboarding"
@@ -35,6 +111,7 @@ IAM_CLEANUP_PARTIAL_ERRORS="" # Global variable to store IAM cleanup partial err
 
 # 載入核心函式庫
 source "$SCRIPT_DIR/../lib/core_functions.sh"
+source "$SCRIPT_DIR/../lib/env_core.sh"
 
 # 阻止腳本在出錯時繼續執行
 set -e
@@ -86,7 +163,7 @@ log_offboarding_message() {
 # 顯示歡迎訊息
 show_welcome() {
     clear
-    show_env_aware_header "AWS VPN 人員離職安全處理系統"
+    show_team_env_header "AWS VPN 人員離職安全處理系統"
     echo -e ""
     echo -e "${YELLOW}此系統將全面處理離職人員的安全清理作業${NC}"
     echo -e ""
@@ -103,7 +180,7 @@ show_welcome() {
     
     # 顯示 AWS Profile 資訊
     local current_profile
-    current_profile=$(env_get_profile "$CURRENT_ENVIRONMENT" 2>/dev/null)
+    current_profile="$SELECTED_AWS_PROFILE"
     if [[ -n "$current_profile" ]]; then
         local account_id region
         account_id=$(aws_with_profile sts get-caller-identity --query Account --output text 2>/dev/null)
@@ -119,7 +196,7 @@ show_welcome() {
         fi
         
         # 驗證 profile 匹配環境
-        if validate_profile_matches_environment "$current_profile" "$CURRENT_ENVIRONMENT" 2>/dev/null; then
+        if validate_profile_matches_environment "$current_profile" "$SELECTED_ENVIRONMENT" 2>/dev/null; then
             echo -e "  狀態: ${GREEN}✓ 有效且匹配環境${NC}"
         else
             echo -e "  狀態: ${YELLOW}⚠ 有效但可能不匹配環境${NC}"
@@ -297,6 +374,17 @@ collect_employee_info() {
 execute_emergency_measures() {
     if [[ "$urgent_action" == true ]]; then
         echo -e "\\n${RED}[緊急] 執行立即安全措施...${NC}"
+        
+        # 🚨 緊急操作警告
+        echo -e "${RED}🚨 警告：即將執行高風險緊急安全措施${NC}"
+        echo -e "${YELLOW}此腳本尚未在實際 AWS 用戶上完整測試${NC}"
+        echo -e "${YELLOW}建議在生產環境使用前進行充分驗證${NC}"
+        echo -e "${RED}將執行：斷開所有 VPN 連接、撤銷證書、刪除 IAM 用戶${NC}"
+        read -p "確認執行緊急安全措施？(輸入 'CONFIRM' 繼續): " emergency_confirm
+        if [[ "$emergency_confirm" != "CONFIRM" ]]; then
+            echo -e "${YELLOW}緊急措施已取消${NC}"
+            return 1
+        fi
         
         echo -e "${RED}⚠ 檢測到高風險離職，執行緊急安全協議${NC}"
         
@@ -1359,13 +1447,42 @@ show_completion_summary() {
 
 # 主函數
 main() {
-    # 環境操作驗證
-    if ! env_validate_operation "EMPLOYEE_OFFBOARDING"; then
+    # 🚨 最終警告訊息
+    echo -e "${RED}============================================================${NC}"
+    echo -e "${RED}🚨 最後警告：這是高風險操作！${NC}"
+    echo -e "${YELLOW}此腳本尚未在實際 AWS 用戶上進行完整測試${NC}"
+    echo -e "${YELLOW}將執行以下高風險操作：${NC}"
+    echo -e "${RED}- 永久刪除 IAM 用戶和所有相關資源${NC}"
+    echo -e "${RED}- 撤銷所有 VPN 證書和連接${NC}"
+    echo -e "${RED}- 停用所有 AWS 訪問密鑰${NC}"
+    echo -e "${RED}- 立即斷開所有活躍連接${NC}"
+    echo -e "${RED}此操作不可逆轉！${NC}"
+    echo -e "${RED}============================================================${NC}"
+    echo -e ""
+    read -p "確認繼續執行高風險操作？(輸入 'I-UNDERSTAND-THE-RISKS' 繼續): " final_warning_confirm
+    if [[ "$final_warning_confirm" != "I-UNDERSTAND-THE-RISKS" ]]; then
+        echo -e "${GREEN}已取消操作，系統安全退出${NC}"
+        exit 0
+    fi
+    echo -e "${YELLOW}用戶已確認了解風險，繼續執行...${NC}"
+    echo -e ""
+    
+    # 環境操作驗證 (更新至新的 Profile Selector 系統)
+    # 注意：現在使用 SELECTED_ENVIRONMENT 而非 CURRENT_ENVIRONMENT
+    # if ! env_validate_operation "EMPLOYEE_OFFBOARDING"; then
+    #     return 1
+    # fi
+    
+    # 驗證環境和 Profile 配置
+    if [[ -z "$SELECTED_ENVIRONMENT" || -z "$SELECTED_AWS_PROFILE" ]]; then
+        echo -e "${RED}錯誤：環境或 AWS Profile 未正確設定${NC}"
+        echo -e "${YELLOW}請確保已正確選擇環境和 Profile${NC}"
         return 1
     fi
     
     # 記錄操作開始
-    log_env_action "EMPLOYEE_OFFBOARDING_START" "開始員工離職安全處理程序"
+    # log_env_action "EMPLOYEE_OFFBOARDING_START" "開始員工離職安全處理程序"
+    log_offboarding_message "開始員工離職安全處理程序，環境：$SELECTED_ENVIRONMENT，Profile：$SELECTED_AWS_PROFILE"
     
     # 顯示歡迎訊息
     show_welcome
@@ -1386,7 +1503,8 @@ main() {
     # 顯示完成摘要
     show_completion_summary
     
-    log_env_action "EMPLOYEE_OFFBOARDING_COMPLETE" "員工離職安全處理程序完全完成"
+    # log_env_action "EMPLOYEE_OFFBOARDING_COMPLETE" "員工離職安全處理程序完全完成"
+    log_offboarding_message "員工離職安全處理程序完全完成"
 }
 
 # 記錄腳本啟動

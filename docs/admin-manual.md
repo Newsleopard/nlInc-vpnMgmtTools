@@ -208,14 +208,22 @@ aws_secret_access_key = ...
 
 #### 員工離職處理
 ```bash
-./admin-tools/employee_offboarding.sh username
+# ⚠️ 重要：此工具執行高風險操作，尚未在實際環境完整測試
+./admin-tools/employee_offboarding.sh --profile production --environment production
 ```
 
-完整的離職流程包括：
-- 撤銷所有環境的 VPN 存取
-- 移除 IAM 權限
-- 清理 S3 證書檔案
-- 生成離職報告
+**安全警告和確認流程**:
+- ⚠️ 腳本會顯示多重警告和風險提醒
+- 🔒 需要輸入 'I-UNDERSTAND-THE-RISKS' 確認風險
+- 🛡️ 緊急操作需要輸入 'CONFIRM' 確認
+- 📋 提供詳細的操作檢查清單
+
+**完整的離職流程包括**:
+- 🚫 撤銷所有環境的 VPN 存取
+- 🗑️ 永久刪除 IAM 用戶和權限
+- 🧹 清理 S3 證書檔案
+- 📊 生成詳細離職報告
+- 🔐 多重安全確認機制
 
 ### CA 證書管理
 
@@ -857,44 +865,615 @@ time curl -X POST "YOUR_API_GATEWAY_URL" \
    - 及時響應異常
    - 定期檢討閾值
 
-## 管理工具參考
+## 管理工具完整參考
 
-### Profile 與環境管理工具
+### 🎯 工具分類概覽
 
-| 工具 | 用途 | 常用選項 |
-|------|------|----------|
-| `lib/profile_selector.sh` | Profile 選擇庫 | 所有管理工具的核心 |
-| `aws_vpn_admin.sh` | 主要管理控制台 | `--profile`, `--environment`, `--help` |
+本系統提供 15+ 個專業管理工具，分為以下類別：
 
-### 證書管理工具
+| 類別 | 工具數量 | 主要用途 |
+|------|----------|----------|
+| **核心管理** | 3 個 | VPN 端點管理、用戶管理、主控制台 |
+| **證書管理** | 4 個 | CSR 簽發、證書撤銷、S3 交換設置 |
+| **用戶管理** | 3 個 | 權限管理、離職處理、服務存取 |
+| **網路管理** | 2 個 | 子網路管理、端點發布 |
+| **監控分析** | 3 個 | VPN 分析、追蹤報告、日誌管理 |
+| **診斷工具** | 1 個 | AWS Profile 驗證 |
 
-| 工具 | 用途 | 常用選項 |
-|------|------|----------|
-| `sign_csr.sh` | 簽發證書 | `-e`, `--upload-s3` |
-| `process_csr_batch.sh` | 批次處理 | `download`, `process`, `upload`, `monitor` |
-| `revoke_member_access.sh` | 撤銷證書 | - |
+---
 
-### 使用者管理工具
+## 🔧 核心管理工具
 
-| 工具 | 用途 | 常用選項 |
-|------|------|----------|
-| `manage_vpn_users.sh` | 使用者管理 | `list`, `add`, `remove`, `status` |
-| `employee_offboarding.sh` | 離職處理 | - |
+### 1. aws_vpn_admin.sh - 主管理控制台
 
-### 診斷修復工具
+**用途**: AWS Client VPN 的主要管理介面，提供互動式選單操作
 
-| 工具 | 用途 | 使用時機 |
-|------|------|----------|
-| `debug_vpn_creation.sh` | 診斷創建問題 | VPN 創建失敗 |
-| `fix_endpoint_id.sh` | 修復端點 ID | ID 不匹配錯誤 |
-| `fix_internet_access.sh` | 修復網路存取 | 無法存取網際網路 |
-| `validate_config.sh` | 驗證配置 | 定期檢查 |
+**功能特色**:
+- 🎛️ 互動式主選單介面
+- 🔄 支援雙環境管理 (staging/production)
+- 📊 整合所有 VPN 管理功能
+- 🎯 直接 AWS Profile 選擇
 
-### 分析報告工具
+**使用方法**:
+```bash
+# 基本啟動
+./admin-tools/aws_vpn_admin.sh
 
-| 工具 | 用途 | 輸出格式 |
-|------|------|----------|
-| `run-vpn-analysis.sh` | 全面分析 | Markdown, JSON |
+# 指定 AWS Profile
+./admin-tools/aws_vpn_admin.sh --profile staging
+
+# 指定環境
+./admin-tools/aws_vpn_admin.sh --environment production --profile prod
+
+# 查看幫助
+./admin-tools/aws_vpn_admin.sh --help
+```
+
+**主選單功能**:
+1. **創建新的 VPN 端點** - 建立新環境的 VPN
+2. **查看現有 VPN 端點** - 檢視端點狀態和配置
+3. **管理團隊成員** - 用戶權限和證書管理
+4. **查看證書狀態** - 檢查證書有效性
+5. **生成客戶端配置** - 產生 .ovpn 配置檔
+6. **設定 AWS Profile** - 切換工作環境
+7. **刪除 VPN 端點** - 清理不需要的端點
+
+**適用場景**:
+- 🆕 新管理員入門操作
+- 🔄 日常 VPN 管理任務
+- 🎯 需要圖形化介面的操作
+- 📋 系統狀態總覽檢查
+
+### 2. manage_vpn_users.sh - 用戶權限管理
+
+**用途**: 統一管理 VPN 用戶權限和 IAM 政策
+
+**核心功能**:
+- 👤 添加/移除用戶 VPN 權限
+- 📋 批量用戶管理
+- 🔍 權限狀態檢查
+- 🛡️ S3 存取權限驗證
+
+**使用方法**:
+```bash
+# 添加單一用戶
+./admin-tools/manage_vpn_users.sh add john
+
+# 添加用戶並自動創建 IAM 用戶
+./admin-tools/manage_vpn_users.sh add jane --create-user
+
+# 移除用戶權限
+./admin-tools/manage_vpn_users.sh remove old-employee
+
+# 列出所有 VPN 用戶
+./admin-tools/manage_vpn_users.sh list
+
+# 檢查用戶狀態
+./admin-tools/manage_vpn_users.sh status john
+
+# 批量添加用戶
+./admin-tools/manage_vpn_users.sh batch-add users.txt
+
+# 檢查用戶 S3 權限
+./admin-tools/manage_vpn_users.sh check-permissions john
+
+# 指定環境和 Profile
+./admin-tools/manage_vpn_users.sh add john --environment staging --profile staging
+```
+
+**批量用戶文件格式**:
+```
+# users.txt 範例
+john.doe
+jane.smith
+mike.wilson
+# 註解行會被忽略
+```
+
+**選項參數**:
+- `-e, --environment ENV`: 目標環境 (staging/production)
+- `-p, --profile PROFILE`: AWS CLI profile
+- `-b, --bucket-name NAME`: S3 存儲桶名稱
+- `--create-user`: 自動創建不存在的 IAM 用戶
+- `--dry-run`: 預覽操作但不執行
+- `-v, --verbose`: 顯示詳細輸出
+
+**適用場景**:
+- 👥 新員工入職權限設置
+- 🚪 員工離職權限清理
+- 📊 定期權限審計
+- 🔄 批量用戶管理
+
+### 3. vpn_subnet_manager.sh - 子網路管理
+
+**用途**: 管理 VPN 端點的子網路關聯和網路配置
+
+**核心功能**:
+- 🌐 子網路關聯/取消關聯
+- 📊 網路狀態監控
+- 🔧 路由表管理
+- 🛡️ 安全群組配置
+
+**使用方法**:
+```bash
+# 關聯子網路到 VPN 端點
+./admin-tools/vpn_subnet_manager.sh associate --subnet-id subnet-12345 --profile staging
+
+# 取消子網路關聯
+./admin-tools/vpn_subnet_manager.sh disassociate --subnet-id subnet-12345 --profile staging
+
+# 列出所有關聯的子網路
+./admin-tools/vpn_subnet_manager.sh list --profile staging
+
+# 檢查子網路狀態
+./admin-tools/vpn_subnet_manager.sh status --subnet-id subnet-12345 --profile staging
+```
+
+---
+
+## 📜 證書管理工具
+
+### 4. sign_csr.sh - 證書簽發工具
+
+**用途**: 簽發客戶端證書請求 (CSR) 並管理證書生命週期
+
+**核心功能**:
+- ✍️ CSR 簽發和證書生成
+- 📤 自動上傳到 S3 交換桶
+- 🔍 批量處理和監控
+- 📋 簽發記錄追蹤
+
+**使用方法**:
+```bash
+# 簽發單一用戶證書
+./admin-tools/sign_csr.sh john
+
+# 簽發並上傳到 S3
+./admin-tools/sign_csr.sh john --upload-s3
+
+# 指定環境
+./admin-tools/sign_csr.sh john -e staging
+
+# 批量處理模式
+./admin-tools/sign_csr.sh --batch-mode
+
+# 監控待處理的 CSR
+./admin-tools/sign_csr.sh --monitor
+
+# 下載所有待處理 CSR
+./admin-tools/sign_csr.sh --download-all
+
+# 上傳所有已簽發證書
+./admin-tools/sign_csr.sh --upload-all
+```
+
+**工作流程**:
+1. **下載 CSR**: 從 S3 下載用戶提交的 CSR
+2. **驗證 CSR**: 檢查 CSR 格式和內容
+3. **簽發證書**: 使用 CA 私鑰簽發證書
+4. **上傳證書**: 將簽發的證書上傳到 S3
+5. **記錄日誌**: 記錄簽發操作和狀態
+
+**適用場景**:
+- 📝 處理新用戶證書申請
+- 🔄 批量證書簽發
+- 📊 證書簽發狀態監控
+- 🔧 證書管理自動化
+
+### 5. setup_csr_s3_bucket.sh - S3 交換桶設置
+
+**用途**: 創建和配置用於安全 CSR 交換的 S3 存儲桶
+
+**核心功能**:
+- 🪣 S3 存儲桶創建和配置
+- 🛡️ IAM 政策管理
+- 📤 公開資源發布
+- 🧹 清理和維護
+
+**使用方法**:
+```bash
+# 基本桶設置
+./admin-tools/setup_csr_s3_bucket.sh
+
+# 指定桶名稱和區域
+./admin-tools/setup_csr_s3_bucket.sh --bucket-name my-vpn-csr --region us-west-2
+
+# 只創建 IAM 政策
+./admin-tools/setup_csr_s3_bucket.sh --create-policies
+
+# 列出現有政策
+./admin-tools/setup_csr_s3_bucket.sh --list-policies
+
+# 發布公開資源
+./admin-tools/setup_csr_s3_bucket.sh --publish-assets
+
+# 清理模式
+./admin-tools/setup_csr_s3_bucket.sh --cleanup
+
+# 詳細輸出
+./admin-tools/setup_csr_s3_bucket.sh --verbose
+```
+
+**S3 桶結構**:
+```
+vpn-csr-exchange/
+├── public/                 # 公開可讀資源
+│   ├── ca.crt             # CA 證書
+│   └── vpn_endpoints.json # 端點配置
+├── csr/                   # 用戶上傳 CSR
+│   └── {username}.csr
+├── cert/                  # 管理員上傳證書
+│   └── {username}.crt
+└── log/                   # 審計日誌
+    └── processed/
+```
+
+### 6. revoke_member_access.sh - 證書撤銷工具
+
+**用途**: 撤銷用戶證書並清理相關存取權限
+
+**核心功能**:
+- 🚫 證書撤銷和 CRL 更新
+- 🧹 S3 檔案清理
+- 📋 撤銷記錄追蹤
+- 🔔 通知機制
+
+**使用方法**:
+```bash
+# 撤銷用戶證書
+./admin-tools/revoke_member_access.sh john
+
+# 指定環境
+./admin-tools/revoke_member_access.sh john --environment staging
+
+# 強制撤銷（跳過確認）
+./admin-tools/revoke_member_access.sh john --force
+
+# 只清理 S3 檔案
+./admin-tools/revoke_member_access.sh john --s3-only
+```
+
+### 7. publish_endpoints.sh - 端點資訊發布
+
+**用途**: 發布 VPN 端點資訊到 S3 供客戶端下載
+
+**核心功能**:
+- 📤 端點配置發布
+- 🔄 多環境同步
+- 📋 配置驗證
+- 🔍 狀態檢查
+
+**使用方法**:
+```bash
+# 發布所有環境端點資訊
+./admin-tools/publish_endpoints.sh
+
+# 發布特定環境
+./admin-tools/publish_endpoints.sh --environment staging
+
+# 驗證發布內容
+./admin-tools/publish_endpoints.sh --verify
+
+# 強制更新
+./admin-tools/publish_endpoints.sh --force-update
+```
+
+---
+
+## 👥 用戶管理工具
+
+### 8. employee_offboarding.sh - 員工離職處理
+
+**用途**: 完整的員工離職流程，包含所有 VPN 相關清理
+
+**⚠️ 重要安全警告**: 此工具執行高風險操作，包括永久刪除 IAM 用戶、撤銷證書和斷開 VPN 連接。**尚未在實際 AWS 用戶上進行完整測試**，建議在生產環境使用前進行充分驗證。
+
+**核心功能**:
+- 🚪 完整離職流程自動化
+- 🧹 多系統權限清理
+- 📋 離職檢查清單
+- 📊 離職報告生成
+- 🛡️ 多重安全確認機制
+
+**使用方法**:
+```bash
+# 互動式離職流程（推薦）
+./admin-tools/employee_offboarding.sh
+
+# 指定 AWS Profile 和環境
+./admin-tools/employee_offboarding.sh --profile production --environment production
+
+# 指定特定環境
+./admin-tools/employee_offboarding.sh --environment staging
+```
+
+**安全確認流程**:
+1. **初始警告**: 顯示腳本風險和未測試狀態
+2. **環境確認**: 驗證 AWS Profile 和環境設定
+3. **操作確認**: 需要輸入 'I-UNDERSTAND-THE-RISKS' 繼續
+4. **緊急操作確認**: 高風險操作需要輸入 'CONFIRM'
+5. **不可逆操作提醒**: 每個關鍵步驟都有確認提示
+
+**離職檢查清單**:
+- ✅ 撤銷 VPN 證書
+- ✅ 移除 IAM 權限
+- ✅ 清理 S3 檔案
+- ✅ 更新 CRL
+- ✅ 記錄審計日誌
+- ✅ 發送通知
+
+### 9. manage_vpn_service_access.sh - 服務存取管理
+
+**用途**: 管理 VPN 服務的細粒度存取控制
+
+**核心功能**:
+- 🎯 動態服務發現和存取控制
+- 🛡️ 安全群組自動化管理
+- 📊 存取權限審計和報告
+- 🔄 批量權限更新和追蹤
+
+**使用方法**:
+```bash
+# 發現 VPC 中的可用服務
+./admin-tools/manage_vpn_service_access.sh discover --profile staging
+
+# 顯示已發現的服務
+./admin-tools/manage_vpn_service_access.sh display-services --profile staging
+
+# 創建 VPN 到服務的存取規則
+./admin-tools/manage_vpn_service_access.sh create sg-1234567890abcdef0 --profile staging
+
+# 移除 VPN 服務存取規則
+./admin-tools/manage_vpn_service_access.sh remove sg-1234567890abcdef0 --profile staging
+
+# 生成 VPN 追蹤報告
+./admin-tools/manage_vpn_service_access.sh report --profile staging
+
+# 清理追蹤檔案和發現快取
+./admin-tools/manage_vpn_service_access.sh clean --profile staging
+
+# 指定 AWS Profile 和環境
+./admin-tools/manage_vpn_service_access.sh discover --profile production --environment production
+```
+
+**主要操作類型**:
+- `discover`: 掃描 VPC 並發現可用的 AWS 服務
+- `display-services`: 顯示之前發現的服務清單
+- `create`: 建立 VPN 到已發現服務的存取規則
+- `remove`: 移除 VPN 服務存取規則並更新追蹤
+- `report`: 生成人類可讀的 VPN 追蹤報告
+- `clean`: 清理追蹤檔案和發現快取
+
+---
+
+## 📊 監控分析工具
+
+### 10. run-vpn-analysis.sh - VPN 全面分析
+
+**用途**: 生成詳細的 VPN 使用分析報告
+
+**核心功能**:
+- 📈 使用統計分析
+- 💰 成本分析報告
+- 🔍 效能指標監控
+- 📋 多格式報告輸出
+
+**使用方法**:
+```bash
+# 生成完整分析報告
+./admin-tools/run-vpn-analysis.sh
+
+# 指定時間範圍
+./admin-tools/run-vpn-analysis.sh --start-date 2025-06-01 --end-date 2025-06-30
+
+# 指定輸出格式
+./admin-tools/run-vpn-analysis.sh --format json
+
+# 只分析成本
+./admin-tools/run-vpn-analysis.sh --cost-only
+
+# 生成 Markdown 報告
+./admin-tools/run-vpn-analysis.sh --format markdown --output report.md
+```
+
+**報告內容**:
+- 📊 連線統計和趨勢
+- 💰 成本分析和節省
+- 👥 用戶使用模式
+- ⚡ 效能指標
+- 🔧 優化建議
+
+### 11. vpn_tracking_report.sh - VPN 追蹤報告
+
+**用途**: 生成 VPN 使用追蹤和合規報告
+
+**核心功能**:
+- 📋 使用記錄追蹤
+- 🔍 合規性檢查
+- 📊 定期報告生成
+- 📤 自動報告發送
+
+**使用方法**:
+```bash
+# 生成月度追蹤報告
+./admin-tools/vpn_tracking_report.sh --monthly
+
+# 生成週度報告
+./admin-tools/vpn_tracking_report.sh --weekly
+
+# 指定用戶報告
+./admin-tools/vpn_tracking_report.sh --user john
+
+# 合規性檢查
+./admin-tools/vpn_tracking_report.sh --compliance-check
+```
+
+### 12. set_log_retention.sh - 日誌保留管理
+
+**用途**: 管理 CloudWatch 日誌群組的保留政策
+
+**核心功能**:
+- 📅 日誌保留期設定
+- 💰 儲存成本優化
+- 🔄 批量日誌群組管理
+- 📊 保留政策審計
+
+**使用方法**:
+```bash
+# 設定所有 VPN 相關日誌保留期
+./admin-tools/set_log_retention.sh --days 30
+
+# 設定特定日誌群組
+./admin-tools/set_log_retention.sh --log-group /aws/lambda/vpn-monitor --days 14
+
+# 列出所有日誌群組
+./admin-tools/set_log_retention.sh --list
+
+# 審計保留政策
+./admin-tools/set_log_retention.sh --audit
+```
+
+---
+
+## 🔧 診斷工具
+
+### 13. validate_aws_profile_config.sh - AWS Profile 驗證
+
+**用途**: 驗證 AWS CLI Profile 配置的正確性
+
+**核心功能**:
+- ✅ Profile 配置驗證
+- 🔑 憑證有效性檢查
+- 🌐 區域設定驗證
+- 🛡️ 權限檢查
+
+**使用方法**:
+```bash
+# 驗證預設 Profile
+./admin-tools/validate_aws_profile_config.sh
+
+# 驗證特定 Profile
+./admin-tools/validate_aws_profile_config.sh --profile staging
+
+# 詳細驗證報告
+./admin-tools/validate_aws_profile_config.sh --verbose
+
+# 檢查所有 Profile
+./admin-tools/validate_aws_profile_config.sh --all-profiles
+```
+
+**驗證項目**:
+- ✅ Profile 存在性
+- ✅ 憑證有效性
+- ✅ 區域設定
+- ✅ 基本 AWS 權限
+- ✅ VPN 相關權限
+
+---
+
+## 🎯 工具使用最佳實踐
+
+### 日常管理工作流程
+
+#### 🌅 每日檢查 (5 分鐘)
+```bash
+# 1. 檢查系統狀態
+./admin-tools/aws_vpn_admin.sh --profile staging
+
+# 2. 處理待簽發證書
+./admin-tools/sign_csr.sh --monitor
+
+# 3. 檢查用戶權限狀態
+./admin-tools/manage_vpn_users.sh list
+```
+
+#### 📅 每週維護 (15 分鐘)
+```bash
+# 1. 生成使用分析報告
+./admin-tools/run-vpn-analysis.sh --format markdown
+
+# 2. 檢查日誌保留政策
+./admin-tools/set_log_retention.sh --audit
+
+# 3. 驗證 AWS Profile 配置
+./admin-tools/validate_aws_profile_config.sh --all-profiles
+```
+
+#### 📊 每月審計 (30 分鐘)
+```bash
+# 1. 生成月度追蹤報告
+./admin-tools/vpn_tracking_report.sh --monthly
+
+# 2. 權限審計
+./admin-tools/manage_vpn_service_access.sh audit
+
+# 3. 成本分析
+./admin-tools/run-vpn-analysis.sh --cost-only
+```
+
+### 緊急情況處理
+
+#### 🚨 員工緊急離職
+```bash
+# 立即撤銷所有存取權限
+./admin-tools/employee_offboarding.sh username --emergency
+```
+
+#### 🔧 系統故障診斷
+```bash
+# 1. 驗證 AWS 配置
+./admin-tools/validate_aws_profile_config.sh --verbose
+
+# 2. 檢查 VPN 端點狀態
+./admin-tools/aws_vpn_admin.sh
+
+# 3. 檢查用戶權限
+./admin-tools/manage_vpn_users.sh check-permissions username
+```
+
+### 安全最佳實踐
+
+#### 🛡️ 定期安全檢查
+- **每日**: 監控證書簽發活動
+- **每週**: 審計用戶權限變更
+- **每月**: 完整權限審計
+- **每季**: 證書有效期檢查
+
+#### 🔐 權限管理原則
+- **最小權限**: 只授予必要的存取權限
+- **定期審計**: 定期檢查和清理權限
+- **職責分離**: 管理員和用戶權限分離
+- **審計追蹤**: 記錄所有權限變更
+
+---
+
+## 📋 快速參考
+
+### 常用指令速查
+
+| 任務 | 指令 |
+|------|------|
+| 添加新用戶 | `./admin-tools/manage_vpn_users.sh add username --profile staging` |
+| 簽發證書 | `./admin-tools/sign_csr.sh username --upload-s3 --profile staging` |
+| 員工離職 ⚠️ | `./admin-tools/employee_offboarding.sh --profile production` |
+| 系統狀態 | `./admin-tools/aws_vpn_admin.sh --profile staging` |
+| 服務發現 | `./admin-tools/manage_vpn_service_access.sh discover --profile staging` |
+| 生成報告 | `./admin-tools/run-vpn-analysis.sh --profile staging` |
+| 權限檢查 | `./admin-tools/manage_vpn_users.sh check-permissions username --profile staging` |
+
+⚠️ **注意**: `employee_offboarding.sh` 執行高風險操作，尚未在實際環境完整測試
+
+### 故障排除快速指南
+
+| 問題 | 解決方案 |
+|------|----------|
+| 證書簽發失敗 | 檢查 CA 證書和私鑰路徑 |
+| 用戶無法連線 | 驗證用戶權限和證書狀態 |
+| S3 上傳失敗 | 檢查 S3 桶權限和 IAM 政策 |
+| AWS Profile 錯誤 | 運行 `validate_aws_profile_config.sh` |
+| 成本異常 | 檢查自動關閉功能和閒置時間 |
+
+---
 
 ---
 
@@ -925,7 +1504,45 @@ alias vpn-profiles='aws configure list-profiles'
 
 ---
 
-**文件版本**：1.0  
-**最後更新**：2025-06-29  
-**適用系統版本**：3.0+  
+---
+
+## 📅 最新更新記錄
+
+### 2025-06-30 - 管理工具系統更新
+
+#### ✅ 已修復的工具
+1. **manage_vpn_service_access.sh**
+   - 修復 `env_manager.sh` 缺失錯誤
+   - 更新至新的 Profile Selector 系統
+   - 支援直接 AWS Profile 選擇
+   - 改善環境變數處理
+
+2. **employee_offboarding.sh**
+   - 新增多重安全警告機制
+   - 更新 Profile Selector 整合
+   - 增強風險確認流程
+   - 添加 'I-UNDERSTAND-THE-RISKS' 確認
+
+3. **setup-parameters.sh** (Scripts)
+   - 修復參數解析衝突問題
+   - 支援非互動式 Profile 指定
+   - 改善參數傳遞機制
+   - 更新環境驗證邏輯
+
+#### 🔧 技術改善
+- 所有工具現在使用統一的 Profile Selector 系統
+- 移除對已廢棄 `env_manager.sh` 的依賴
+- 統一環境變數命名 (`SELECTED_ENVIRONMENT`)
+- 改善 AWS CLI 調用的 Profile 處理
+
+#### ⚠️ 重要提醒
+- `employee_offboarding.sh` 包含未在實際環境測試的高風險操作
+- 所有管理工具現在需要明確的 AWS Profile 選擇
+- 建議在生產環境使用前先在測試環境驗證
+
+---
+
+**文件版本**：1.1  
+**最後更新**：2025-06-30  
+**適用系統版本**：3.1+  
 **開發團隊**：[Newsleopard 電子豹](https://newsleopard.com)

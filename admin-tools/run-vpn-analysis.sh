@@ -9,6 +9,24 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
+# Parse command line arguments for profile
+AWS_PROFILE=""
+FORCE_INTERACTIVE=false
+for arg in "$@"; do
+    case $arg in
+        --profile=*)
+            AWS_PROFILE="${arg#*=}"
+            ;;
+        --profile)
+            shift
+            AWS_PROFILE="$1"
+            ;;
+        --interactive)
+            FORCE_INTERACTIVE=true
+            ;;
+    esac
+done
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -83,6 +101,40 @@ for arg in "$@"; do
 done
 set -- "${NEW_ARGS[@]}"
 
+# Load profile selector and select appropriate profile
+if [ -f "$PROJECT_ROOT/lib/profile_selector.sh" ]; then
+    source "$PROJECT_ROOT/lib/profile_selector.sh"
+    
+    # Determine profile selection method
+    if [ -n "$AWS_PROFILE" ]; then
+        # Explicit profile specified
+        if ! select_and_validate_profile --profile "$AWS_PROFILE" --environment "$ENVIRONMENT"; then
+            echo -e "${RED}❌ Failed to validate specified profile: $AWS_PROFILE${NC}"
+            exit 1
+        fi
+    elif [ "$FORCE_INTERACTIVE" = true ]; then
+        # Force interactive mode
+        if ! select_and_validate_profile --environment "$ENVIRONMENT" --interactive; then
+            echo -e "${RED}❌ Failed to select AWS profile interactively${NC}"
+            exit 1
+        fi
+    else
+        # Default behavior: show interactive menu when no profile specified
+        if ! select_and_validate_profile --environment "$ENVIRONMENT" --interactive; then
+            echo -e "${RED}❌ Failed to select AWS profile for $ENVIRONMENT environment${NC}"
+            exit 1
+        fi
+    fi
+    
+    # Update environment if changed by profile selection
+    if [ -n "$SELECTED_ENVIRONMENT" ]; then
+        ENVIRONMENT="$SELECTED_ENVIRONMENT"
+    fi
+    AWS_PROFILE="$SELECTED_AWS_PROFILE"
+else
+    echo -e "${YELLOW}⚠️  Profile selector not found, using default AWS profile${NC}"
+fi
+
 # Configuration file paths (following aws_vpn_admin.sh pattern)
 CONFIG_DIR="$PROJECT_ROOT/configs/$ENVIRONMENT"
 CONFIG_FILE="$CONFIG_DIR/vpn_endpoint.conf"
@@ -93,6 +145,15 @@ echo "======================================"
 echo "Environment: $ENVIRONMENT"
 echo "Config Directory: $CONFIG_DIR"
 echo ""
+
+# AWS CLI helper function that uses the selected profile
+aws_with_profile() {
+    if [ -n "$AWS_PROFILE" ]; then
+        aws --profile "$AWS_PROFILE" "$@"
+    else
+        aws "$@"
+    fi
+}
 
 # Function: Load configuration (following aws_vpn_admin.sh pattern)
 load_configuration() {
@@ -212,7 +273,12 @@ test_environment() {
         if [[ $REPLY =~ ^[Yy]$ ]]; then
             if [ -f "/opt/homebrew/bin/bash" ]; then
                 echo -e "${CYAN}🔄 Switching to newer bash...${NC}"
-                exec /opt/homebrew/bin/bash "$0" "$ENVIRONMENT" "${NEW_ARGS[@]}"
+                # Pass the selected profile to avoid re-selection
+                if [ -n "$AWS_PROFILE" ]; then
+                    exec /opt/homebrew/bin/bash "$0" "$ENVIRONMENT" --profile="$AWS_PROFILE" "${NEW_ARGS[@]}"
+                else
+                    exec /opt/homebrew/bin/bash "$0" "$ENVIRONMENT" "${NEW_ARGS[@]}"
+                fi
             else
                 echo -e "${RED}❌ /opt/homebrew/bin/bash not found. Please install newer bash first.${NC}"
                 exit 1
@@ -253,7 +319,7 @@ test_environment() {
     echo -e "${YELLOW}🌐 Testing AWS service connectivity...${NC}"
 
     echo "  Testing EC2 service..."
-    if aws ec2 describe-regions --region $REGION >/dev/null 2>&1; then
+    if aws ec2 describe-regions --profile "${AWS_PROFILE:-default}" --region $REGION >/dev/null 2>&1; then
         echo -e "${GREEN}  ✅ EC2 service accessible${NC}"
     else
         echo -e "${RED}  ❌ EC2 service not accessible${NC}"
@@ -261,7 +327,7 @@ test_environment() {
     fi
 
     echo "  Testing VPC connectivity..."
-    if aws ec2 describe-vpcs --region $REGION >/dev/null 2>&1; then
+    if aws ec2 describe-vpcs --profile "${AWS_PROFILE:-default}" --region $REGION >/dev/null 2>&1; then
         echo -e "${GREEN}  ✅ VPC service accessible${NC}"
     else
         echo -e "${RED}  ❌ VPC service not accessible${NC}"
@@ -269,7 +335,7 @@ test_environment() {
     fi
 
     echo "  Testing Client VPN service..."
-    if aws ec2 describe-client-vpn-endpoints --region $REGION >/dev/null 2>&1; then
+    if aws ec2 describe-client-vpn-endpoints --profile "${AWS_PROFILE:-default}" --region $REGION >/dev/null 2>&1; then
         echo -e "${GREEN}  ✅ Client VPN service accessible${NC}"
     else
         echo -e "${RED}  ❌ Client VPN service not accessible${NC}"
@@ -279,7 +345,7 @@ test_environment() {
 
     # Check for existing VPN endpoints in the configured VPC
     echo -e "${YELLOW}🔍 Checking for VPN endpoints in $ENVIRONMENT environment...${NC}"
-    VPN_COUNT=$(aws ec2 describe-client-vpn-endpoints --region $REGION --query "length(ClientVpnEndpoints[?VpcId=='$VPC_ID'])" --output text 2>/dev/null || echo "0")
+    VPN_COUNT=$(aws ec2 describe-client-vpn-endpoints --profile "${AWS_PROFILE:-default}" --region $REGION --query "length(ClientVpnEndpoints[?VpcId=='$VPC_ID'])" --output text 2>/dev/null || echo "0")
     echo "  Found $VPN_COUNT Client VPN endpoint(s) in VPC $VPC_ID"
 
     if [ "$VPN_COUNT" -eq 0 ]; then
@@ -292,6 +358,140 @@ test_environment() {
 
     echo -e "${GREEN}✅ Environment validation completed successfully!${NC}"
     echo ""
+}
+
+# Function: Load tracking file data for detailed reporting
+load_tracking_file_data() {
+    local tracking_file="$PROJECT_ROOT/configs/${ENVIRONMENT}/vpn_security_groups_tracking.conf"
+    
+    if [[ -f "$tracking_file" ]]; then
+        echo -e "${CYAN}📋 Loading VPN tracking data from: $tracking_file${NC}"
+        
+        # Parse tracking file variables
+        TRACKING_VPN_SG_ID=$(grep "^VPN_SECURITY_GROUP_ID=" "$tracking_file" | cut -d'=' -f2 | tr -d '"')
+        TRACKING_LAST_CONFIG_TIME=$(grep "^VPN_LAST_CONFIGURATION_TIME=" "$tracking_file" | cut -d'=' -f2 | tr -d '"')
+        TRACKING_CONFIG_METHOD=$(grep "^VPN_CONFIGURATION_METHOD=" "$tracking_file" | cut -d'=' -f2 | tr -d '"')
+        TRACKING_TOTAL_COUNT=$(grep "^VPN_MODIFIED_SECURITY_GROUPS_COUNT=" "$tracking_file" | cut -d'=' -f2 | tr -d '"')
+        TRACKING_MODIFIED_GROUPS=$(grep "^VPN_MODIFIED_SECURITY_GROUPS=" "$tracking_file" | cut -d'=' -f2 | tr -d '"')
+        TRACKING_CONFIG_LOG=$(grep "^VPN_CONFIGURATION_LOG=" "$tracking_file" | cut -d'=' -f2 | tr -d '"')
+        
+        echo -e "${GREEN}✅ Tracking data loaded: $TRACKING_TOTAL_COUNT security group rules tracked${NC}"
+        return 0
+    else
+        echo -e "${YELLOW}⚠️  No tracking file found: $tracking_file${NC}"
+        echo -e "${YELLOW}   Tracking file is created when VPN access rules are configured${NC}"
+        return 1
+    fi
+}
+
+# Function: Add detailed tracking information to reports
+add_detailed_tracking_info() {
+    if [[ -n "$TRACKING_MODIFIED_GROUPS" ]]; then
+        echo -e "${CYAN}📋 Adding detailed security group modifications to reports...${NC}"
+        
+        # Add tracking section to markdown report
+        cat >> $REPORT_FILE << EOF
+
+## 📋 VPN Access Configuration Details ($ENVIRONMENT)
+
+### Configuration Audit Information
+- **VPN Security Group ID**: \`$TRACKING_VPN_SG_ID\`
+- **Last Configuration**: $TRACKING_LAST_CONFIG_TIME
+- **Configuration Method**: $TRACKING_CONFIG_METHOD
+- **Total Modifications**: $TRACKING_TOTAL_COUNT security group rules
+
+### 🔧 Detailed Security Group Modifications
+
+EOF
+        
+        # Create temporary file to group by service
+        local temp_grouped="/tmp/vpn_analysis_grouped_$$"
+        
+        # Parse and group security groups by service
+        echo "$TRACKING_MODIFIED_GROUPS" | tr ';' '\n' | while IFS=':' read -r sg_id service_name port; do
+            if [[ -n "$sg_id" && -n "$service_name" && -n "$port" ]]; then
+                echo "$service_name:$port:$sg_id"
+            fi
+        done | sort > "$temp_grouped"
+        
+        if [[ -f "$temp_grouped" && -s "$temp_grouped" ]]; then
+            local current_service=""
+            local current_port=""
+            
+            while IFS=':' read -r service_name port sg_id; do
+                # Group by service and port
+                if [[ "$service_name:$port" != "$current_service:$current_port" ]]; then
+                    if [[ -n "$current_service" ]]; then
+                        echo "" >> $REPORT_FILE
+                    fi
+                    echo "#### 📦 $service_name (Port $port)" >> $REPORT_FILE
+                    current_service="$service_name"
+                    current_port="$port"
+                fi
+                
+                # Get security group name if possible
+                local sg_name=""
+                if command -v aws >/dev/null 2>&1; then
+                    sg_name=$(aws ec2 describe-security-groups \
+                        --profile "$SELECTED_AWS_PROFILE" \
+                        --group-ids "$sg_id" --region "$REGION" \
+                        --query 'SecurityGroups[0].GroupName' --output text 2>/dev/null || echo "")
+                fi
+                
+                if [[ -n "$sg_name" && "$sg_name" != "None" ]]; then
+                    echo "- \`$sg_id\` ($sg_name)" >> $REPORT_FILE
+                else
+                    echo "- \`$sg_id\`" >> $REPORT_FILE
+                fi
+            done < "$temp_grouped"
+            echo "" >> $REPORT_FILE
+        fi
+        
+        # Clean up
+        rm -f "$temp_grouped"
+        
+        # Add timeline section
+        if [[ -n "$TRACKING_CONFIG_LOG" ]]; then
+            cat >> $REPORT_FILE << EOF
+
+### ⏰ Configuration Timeline
+
+Recent configuration changes:
+
+EOF
+            
+            # Parse configuration log and show recent entries
+            echo "$TRACKING_CONFIG_LOG" | tr ';' '\n' | head -10 | while IFS='|' read -r timestamp vpn_sg target_sg service port action rule_id; do
+                if [[ -n "$timestamp" && -n "$service" ]]; then
+                    local action_icon=""
+                    case "$action" in
+                        "ADD") action_icon="➕" ;;
+                        "REMOVE") action_icon="➖" ;;
+                        *) action_icon="•" ;;
+                    esac
+                    echo "- $timestamp $action_icon $service:$port → $target_sg" >> $REPORT_FILE
+                fi
+            done
+            echo "" >> $REPORT_FILE
+        fi
+        
+        # Add to JSON report
+        local tracking_json=$(cat << EOF
+{
+  "vpn_security_group_id": "$TRACKING_VPN_SG_ID",
+  "last_configuration_time": "$TRACKING_LAST_CONFIG_TIME",
+  "configuration_method": "$TRACKING_CONFIG_METHOD",
+  "total_modified_security_groups": $TRACKING_TOTAL_COUNT,
+  "detailed_modifications": []
+}
+EOF
+)
+        
+        # Add tracking section to JSON
+        jq --argjson tracking "$tracking_json" '.tracking_details = $tracking' $OUTPUT_FILE > tmp.json && mv tmp.json $OUTPUT_FILE
+        
+        echo -e "${GREEN}✅ Detailed tracking information added to reports${NC}"
+    fi
 }
 
 # Function: Comprehensive VPN analysis
@@ -351,7 +551,7 @@ EOF
     echo -e "${BLUE}${GEAR} Step 1: Discovering VPN Endpoints in $ENVIRONMENT...${NC}"
 
     # Get VPN endpoints for the specific VPC
-    VPN_ENDPOINTS=$(aws ec2 describe-client-vpn-endpoints --region $REGION --query "ClientVpnEndpoints[?VpcId=='$VPC_ID']" --output json)
+    VPN_ENDPOINTS=$(aws ec2 describe-client-vpn-endpoints --profile "${AWS_PROFILE:-default}" --region $REGION --query "ClientVpnEndpoints[?VpcId=='$VPC_ID']" --output json)
 
     if [ "$VPN_ENDPOINTS" == "[]" ]; then
         echo -e "${RED}${CROSS} No Client VPN endpoints found in VPC $VPC_ID ($ENVIRONMENT environment)${NC}"
@@ -406,10 +606,10 @@ EOF
         echo -e "${BLUE}${GEAR} Step 2: Analyzing VPN Routes and Authorization...${NC}"
         
         # Get VPN routes
-        VPN_ROUTES=$(aws ec2 describe-client-vpn-routes --region $REGION --client-vpn-endpoint-id $VPN_ID --output json)
+        VPN_ROUTES=$(aws ec2 describe-client-vpn-routes --profile "${AWS_PROFILE:-default}" --region $REGION --client-vpn-endpoint-id $VPN_ID --output json)
         
         # Get authorization rules
-        AUTH_RULES=$(aws ec2 describe-client-vpn-authorization-rules --region $REGION --client-vpn-endpoint-id $VPN_ID --output json)
+        AUTH_RULES=$(aws ec2 describe-client-vpn-authorization-rules --profile "${AWS_PROFILE:-default}" --region $REGION --client-vpn-endpoint-id $VPN_ID --output json)
         
         # Add route and auth info to report
         cat >> $REPORT_FILE << EOF
@@ -422,7 +622,7 @@ EOF
         echo -e "${BLUE}${SHIELD} Step 3: Analyzing Security Group References...${NC}"
         
         # Find all security groups that reference the VPN security group
-        SG_REFERENCES=$(aws ec2 describe-security-groups --region $REGION --filters "Name=ip-permission.group-id,Values=$VPN_SG" --output json)
+        SG_REFERENCES=$(aws ec2 describe-security-groups --profile "${AWS_PROFILE:-default}" --region $REGION --filters "Name=ip-permission.group-id,Values=$VPN_SG" --output json)
         
         if [ "$SG_REFERENCES" == '{"SecurityGroups":[]}' ]; then
             echo -e "${RED}${CROSS} No security groups reference VPN security group $VPN_SG in $ENVIRONMENT${NC}"
@@ -470,7 +670,7 @@ ${CHECK} **PERFECT**: Referenced in $RDS_SG_COUNT security groups:
 EOF
             echo "$RDS_SG_LIST" | while read sg; do
                 if [ -n "$sg" ]; then
-                    SG_NAME=$(aws ec2 describe-security-groups --region $REGION --group-ids $sg --query 'SecurityGroups[0].GroupName' --output text 2>/dev/null || echo "Unknown")
+                    SG_NAME=$(aws ec2 describe-security-groups --profile "${AWS_PROFILE:-default}" --region $REGION --group-ids $sg --query 'SecurityGroups[0].GroupName' --output text 2>/dev/null || echo "Unknown")
                     echo "- \`$sg\` ($SG_NAME)" >> $REPORT_FILE
                 fi
             done
@@ -500,7 +700,7 @@ ${CHECK} **PERFECT**: Referenced in $REDIS_SG_COUNT security groups:
 EOF
             echo "$REDIS_SG_LIST" | while read sg; do
                 if [ -n "$sg" ]; then
-                    SG_NAME=$(aws ec2 describe-security-groups --region $REGION --group-ids $sg --query 'SecurityGroups[0].GroupName' --output text 2>/dev/null || echo "Unknown")
+                    SG_NAME=$(aws ec2 describe-security-groups --profile "${AWS_PROFILE:-default}" --region $REGION --group-ids $sg --query 'SecurityGroups[0].GroupName' --output text 2>/dev/null || echo "Unknown")
                     echo "- \`$sg\` ($SG_NAME)" >> $REPORT_FILE
                 fi
             done
@@ -530,7 +730,7 @@ ${CHECK} **PERFECT**: Referenced in $HBASE_SG_COUNT security groups:
 EOF
             echo "$HBASE_SG_LIST" | while read sg; do
                 if [ -n "$sg" ]; then
-                    SG_NAME=$(aws ec2 describe-security-groups --region $REGION --group-ids $sg --query 'SecurityGroups[0].GroupName' --output text 2>/dev/null || echo "Unknown")
+                    SG_NAME=$(aws ec2 describe-security-groups --profile "${AWS_PROFILE:-default}" --region $REGION --group-ids $sg --query 'SecurityGroups[0].GroupName' --output text 2>/dev/null || echo "Unknown")
                     echo "- \`$sg\` ($SG_NAME)" >> $REPORT_FILE
                 fi
             done
@@ -590,7 +790,7 @@ ${CHECK} **PERFECT**: Referenced in $EKS_SG_COUNT security groups:
 EOF
             echo "$EKS_SG_LIST" | while read sg; do
                 if [ -n "$sg" ]; then
-                    SG_NAME=$(aws ec2 describe-security-groups --region $REGION --group-ids $sg --query 'SecurityGroups[0].GroupName' --output text 2>/dev/null || echo "Unknown")
+                    SG_NAME=$(aws ec2 describe-security-groups --profile "${AWS_PROFILE:-default}" --region $REGION --group-ids $sg --query 'SecurityGroups[0].GroupName' --output text 2>/dev/null || echo "Unknown")
                     echo "- \`$sg\` ($SG_NAME)" >> $REPORT_FILE
                 fi
             done
@@ -693,6 +893,13 @@ EOF
         jq --argjson recs "$RECOMMENDATIONS" '.recommendations = $recs' $OUTPUT_FILE > tmp.json && mv tmp.json $OUTPUT_FILE
         
     done
+    
+    # Load and integrate tracking file data for detailed reporting
+    echo ""
+    echo -e "${BLUE}${GEAR} Step 6: Integrating detailed tracking information...${NC}"
+    if load_tracking_file_data; then
+        add_detailed_tracking_info
+    fi
 }
 
 # Function: Display results interactively
@@ -786,6 +993,25 @@ display_results() {
             ;;
     esac
 }
+
+# Load profile selector before main execution
+source "$PROJECT_ROOT/lib/profile_selector.sh"
+
+# Integrate with profile selector if needed
+if [[ -z "$AWS_PROFILE" && "$FORCE_INTERACTIVE" != "true" ]]; then
+    echo -e "${CYAN}🔧 Profile integration enabled for $ENVIRONMENT environment${NC}"
+    
+    # Use profile selector to get the right profile for this environment
+    if ! select_and_validate_profile --environment "$ENVIRONMENT"; then
+        echo -e "${RED}❌ Profile selection failed${NC}"
+        exit 1
+    fi
+    
+    # Update AWS_PROFILE with selected profile
+    AWS_PROFILE="$SELECTED_AWS_PROFILE"
+    echo -e "${GREEN}✅ Using AWS Profile: $AWS_PROFILE${NC}"
+    echo ""
+fi
 
 # Main execution
 echo -e "${BLUE}🚀 VPN Analysis All-in-One Tool (Environment Aware)${NC}"
