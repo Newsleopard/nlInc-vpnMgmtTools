@@ -133,8 +133,9 @@ validate_profile_account() {
     # Get account ID from profile
     local account_id
     account_id=$(get_profile_account_id "$profile")
+    local get_id_result=$?
     
-    if [[ $? -ne 0 ]]; then
+    if [[ $get_id_result -ne 0 ]]; then
         log_error "Failed to get account ID for profile '$profile'"
         log_error "Please check your AWS credentials and profile configuration"
         return 1
@@ -180,9 +181,9 @@ select_profile_interactive() {
         return 1
     fi
     
-    echo ""
-    echo "=== AWS Profile Selection ==="
-    echo ""
+    echo "" >&2
+    echo "=== AWS Profile Selection ===" >&2
+    echo "" >&2
     
     # Build profile menu with environment and account info
     declare -a profile_info=()
@@ -202,25 +203,26 @@ select_profile_interactive() {
         local display_env="${environment:-"unknown"}"
         profile_info+=("$profile")
         printf "%2d) %s%s (Env: %s, Account: %s, Region: %s)\n" \
-               "$index" "$highlight" "$profile" "$display_env" "$account_id" "$region"
+               "$index" "$highlight" "$profile" "$display_env" "$account_id" "$region" >&2
         ((index++))
     done
     
-    echo ""
+    echo "" >&2
     if [[ -n "$target_environment" ]]; then
-        echo "⭐ = Recommended for environment: $target_environment"
-        echo ""
+        echo "⭐ = Recommended for environment: $target_environment" >&2
+        echo "" >&2
     fi
     
     # Get user selection
     local choice
     while true; do
-        read -p "Select AWS Profile [1-${#profiles[@]}]: " choice
+        echo -n "Select AWS Profile [1-${#profiles[@]}]: " >&2
+        read choice
         
         if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "${#profiles[@]}" ]; then
             break
         else
-            log_error "Invalid selection. Please enter a number between 1 and ${#profiles[@]}"
+            echo -e "${RED}[ERROR]${NC} Invalid selection. Please enter a number between 1 and ${#profiles[@]}" >&2
         fi
     done
     

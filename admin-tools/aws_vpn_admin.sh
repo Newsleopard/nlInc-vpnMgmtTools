@@ -12,6 +12,9 @@ PARENT_DIR="$(dirname "$SCRIPT_DIR")"
 # 載入新的 Profile Selector (替代 env_manager.sh)
 source "$PARENT_DIR/lib/profile_selector.sh"
 
+# 載入環境核心函式 (用於顯示功能)
+source "$PARENT_DIR/lib/env_core.sh"
+
 # Parse command line arguments
 AWS_PROFILE=""
 TARGET_ENVIRONMENT=""
@@ -108,7 +111,7 @@ upload_public_assets_to_s3() {
 # 顯示主選單
 show_menu() {
     clear
-    show_env_aware_header "AWS Client VPN 管理員控制台"
+    show_team_env_header "AWS Client VPN 管理員控制台"
     
     # 顯示 AWS Profile 資訊
     local current_profile
