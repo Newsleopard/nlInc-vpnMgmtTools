@@ -1639,80 +1639,71 @@ check_permissions_mode() {
     echo -e "${BLUE}此工具將檢查您的 AWS 用戶是否具有 VPN CSR 上傳權限${NC}"
     echo -e ""
     
-    # 檢查必要工具
-    check_team_prerequisites
-    
-    # 初始化 AWS 配置
-    init_environment_and_aws
-    
-    # 設置用戶信息
-    setup_user_information
-    
-    # 確保使用正確的存儲桶名稱
-    update_s3_bucket_name
-
-    echo -e "\n${CYAN}========================================${NC}"
-    echo -e "${CYAN}     權限檢查結果     ${NC}"
-    echo -e "${CYAN}========================================${NC}"
-    echo -e ""
-    
-    # 顯示當前 AWS 用戶信息
-    echo -e "${BLUE}當前 AWS 用戶信息：${NC}"
-    local user_arn
-    user_arn=$(aws sts get-caller-identity --query 'Arn' --output text --profile "$SELECTED_AWS_PROFILE" 2>/dev/null || echo "未知")
-    local account_id
-    account_id=$(aws sts get-caller-identity --query 'Account' --output text --profile "$SELECTED_AWS_PROFILE" 2>/dev/null || echo "未知")
-    local user_name
-    user_name=$(aws sts get-caller-identity --query 'UserName' --output text --profile "$SELECTED_AWS_PROFILE" 2>/dev/null || echo "未知")
-    
-    echo -e "  用戶 ARN: ${YELLOW}$user_arn${NC}"
-    echo -e "  帳戶 ID: ${YELLOW}$account_id${NC}"
-    echo -e "  用戶名: ${YELLOW}$user_name${NC}"
-    echo -e "  S3 存儲桶: ${YELLOW}$S3_BUCKET${NC}"
-    echo -e ""
-    
-    # 檢查 S3 存儲桶訪問
-    echo -e "${BLUE}檢查 S3 存儲桶訪問權限...${NC}"
-    if aws s3 ls "s3://$S3_BUCKET" --profile "$SELECTED_AWS_PROFILE" &>/dev/null; then
-        echo -e "${GREEN}✓ 可以訪問 S3 存儲桶${NC}"
-    else
-        echo -e "${RED}✗ 無法訪問 S3 存儲桶${NC}"
-        echo -e "${YELLOW}這可能表示存儲桶不存在或您沒有訪問權限${NC}"
+    # 檢查必要工具 (僅檢查 AWS CLI)
+    echo -e "${YELLOW}[1/3] 檢查必要工具...${NC}"
+    if ! command -v aws &> /dev/null; then
+        echo -e "${RED}✗ AWS CLI 未安裝${NC}"
+        echo -e "${YELLOW}請安裝 AWS CLI: https://aws.amazon.com/cli/${NC}"
+        return 1
     fi
+    echo -e "${GREEN}✓ AWS CLI 已安裝${NC}"
     
-    # 檢查 CSR 上傳權限
-    echo -e "${BLUE}檢查 CSR 上傳權限...${NC}"
-    if check_s3_csr_permissions "$USERNAME"; then
-        echo -e "${GREEN}✓ CSR 上傳權限正常${NC}"
-        echo -e "${GREEN}您可以使用零接觸工作流程${NC}"
-    else
-        echo -e "${RED}✗ CSR 上傳權限不足${NC}"
-        show_permission_help "$USERNAME"
+    # AWS Profile 選擇和環境初始化
+    echo -e "${YELLOW}[2/3] 選擇 AWS Profile 和環境...${NC}"
+    
+    # 使用輕量化環境初始化 (包含 profile 選擇)
+    if ! init_team_member_environment "check_permissions" "$TEAM_SCRIPT_DIR"; then
+        echo -e "${RED}環境初始化失敗${NC}"
         return 1
     fi
     
-    # 檢查證書下載權限
-    echo -e "${BLUE}檢查證書下載權限...${NC}"
-    local test_cert_key="cert/${USERNAME}.crt"
-    if aws s3api head-object --bucket "$S3_BUCKET" --key "$test_cert_key" --profile "$SELECTED_AWS_PROFILE" &>/dev/null; then
-        echo -e "${GREEN}✓ 證書下載權限正常 (文件已存在)${NC}"
-    else
-        echo -e "${YELLOW}? 證書下載權限測試 (證書文件不存在，這是正常的)${NC}"
-        echo -e "${CYAN}當管理員簽署您的證書後，您將能夠下載它${NC}"
+    # 驗證選中的 AWS profile
+    if ! validate_aws_profile_config "$SELECTED_AWS_PROFILE"; then
+        echo -e "${RED}AWS profile 配置驗證失敗${NC}"
+        return 1
     fi
     
-    echo -e "\n${GREEN}========================================${NC}"
-    echo -e "${GREEN}     權限檢查完成     ${NC}"
-    echo -e "${GREEN}========================================${NC}"
+    echo -e "${GREEN}✓ 使用 AWS Profile: $SELECTED_AWS_PROFILE${NC}"
+    echo -e "${GREEN}✓ 目標環境: $(get_env_display_name "$TARGET_ENVIRONMENT")${NC}"
+    
+    # 設置基本變數並獲取正確的 S3 存儲桶名稱
+    USERNAME="${USERNAME:-$(whoami)}"
+    update_s3_bucket_name
+    
+    echo -e "${YELLOW}[3/3] 檢查 S3 權限...${NC}"
+
+    # 顯示簡要用戶信息
+    local user_arn
+    user_arn=$(aws sts get-caller-identity --query 'Arn' --output text --profile "$SELECTED_AWS_PROFILE" 2>/dev/null || echo "未知")
+    local user_name=$(echo "$user_arn" | sed 's/.*user\///')
+    
+    echo -e "\n${BLUE}檢查用戶: ${YELLOW}$user_name${NC} (使用 profile: $SELECTED_AWS_PROFILE)"
+    echo -e "${BLUE}S3 存儲桶: ${YELLOW}$S3_BUCKET${NC}"
     echo -e ""
-    echo -e "${CYAN}下一步操作建議：${NC}"
+    
+    # 檢查 S3 存儲桶訪問
+    echo -e "${BLUE}測試 S3 存儲桶訪問...${NC}"
+    if aws s3 ls "s3://$S3_BUCKET" --profile "$SELECTED_AWS_PROFILE" &>/dev/null; then
+        echo -e "${GREEN}✓ S3 存儲桶可訪問${NC}"
+    else
+        echo -e "${RED}✗ 無法訪問 S3 存儲桶${NC}"
+        echo -e "${YELLOW}請聯繫管理員確認存儲桶權限${NC}"
+        return 1
+    fi
+    
+    # 檢查 CSR 上傳權限
+    echo -e "${BLUE}測試 CSR 上傳權限...${NC}"
+    if check_s3_csr_permissions "$USERNAME"; then
+        echo -e "${GREEN}✓ CSR 上傳權限正常${NC}"
+    else
+        echo -e "${RED}✗ CSR 上傳權限不足${NC}"
+        echo -e "${YELLOW}請聯繫管理員添加 VPN-CSR-TeamMember-Policy 權限${NC}"
+        return 1
+    fi
+    
+    echo -e "\n${GREEN}✅ 權限檢查通過！${NC}"
     echo -e ""
-    echo -e "${BLUE}如果權限檢查通過：${NC}"
-    echo -e "  執行 ${CYAN}$0 --init${NC} 開始 VPN 設置"
-    echo -e ""
-    echo -e "${BLUE}如果權限檢查失敗：${NC}"
-    echo -e "  1. 聯繫管理員配置權限"
-    echo -e "  2. 或使用 ${CYAN}$0 --no-s3${NC} 使用傳統模式"
+    echo -e "${CYAN}下一步：${NC}執行 ${YELLOW}$0 --init${NC} 開始 VPN 設置"
     echo -e ""
     
     return 0
@@ -2177,84 +2168,6 @@ main() {
     fi
 }
 
-# 權限檢查模式
-check_permissions_mode() {
-    show_team_env_header "VPN S3 權限檢查工具"
-    echo -e ""
-    echo -e "${BLUE}此工具將檢查您的 AWS 用戶是否具有 VPN CSR 上傳權限${NC}"
-    echo -e ""
-    
-    # 檢查必要工具
-    check_team_prerequisites
-    
-    # 初始化 AWS 配置
-    init_environment_and_aws
-    
-    # 設置用戶信息
-    setup_user_information
-    
-    # 確保使用正確的存儲桶名稱
-    update_s3_bucket_name
-
-    echo -e "\n${CYAN}========================================${NC}"
-    echo -e "${CYAN}     權限檢查結果     ${NC}"
-    echo -e "${CYAN}========================================${NC}"
-    echo -e ""
-    
-    # 顯示當前 AWS 用戶信息
-    echo -e "${BLUE}當前 AWS 用戶信息：${NC}"
-    local user_arn
-    user_arn=$(aws sts get-caller-identity --query 'Arn' --output text --profile "$SELECTED_AWS_PROFILE" 2>/dev/null || echo "未知")
-    local account_id
-    account_id=$(aws sts get-caller-identity --query 'Account' --output text --profile "$SELECTED_AWS_PROFILE" 2>/dev/null || echo "未知")
-    local user_name
-    user_name=$(aws sts get-caller-identity --query 'UserName' --output text --profile "$SELECTED_AWS_PROFILE" 2>/dev/null || echo "未知")
-    
-    echo -e "  用戶 ARN: ${YELLOW}$user_arn${NC}"
-    echo -e "  帳戶 ID: ${YELLOW}$account_id${NC}"
-    echo -e "  用戶名: ${YELLOW}$user_name${NC}"
-    echo -e "  S3 存儲桶: ${YELLOW}$S3_BUCKET${NC}"
-    echo -e ""
-    
-    # 檢查 S3 存儲桶訪問
-    echo -e "${BLUE}檢查 S3 存儲桶訪問權限...${NC}"
-    if aws s3 ls "s3://$S3_BUCKET" --profile "$SELECTED_AWS_PROFILE" &>/dev/null; then
-        echo -e "${GREEN}✓ 可以訪問 S3 存儲桶${NC}"
-    else
-        echo -e "${RED}✗ 無法訪問 S3 存儲桶${NC}"
-        echo -e "${YELLOW}這可能表示存儲桶不存在或您沒有訪問權限${NC}"
-    fi
-    
-    # 檢查 CSR 上傳權限
-    echo -e "${BLUE}檢查 CSR 上傳權限...${NC}"
-    if check_s3_csr_permissions "$USERNAME"; then
-        echo -e "${GREEN}✓ CSR 上傳權限正常${NC}"
-        echo -e "${GREEN}您可以使用零接觸工作流程${NC}"
-    else
-        echo -e "${RED}✗ CSR 上傳權限不足${NC}"
-        show_permission_help "$USERNAME"
-        return 1
-    fi
-    
-    # 檢查證書下載權限
-    echo -e "${BLUE}檢查證書下載權限...${NC}"
-    local test_cert_key="cert/${USERNAME}.crt"
-    if aws s3api head-object --bucket "$S3_BUCKET" --key "$test_cert_key" --profile "$SELECTED_AWS_PROFILE" &>/dev/null; then
-        echo -e "${GREEN}✓ 證書下載權限正常 (文件已存在)${NC}"
-    else
-        echo -e "${YELLOW}? 證書下載權限測試 (證書文件不存在，這是正常的)${NC}"
-        echo -e "${CYAN}當管理員簽署您的證書後，您將能夠下載它${NC}"
-    fi
-    
-    echo -e "\n${GREEN}========================================${NC}"
-    echo -e "${GREEN}     權限檢查完成     ${NC}"
-    echo -e "${GREEN}========================================${NC}"
-    echo -e ""
-    echo -e "${BLUE}如果所有檢查都通過，您可以：${NC}"
-    echo -e "  1. 執行 ${CYAN}$0 --init${NC} 來初始化 VPN 設定"
-    echo -e "  2. 等待管理員簽署您的證書"
-    echo -e "  3. 執行 ${CYAN}$0 --resume${NC} 來完成設定"
-}
 
 # 顯示權限幫助信息
 show_permission_help() {
