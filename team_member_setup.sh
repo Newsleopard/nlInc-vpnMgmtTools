@@ -1962,9 +1962,34 @@ setup_vpn_client() {
     # 建立個人配置文件
     echo -e "${BLUE}配置 AWS 域名分割 DNS 和進階路由...${NC}"
     
-    # 添加客戶端證書和私鑰到配置
+    # 添加進階配置參數
     {
         echo ""
+        echo "# === 成本優化配置 ==="
+        echo "# 54 分鐘（3240 秒）閒置自動斷線，優化 AWS 計費"
+        echo "inactive 3240"
+        echo ""
+        echo "# === AWS 域名分割 DNS 配置 ==="
+        echo "# 確保 AWS 內部服務域名通過 VPC DNS 解析"
+        echo "dhcp-option DNS-priority 1"
+        echo "dhcp-option DOMAIN internal"
+        echo "dhcp-option DOMAIN $AWS_REGION.compute.internal"
+        echo "dhcp-option DOMAIN ec2.internal"
+        echo "dhcp-option DOMAIN $AWS_REGION.elb.amazonaws.com"
+        echo "dhcp-option DOMAIN $AWS_REGION.rds.amazonaws.com"
+        echo "dhcp-option DOMAIN $AWS_REGION.s3.amazonaws.com"
+        echo "dhcp-option DOMAIN *.amazonaws.com"
+        echo ""
+        echo "# === 路由配置：將 AWS 服務流量導向 VPN ==="
+        echo "# EC2 metadata service"
+        echo "route 169.254.169.254 255.255.255.255"
+        echo "# VPC DNS resolver"
+        echo "route 169.254.169.253 255.255.255.255"
+        echo ""
+    } >> "$vpn_config_file"
+    
+    # 添加客戶端證書和私鑰到配置
+    {
         echo "<cert>"
         cat "$USER_CERT_DIR/${USERNAME}.crt"
         echo "</cert>"

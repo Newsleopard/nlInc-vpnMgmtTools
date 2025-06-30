@@ -199,7 +199,20 @@ aws configure list-profiles
 
 ### Automatic DNS Split Configuration
 
-The `team_member_setup.sh` script automatically configures advanced DNS and routing features in the generated OpenVPN configuration files to ensure seamless access to AWS services through the VPN tunnel.
+The `team_member_setup.sh` script automatically configures advanced DNS, routing, and cost optimization features in the generated OpenVPN configuration files to ensure seamless access to AWS services through the VPN tunnel.
+
+#### Cost Optimization Configuration
+
+**Automatic Idle Timeout (54 minutes):**
+```
+inactive 3240  # 54 minutes in seconds
+```
+
+**Benefits:**
+- **Cost Savings**: Automatically disconnects idle VPN sessions at 54 minutes, perfectly aligned with AWS hourly billing
+- **Mathematical Guarantee**: 54 minutes + 5-minute detection delay = 59 minutes maximum (within first billing hour)
+- **User Experience**: Sufficient time for active work sessions while preventing forgotten connections
+- **AWS Billing Optimization**: Prevents $0.10/hour charges from extending into second billing hour
 
 #### DNS Configuration Features
 

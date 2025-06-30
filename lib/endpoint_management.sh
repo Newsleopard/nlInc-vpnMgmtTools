@@ -437,6 +437,10 @@ generate_admin_config_lib() {
     {
         echo ""
         echo "# AWS 域名分割 DNS 配置"
+        echo "# 成本優化配置"
+        echo "# 54 分鐘（3240 秒）閒置自動斷線，優化 AWS 計費"
+        echo "inactive 3240"
+        echo ""
         echo "# 確保 AWS 內部服務域名通過 VPC DNS 解析"
         echo "dhcp-option DNS-priority 1"
         echo "dhcp-option DOMAIN internal"
@@ -545,6 +549,10 @@ export_team_config_lib() {
     {
         echo ""
         echo "# AWS 域名分割 DNS 配置"
+        echo "# 成本優化配置"
+        echo "# 54 分鐘（3240 秒）閒置自動斷線，優化 AWS 計費"
+        echo "inactive 3240"
+        echo ""
         echo "# 確保 AWS 內部服務域名通過 VPC DNS 解析"
         echo "dhcp-option DNS-priority 1"
         echo "dhcp-option DOMAIN internal"
