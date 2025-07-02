@@ -83,6 +83,7 @@ _create_aws_client_vpn_endpoint_ec() {
             --connection-log-options "$connection_log_options" \
             --description "Client VPN Endpoint - $vpn_name" \
             --tag-specifications ResourceType=client-vpn-endpoint,Tags='[{Key=Name,Value='$vpn_name'},{Key=ManagedBy,Value=nlInc-vpnMgmtTools}]' \
+            --split-tunnel \
             $security_group_param \
             $vpc_param \
             --region "$aws_region" 2>&1)
@@ -94,6 +95,7 @@ _create_aws_client_vpn_endpoint_ec() {
             --connection-log-options "$connection_log_options" \
             --description "Client VPN Endpoint - $vpn_name" \
             --tag-specifications ResourceType=client-vpn-endpoint,Tags='[{Key=Name,Value='$vpn_name'},{Key=ManagedBy,Value=nlInc-vpnMgmtTools}]' \
+            --split-tunnel \
             --region "$aws_region" 2>&1)
     fi
     
