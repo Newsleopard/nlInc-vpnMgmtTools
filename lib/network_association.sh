@@ -210,8 +210,11 @@ _setup_authorization_and_routes_ec() {
     else
         echo -e "${GREEN}✓ 網際網路訪問授權設定成功${NC}" >&2
         log_message_core "網際網路訪問授權設定成功"
-        
-        # 設定網際網路路由（必須有對應的路由才能實際存取）
+    fi
+    
+    # 設定網際網路路由（必須有對應的路由才能實際存取）
+    # FIX: Always attempt to create internet route, regardless of authorization status
+    if [ -n "$subnet_id" ]; then
         echo -e "${CYAN}設定網際網路路由...${NC}" >&2
         local internet_route_output
         internet_route_output=$(aws ec2 create-client-vpn-route \
@@ -231,6 +234,9 @@ _setup_authorization_and_routes_ec() {
             echo -e "${YELLOW}輸出: $internet_route_output${NC}" >&2
             log_message_core "警告: 設定網際網路路由失敗 - 請檢查子網路 Internet Gateway 設定"
         fi
+    else
+        echo -e "${YELLOW}⚠️ 沒有提供子網路 ID，跳過網際網路路由設定${NC}" >&2
+        log_message_core "警告: 沒有提供子網路 ID，跳過網際網路路由設定"
     fi
     
     return 0
@@ -435,5 +441,90 @@ check_authorization_rules() {
     fi
     
     echo "$auth_rules"
+    return 0
+}
+
+# 檢查並驗證網際網路路由
+# 參數: $1 = endpoint_id, $2 = aws_region, $3 = aws_profile (optional)
+check_internet_routes() {
+    local endpoint_id="$1"
+    local aws_region="$2"
+    local aws_profile="$3"
+    
+    if [ -z "$endpoint_id" ] || [ -z "$aws_region" ]; then
+        echo -e "${RED}錯誤: check_internet_routes 缺少必要參數${NC}" >&2
+        return 1
+    fi
+    
+    if ! validate_endpoint_id "$endpoint_id"; then
+        echo -e "${RED}錯誤: 端點 ID 格式無效${NC}" >&2
+        return 1
+    fi
+    
+    echo -e "${BLUE}檢查網際網路路由狀態...${NC}"
+    
+    # 檢查是否有 0.0.0.0/0 路由
+    local internet_routes
+    if [ -n "$aws_profile" ]; then
+        internet_routes=$(aws ec2 describe-client-vpn-routes \
+            --client-vpn-endpoint-id "$endpoint_id" \
+            --region "$aws_region" \
+            --profile "$aws_profile" \
+            --query 'Routes[?DestinationCidr==`0.0.0.0/0`]' \
+            --output table 2>/dev/null)
+    else
+        internet_routes=$(aws ec2 describe-client-vpn-routes \
+            --client-vpn-endpoint-id "$endpoint_id" \
+            --region "$aws_region" \
+            --query 'Routes[?DestinationCidr==`0.0.0.0/0`]' \
+            --output table 2>/dev/null)
+    fi
+    
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}錯誤: 無法檢查網際網路路由${NC}"
+        return 1
+    fi
+    
+    # 檢查是否有網際網路授權規則
+    local internet_auth
+    if [ -n "$aws_profile" ]; then
+        internet_auth=$(aws ec2 describe-client-vpn-authorization-rules \
+            --client-vpn-endpoint-id "$endpoint_id" \
+            --region "$aws_region" \
+            --profile "$aws_profile" \
+            --query 'AuthorizationRules[?DestinationCidr==`0.0.0.0/0`]' \
+            --output table 2>/dev/null)
+    else
+        internet_auth=$(aws ec2 describe-client-vpn-authorization-rules \
+            --client-vpn-endpoint-id "$endpoint_id" \
+            --region "$aws_region" \
+            --query 'AuthorizationRules[?DestinationCidr==`0.0.0.0/0`]' \
+            --output table 2>/dev/null)
+    fi
+    
+    echo -e "\n${CYAN}=== 網際網路路由狀態 ===${NC}"
+    if echo "$internet_routes" | grep -q "0.0.0.0/0"; then
+        echo -e "${GREEN}✓ 網際網路路由已配置${NC}"
+    else
+        echo -e "${RED}✗ 缺少網際網路路由 (0.0.0.0/0)${NC}"
+        echo -e "${YELLOW}建議: 執行以下命令手動添加網際網路路由：${NC}"
+        echo -e "${CYAN}aws ec2 create-client-vpn-route --client-vpn-endpoint-id $endpoint_id --destination-cidr-block 0.0.0.0/0 --target-vpc-subnet-id SUBNET_ID --region $aws_region${NC}"
+    fi
+    
+    echo -e "\n${CYAN}=== 網際網路授權規則狀態 ===${NC}"
+    if echo "$internet_auth" | grep -q "0.0.0.0/0"; then
+        echo -e "${GREEN}✓ 網際網路授權規則已配置${NC}"
+    else
+        echo -e "${RED}✗ 缺少網際網路授權規則 (0.0.0.0/0)${NC}"
+        echo -e "${YELLOW}建議: 執行以下命令手動添加網際網路授權：${NC}"
+        echo -e "${CYAN}aws ec2 authorize-client-vpn-ingress --client-vpn-endpoint-id $endpoint_id --target-network-cidr 0.0.0.0/0 --authorize-all-groups --region $aws_region${NC}"
+    fi
+    
+    echo -e "\n${CYAN}詳細資訊:${NC}"
+    echo -e "${YELLOW}網際網路路由:${NC}"
+    echo "$internet_routes"
+    echo -e "\n${YELLOW}網際網路授權:${NC}"
+    echo "$internet_auth"
+    
     return 0
 }
