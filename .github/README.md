@@ -1,8 +1,7 @@
 # AWS Client VPN Automation
 
 [![MIT License](https://img.shields.io/badge/License-MIT-green.svg)](https://choosealicense.com/licenses/mit/)
-[![GitHub stars](https://img.shields.io/github/stars/newsleopard/aws-client-vpn-automation.svg)](https://github.com/newsleopard/nlInc-vpnMgmtTools/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/newsleopard/aws-client-vpn-automation.svg)](https://github.com/newsleopard/nlInc-vpnMgmtTools/network)
+
 
 > **Reference Implementation** - Production-tested AWS Client VPN automation system with 57% cost reduction
 
