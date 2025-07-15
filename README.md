@@ -13,43 +13,41 @@ At [Newsleopard 電子豹](https://newsleopard.com), we believe in building effi
 
 We're open-sourcing this complete, production-tested solution to help other teams solve similar challenges and demonstrate modern AWS automation patterns.
 
-## 🚀 專為開發者設計的 VPN 解決方案
+### 💡 Developer-Friendly VPN Solution
 
-### 你的小團隊是否遇到這個困境？
+**Is your small team facing these challenges?**
 
-❌ 需要安全存取 AWS 資源（RDS、ElastiCache、Private EKS）  
-❌ 沒有 DevOps 工程師，開發者不熟悉 VPN 設定  
-❌ 商業 VPN 無法存取 AWS 內部資源  
-❌ 手動設定 AWS VPN 太複雜，還容易忘記關閉浪費錢  
+❌ Need secure access to AWS resources (RDS, ElastiCache, Private EKS)  
+❌ No DevOps engineer, developers unfamiliar with VPN setup  
+❌ Commercial VPNs can't access AWS internal resources  
+❌ Manual AWS VPN setup is complex and easy to forget turning off (wasting money)  
 
-### 💡 用開發者熟悉的技術，解決陌生的問題
+**We built a developer-friendly AWS Client VPN automation system using familiar technologies:**
 
-我們打造了一個「開發者友善」的 AWS Client VPN 自動化系統：
+#### ✅ Tech Stack You Already Know
+🔹 **AWS CDK + TypeScript** - No need to learn complex network configurations  
+🔹 **Lambda + API Gateway** - Solve infrastructure problems with serverless  
+🔹 **One-click deployment** - `./scripts/deploy.sh` completes the setup  
+🔹 **Slack integration** - `/vpn open staging` for zero-friction team collaboration  
 
-#### ✅ 技術棧你都熟悉
-🔹 **AWS CDK + TypeScript** - 不需要學習複雜的網路配置  
-🔹 **Lambda + API Gateway** - 用無伺服器解決基礎設施問題  
-🔹 **一鍵部署** - `./scripts/deploy.sh` 就完成設定  
-🔹 **Slack 整合** - `/vpn open staging` 團隊協作零門檻  
+#### 💰 Tailored for Small Teams
+🔹 **Automatic cost optimization** - Auto-shutdown after 54 minutes idle, save $900+ annually  
+🔹 **Zero maintenance burden** - Set up once, use long-term  
+🔹 **Dual environment management** - Complete staging/production isolation  
+🔹 **Comprehensive documentation** - Detailed guides from setup to usage  
 
-#### 💰 為小團隊量身打造
-🔹 **自動成本優化** - 閒置 54 分鐘自動關閉，年省 $900+  
-🔹 **零維護負擔** - 設定一次，長期使用  
-🔹 **雙環境管理** - staging/production 完全隔離  
-🔹 **完整文件** - 從設定到使用的詳細指南  
+#### 🎯 Perfect for These Teams
+👥 3-15 person development teams  
+🏢 No dedicated DevOps/SysAdmin  
+☁️ Need access to AWS internal resources  
+🏠 Remote or hybrid work models  
+💰 Budget-conscious but technically capable  
 
-#### 🎯 完美適合這些團隊
-👥 3-15 人的開發團隊  
-🏢 沒有專職 DevOps/SysAdmin  
-☁️ 需要存取 AWS 內部資源  
-🏠 遠程或混合辦公模式  
-💰 預算有限但技術能力強  
-
-#### 🤔 為什麼不用其他方案？
-- **自建 OpenVPN** ➜ 需要學習 Linux、網路、證書管理
-- **商業 VPN 服務** ➜ 無法存取 AWS 內部資源
-- **手動設定 AWS VPN** ➜ 複雜 + 容易忘記關閉 = 💸
-- **這個解決方案** ➜ 用你現有的技能，解決所有問題 ✅
+#### 🤔 Why Not Use Other Solutions?
+- **Self-hosted OpenVPN** ➜ Requires learning Linux, networking, certificate management
+- **Commercial VPN services** ➜ Cannot access AWS internal resources
+- **Manual AWS VPN setup** ➜ Complex + easy to forget shutdown = 💸
+- **This solution** ➜ Use your existing skills to solve all problems ✅
 
 **Key Innovations:**
 
