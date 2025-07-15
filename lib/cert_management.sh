@@ -139,14 +139,24 @@ generate_server_certificate_lib() {
 
     log_message_core "開始生成伺服器憑證 (lib) - 名稱: $server_name, 目錄: $easyrsa_dir, Config: $env_config_file"
 
-    # 確定VPN域名（根據環境自動選擇）
+    # 確定VPN域名（從環境配置讀取，如果未設置則使用預設值）
     local vpn_domain
-    if [[ "$env_config_file" == *"staging"* ]]; then
-        vpn_domain="vpn.staging.newsleopard.de"
+    
+    # 嘗試從環境配置文件讀取域名
+    local cert_domain=""
+    if [ -f "$env_config_file" ]; then
+        cert_domain=$(grep -E '^CERT_DOMAIN=' "$env_config_file" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+    fi
+    
+    # 如果環境配置中沒有設置域名，則根據環境自動選擇預設值
+    if [ -n "$cert_domain" ]; then
+        vpn_domain="$cert_domain"
+    elif [[ "$env_config_file" == *"staging"* ]]; then
+        vpn_domain="vpn.staging.example.com"
     elif [[ "$env_config_file" == *"production"* ]]; then
-        vpn_domain="vpn.prod.newsleopard.de"
+        vpn_domain="vpn.prod.example.com"
     else
-        vpn_domain="vpn.staging.newsleopard.de"  # 預設為 staging
+        vpn_domain="vpn.staging.example.com"  # 預設為 staging
     fi
     
     echo -e "${BLUE}將為伺服器證書使用域名: $vpn_domain${NC}"
@@ -154,17 +164,37 @@ generate_server_certificate_lib() {
 
     # 創建或更新 vars 文件以設置域名
     echo -e "${BLUE}設置 EasyRSA 變數文件...${NC}"
+    
+    # 從環境配置文件讀取證書信息，如果未設置則使用預設值
+    local cert_country cert_province cert_city cert_org cert_email cert_ou
+    if [ -f "$env_config_file" ]; then
+        cert_country=$(grep -E '^CERT_COUNTRY=' "$env_config_file" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+        cert_province=$(grep -E '^CERT_PROVINCE=' "$env_config_file" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+        cert_city=$(grep -E '^CERT_CITY=' "$env_config_file" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+        cert_org=$(grep -E '^CERT_ORG=' "$env_config_file" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+        cert_email=$(grep -E '^CERT_EMAIL=' "$env_config_file" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+        cert_ou=$(grep -E '^CERT_OU=' "$env_config_file" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+    fi
+    
+    # 使用環境配置值或預設值
+    cert_country="${cert_country:-US}"
+    cert_province="${cert_province:-State}"
+    cert_city="${cert_city:-City}"
+    cert_org="${cert_org:-Your Organization}"
+    cert_email="${cert_email:-admin@example.com}"
+    cert_ou="${cert_ou:-IT Department}"
+    
     cat > "$easyrsa_dir/pki/vars" << EOF
 # Easy-RSA 3.x vars file for Client VPN
 # 自動生成於 $(date)
 
 # 設置證書信息
-set_var EASYRSA_REQ_COUNTRY     "TW"
-set_var EASYRSA_REQ_PROVINCE    "Taiwan"
-set_var EASYRSA_REQ_CITY        "Taipei"
-set_var EASYRSA_REQ_ORG         "NewsLeopard"
-set_var EASYRSA_REQ_EMAIL       "admin@newsleopard.de"
-set_var EASYRSA_REQ_OU          "IT Department"
+set_var EASYRSA_REQ_COUNTRY     "$cert_country"
+set_var EASYRSA_REQ_PROVINCE    "$cert_province"
+set_var EASYRSA_REQ_CITY        "$cert_city"
+set_var EASYRSA_REQ_ORG         "$cert_org"
+set_var EASYRSA_REQ_EMAIL       "$cert_email"
+set_var EASYRSA_REQ_OU          "$cert_ou"
 
 # 關鍵設置：為伺服器證書指定域名
 set_var EASYRSA_REQ_CN          "$vpn_domain"

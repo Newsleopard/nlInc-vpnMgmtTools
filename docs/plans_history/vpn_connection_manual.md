@@ -1,5 +1,4 @@
 <!-- markdownlint-disable MD051 -->
-<!-- filepath: /Users/ctyeh/Documents/NewsLeopard/nlm-codes/nlInc-vpnMgmtTools/vpn_connection_manual.md -->
 # 📖 AWS Client VPN 雙環境管理工具套件完整使用手冊
 
 **版本：** 2.1

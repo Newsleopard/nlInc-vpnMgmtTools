@@ -8,7 +8,7 @@
                 "s3:PutObject",
                 "s3:PutObjectAcl"
             ],
-            "Resource": "arn:aws:s3:::vpn-csr-exchange-staging-677089019267/csr/${aws:username}.csr",
+            "Resource": "arn:aws:s3:::vpn-csr-exchange-staging-YOUR_ACCOUNT_ID/csr/${aws:username}.csr",
             "Condition": {
                 "StringEquals": {
                     "s3:x-amz-server-side-encryption": "AES256"
@@ -21,7 +21,7 @@
             "Action": [
                 "s3:GetObject"
             ],
-            "Resource": "arn:aws:s3:::vpn-csr-exchange-staging-677089019267/cert/${aws:username}.crt"
+            "Resource": "arn:aws:s3:::vpn-csr-exchange-staging-YOUR_ACCOUNT_ID/cert/${aws:username}.crt"
         }
     ]
 }

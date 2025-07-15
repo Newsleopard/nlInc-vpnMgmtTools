@@ -9,9 +9,19 @@
 *.crt
 *.pem
 
-# 配置文件 - 包含敏感信息
+# 配置文件 - 包含敏感信息 (AWS account IDs, VPC IDs, etc.)
 configs/**/*.env
 configs/**/*.conf
+*.env
+
+# IAM policies with hardcoded account IDs
+iam-policies/*.json
+
+# Certificate files and VPN configurations
+certs/**/*.key
+certs/**/*.crt  
+certs/**/*.pem
+certs/**/*.ovpn
 
 # 日誌文件
 *.log

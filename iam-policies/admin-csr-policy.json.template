@@ -8,8 +8,8 @@
                 "s3:*"
             ],
             "Resource": [
-                "arn:aws:s3:::vpn-csr-exchange-staging-677089019267",
-                "arn:aws:s3:::vpn-csr-exchange-staging-677089019267/*"
+                "arn:aws:s3:::vpn-csr-exchange-staging-YOUR_ACCOUNT_ID",
+                "arn:aws:s3:::vpn-csr-exchange-staging-YOUR_ACCOUNT_ID/*"
             ]
         }
     ]
