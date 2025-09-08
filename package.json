@@ -43,7 +43,7 @@
   },
   "homepage": "https://github.com/ctyeh/aws-client-vpn-automation#readme",
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   },
   "os": [
     "darwin"

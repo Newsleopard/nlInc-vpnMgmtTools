@@ -24,9 +24,9 @@
     "vpn-monitor"
   ],
   "devDependencies": {
-    "typescript": "~4.9.5",
+    "typescript": "~5.0.4",
     "@types/jest": "^29.4.0",
-    "@types/node": "^18.14.6",
+    "@types/node": "^20.10.0",
     "jest": "^29.5.0",
     "ts-jest": "^29.0.5",
     "eslint": "^8.36.0",

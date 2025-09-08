@@ -31,7 +31,7 @@ export class VpnAutomationStack extends cdk.Stack {
     // Create shared Lambda layer (v2.1 - fixed VPN Monitor logic)
     const sharedLayer = new lambda.LayerVersion(this, 'VpnSharedLayer', {
       code: lambda.Code.fromAsset(path.resolve(__dirname, '../../lambda/shared/layer-package')),
-      compatibleRuntimes: [lambda.Runtime.NODEJS_18_X],
+      compatibleRuntimes: [lambda.Runtime.NODEJS_20_X],
       description: 'Shared utilities for VPN Cost Automation',
       layerVersionName: `vpn-shared-layer-${environment}`
     });
@@ -208,7 +208,7 @@ export class VpnAutomationStack extends cdk.Stack {
 
     // vpn-control Lambda function (define first so we can reference its name)
     const vpnControl = new lambda.Function(this, 'VpnControl', {
-      runtime: lambda.Runtime.NODEJS_18_X,
+      runtime: lambda.Runtime.NODEJS_20_X,
       handler: 'index.handler',
       code: lambda.Code.fromAsset(path.resolve(__dirname, '../../lambda/vpn-control/dist')),
       layers: [sharedLayer],
@@ -221,7 +221,7 @@ export class VpnAutomationStack extends cdk.Stack {
 
     // slack-handler Lambda function
     const slackHandler = new lambda.Function(this, 'SlackHandler', {
-      runtime: lambda.Runtime.NODEJS_18_X,
+      runtime: lambda.Runtime.NODEJS_20_X,
       handler: 'index.handler',
       code: lambda.Code.fromAsset(path.resolve(__dirname, '../../lambda/slack-handler/dist')),
       layers: [sharedLayer],
@@ -245,7 +245,7 @@ export class VpnAutomationStack extends cdk.Stack {
     const vpnMonitorRole = secureParameterStack?.vpnParameterWriteRole || vpnControlRole;
     
     const vpnMonitor = new lambda.Function(this, 'VpnMonitor', {
-      runtime: lambda.Runtime.NODEJS_18_X,
+      runtime: lambda.Runtime.NODEJS_20_X,
       handler: 'index.handler',
       code: lambda.Code.fromAsset(path.resolve(__dirname, '../../lambda/vpn-monitor/dist')),
       layers: [sharedLayer],

@@ -104,7 +104,7 @@ graph TB
 **AWS 需求:**
 - 兩個 AWS 帳戶（建議）或一個帳戶的分離環境
 - AWS CLI v2 已安裝並配置
-- Node.js 18+ 已安裝
+- Node.js 20+ 已安裝
 - macOS 10.15+（系統專為 macOS 設計）
 
 **必要的 AWS 權限:**

@@ -5,7 +5,7 @@ Description: SAM template for local VPN Cost Automation testing
 Globals:
   Function:
     Timeout: 30
-    Runtime: nodejs18.x
+    Runtime: nodejs20.x
     Environment:
       Variables:
         ENVIRONMENT: test
@@ -23,7 +23,7 @@ Resources:
       Description: Shared utilities for VPN Cost Automation (local testing)
       ContentUri: shared/
       CompatibleRuntimes:
-        - nodejs18.x
+        - nodejs20.x
 
   # Slack Handler Lambda
   SlackHandlerFunction:

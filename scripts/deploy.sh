@@ -6,7 +6,7 @@
 set -e
 
 # Configuration constants
-readonly MIN_NODE_VERSION=18
+readonly MIN_NODE_VERSION=20
 readonly STACK_NAME_PREFIX="VpnAutomation"
 readonly SECURE_STACK_PREFIX="VpnSecureParameters"
 readonly DEFAULT_REGION="us-east-1"
@@ -293,14 +293,14 @@ check_prerequisites() {
     
     # Check if Node.js is installed
     if ! command -v node &> /dev/null; then
-        print_error "Node.js is not installed. Please install Node.js 18+ first."
+        print_error "Node.js is not installed. Please install Node.js 20+ first."
         exit 1
     fi
     
     # Check Node.js version
     NODE_VERSION=$(node --version | cut -d'v' -f2 | cut -d'.' -f1)
-    if [ "$NODE_VERSION" -lt 18 ]; then
-        print_error "Node.js version 18+ is required. Current version: $(node --version)"
+    if [ "$NODE_VERSION" -lt 20 ]; then
+        print_error "Node.js version 20+ is required. Current version: $(node --version)"
         exit 1
     fi
     

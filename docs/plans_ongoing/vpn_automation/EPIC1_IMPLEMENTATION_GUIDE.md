@@ -100,7 +100,7 @@ Epic 1 has been successfully implemented, providing the foundational serverless 
 ### Prerequisites
 1. **AWS CLI** configured with staging and production profiles
 2. **AWS CDK CLI** installed globally (`npm install -g aws-cdk`)
-3. **Node.js 18+** for TypeScript compilation
+3. **Node.js 20+** for TypeScript compilation
 4. **Slack App** configured with webhook and signing secret
 
 ### Step 1: Configure Parameters
@@ -190,7 +190,7 @@ Each Lambda function includes package.json with testing dependencies:
 {
   "devDependencies": {
     "@types/aws-lambda": "^8.10.109",
-    "@types/node": "^18.14.6", 
+    "@types/node": "^20.10.0", 
     "typescript": "~4.9.5"
   }
 }

@@ -25,10 +25,13 @@
     "resolveJsonModule": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    "types": ["node"]
   },
   "exclude": [
     "node_modules",
-    "cdk.out"
+    "cdk.out",
+    "**/*.test.ts",
+    "**/__tests__/**/*"
   ]
 }

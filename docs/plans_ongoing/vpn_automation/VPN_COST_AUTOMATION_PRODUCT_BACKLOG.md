@@ -629,7 +629,7 @@ Each epic, user story, and task includes specific documentation references marke
 
 ### Technology Stack
 - **Infrastructure**: AWS CDK (TypeScript)
-- **Runtime**: Node.js 18.x Lambda functions
+- **Runtime**: Node.js 20.x Lambda functions
 - **Languages**: TypeScript for all Lambda code
 - **Storage**: AWS Systems Manager Parameter Store
 - **Monitoring**: CloudWatch Logs, Metrics, and Alarms
@@ -653,7 +653,7 @@ Each epic, user story, and task includes specific documentation references marke
 - [ ] AWS CLI configured with staging and production profiles
 - [ ] CDK CLI installed and configured
 - [ ] Slack workspace with admin permissions
-- [ ] Node.js 18+ and npm/yarn installed
+- [ ] Node.js 20+ and npm/yarn installed
 
 ### Initial Setup
 - [ ] Clone repository and review existing architecture
