@@ -1,87 +1,87 @@
-# AWS Client VPN Management Toolkit
+# AWS Client VPN 管理工具套件
 
-A comprehensive dual-environment VPN management system combining infrastructure-as-code, serverless architecture, and intelligent cost optimization for enterprise AWS environments.
+一套結合基礎架構即程式碼、無伺服器架構和智慧成本優化的企業級 AWS 雙環境 VPN 管理系統。
 
-## 🎯 What This Does
+## 🎯 功能介紹
 
-Automates AWS Client VPN management across staging and production environments with:
+跨 staging 和 production 環境自動化 AWS Client VPN 管理，具備以下功能：
 
-- **Slack-controlled VPN operations** - Open/close VPN with simple commands
-- **Intelligent cost optimization** - Automatically closes idle VPNs (54-minute threshold)
-- **Zero-touch certificate workflow** - Automated CSR/certificate exchange via S3
-- **Dual-environment isolation** - Complete separation between staging and production
+- **Slack 控制 VPN 操作** - 透過簡單指令開啟/關閉 VPN
+- **智慧成本優化** - 自動關閉閒置 VPN（54分鐘閾值）
+- **零接觸憑證工作流程** - 透過 S3 自動化 CSR/憑證交換
+- **雙環境隔離** - staging 和 production 完全分離
 
-## 💰 Cost Savings
+## 💰 成本節省
 
-**Compared to 24/7 VPN operation:**
+**相較於 24/7 VPN 運作：**
 
-- Annual savings: **$900-1,200** (57-74% reduction)
-- Monthly cost: **$35-57** vs traditional **$132**
-- Auto-shutdown prevents forgotten connections from incurring charges
+- 年度節省：**$900-1,200**（減少 57-74%）
+- 月度成本：**$35-57** vs 傳統 **$132**
+- 自動關閉防止忘記斷線而產生費用
 
-## 🚀 Quick Start
+## 🚀 快速開始
 
-### For Team Members
+### 團隊成員
 
-Need VPN access? See [**User Guide**](docs/user-guide.md)
+需要 VPN 存取權限？請參考 [**使用者指南**](docs/user-guide.md)
 
 ```bash
 ./team_member_setup.sh --init --profile staging
 ```
 
-### For Administrators
+### 系統管理員
 
-Managing VPN and users? See [**Admin Guide**](docs/admin-guide.md)
+管理 VPN 和使用者？請參考 [**管理員指南**](docs/admin-guide.md)
 
 ```bash
 ./admin-tools/aws_vpn_admin.sh --profile staging
 ```
 
-### For DevOps
+### DevOps 工程師
 
-Deploying the system? See [**Deployment Guide**](docs/deployment-guide.md)
+部署系統？請參考 [**部署指南**](docs/deployment-guide.md)
 
 ```bash
 ./scripts/deploy.sh both --secure-parameters
 ```
 
-## 📚 Documentation Hub
+## 📚 文件導覽中心
 
-Choose the guide that matches your role:
+選擇符合您角色的指南：
 
-| Guide | Audience | Purpose |
+| 指南 | 對象 | 用途 |
 |-------|----------|---------|
-| [**User Guide**](docs/user-guide.md) | Engineering Team Members | VPN setup, daily usage, troubleshooting |
-| [**Admin Guide**](docs/admin-guide.md) | VPN Administrators | User management, certificates, monitoring |
-| [**Deployment Guide**](docs/deployment-guide.md) | DevOps Developers | System deployment, maintenance, recovery |
-| [**Architecture**](docs/architecture.md) | Technical Deep Dive | System design, security, algorithms |
+| [**使用者指南**](docs/user-guide.md) | 工程團隊成員 | VPN 設定、日常使用、疑難排解 |
+| [**管理員指南**](docs/admin-guide.md) | VPN 系統管理員 | 使用者管理、憑證管理、監控 |
+| [**部署指南**](docs/deployment-guide.md) | DevOps 開發者 | 系統部署、維護、復原 |
+| [**架構文件**](docs/architecture.md) | 技術深度解析 | 系統設計、安全性、演算法 |
 
-## 🛠️ Key Features
+## 🛠️ 主要功能
 
-### Slack Integration
+### Slack 整合
 
 ```text
-/vpn open staging      # Start VPN
-/vpn close production  # Stop VPN
-/vpn check staging     # Check status
-/vpn savings staging   # View cost savings
+/vpn open staging      # 啟動 VPN
+/vpn close production  # 關閉 VPN
+/vpn check staging     # 檢查狀態
+/vpn savings staging   # 檢視成本節省
 ```
 
-### Security Features
+### 安全功能
 
-- 🔐 Certificate-based authentication
-- 🛡️ Dedicated security groups per environment
-- 🔑 KMS-encrypted secrets in SSM
-- 📝 Complete audit trails via CloudTrail
+- 🔐 憑證式身份驗證
+- 🛡️ 每個環境專用安全群組
+- 🔑 SSM 中的 KMS 加密機密
+- 📝 透過 CloudTrail 完整稽核追蹤
 
-### Automation
+### 自動化
 
-- ⚡ Lambda-powered serverless architecture
-- 🔄 Auto-close after 54 minutes idle
-- 📊 Real-time cost tracking
-- 🚀 < 1 second Slack response time
+- ⚡ Lambda 驅動的無伺服器架構
+- 🔄 閒置 54 分鐘後自動關閉
+- 📊 即時成本追蹤
+- 🚀 < 1 秒 Slack 回應時間
 
-## 🏗️ System Architecture
+## 🏗️ 系統架構
 
 ```text
 Slack → API Gateway → Lambda Functions → AWS Client VPN
@@ -89,34 +89,34 @@ Slack → API Gateway → Lambda Functions → AWS Client VPN
                     SSM Parameter Store
 ```
 
-**Components:**
+**組件：**
 
-- **Dual AWS Environments**: Staging + Production isolation
-- **Serverless Backend**: Lambda + API Gateway + EventBridge
-- **Smart Monitoring**: Auto-shutdown with cost optimization
-- **Secure Storage**: S3 for certificates, SSM for configuration
+- **雙 AWS 環境**：Staging + Production 隔離
+- **無伺服器後端**：Lambda + API Gateway + EventBridge
+- **智慧監控**：具成本優化的自動關閉
+- **安全儲存**：憑證使用 S3，設定使用 SSM
 
-## 📋 Prerequisites
+## 📋 系統需求
 
-- macOS 10.15+ (Catalina or newer)
-- AWS CLI v2 configured with dual profiles
-- Node.js 20+ and npm
-- Slack workspace admin access
+- macOS 10.15+ (Catalina 或更新版本)
+- 已設定雙設定檔的 AWS CLI v2
+- Node.js 20+ 和 npm
+- Slack 工作區管理員權限
 
-## ⚡ Installation
+## ⚡ 安裝
 
-### 1. Clone and Configure
+### 1. 複製與設定
 
 ```bash
 git clone https://github.com/your-org/aws-client-vpn-toolkit.git
 cd aws-client-vpn-toolkit
 
-# Configure AWS profiles
+# 設定 AWS 設定檔
 aws configure --profile staging
 aws configure --profile production
 ```
 
-### 2. Deploy Infrastructure
+### 2. 部署基礎架構
 
 ```bash
 ./scripts/deploy.sh both --secure-parameters \
@@ -124,57 +124,57 @@ aws configure --profile production
   --production-profile production
 ```
 
-### 3. Configure Slack
+### 3. 設定 Slack
 
-Get the API Gateway URL from deployment output and configure in Slack App settings.
+從部署輸出取得 API Gateway URL 並在 Slack App 設定中配置。
 
-## 🔧 Common Operations
+## 🔧 常見操作
 
-### Team Member Onboarding
+### 團隊成員上線
 
 ```bash
-# Admin: Add user permissions
+# 管理員：新增使用者權限
 ./admin-tools/manage_vpn_users.sh add username --profile staging
 
-# User: Setup VPN access
+# 使用者：設定 VPN 存取
 ./team_member_setup.sh --init --profile staging
 ```
 
-### Daily VPN Usage
+### 日常 VPN 使用
 
 ```bash
-# Via Slack (recommended)
+# 透過 Slack（推薦）
 /vpn open staging
 /vpn close staging
 
-# Check status
+# 檢查狀態
 /vpn check staging
 ```
 
-### Cost Monitoring
+### 成本監控
 
 ```bash
-# View savings report
+# 檢視節省報告
 /vpn savings staging
 
-# Detailed analysis
+# 詳細分析
 ./admin-tools/run-vpn-analysis.sh --profile staging
 ```
 
-## 🆘 Support
+## 🆘 支援
 
-- **Documentation**: See guides above for your role
-- **Issues**: [GitHub Issues](https://github.com/your-org/aws-client-vpn-toolkit/issues)
-- **Slack Support**: #vpn-support channel
+- **文件**：請參考上方符合您角色的指南
+- **問題回報**：[GitHub Issues](https://github.com/your-org/aws-client-vpn-toolkit/issues)
+- **Slack 支援**：#vpn-support 頻道
 
-## 📄 License
+## 📄 授權
 
-MIT License - See [LICENSE](LICENSE) file
+MIT License - 請參閱 [LICENSE](LICENSE) 檔案
 
-## 🏢 About
+## 🏢 關於
 
-Built by [Newsleopard 電子豹](https://newsleopard.com) - Enterprise AWS solutions
+由 [Newsleopard 電子豹](https://newsleopard.com) 建置 - 企業級 AWS 解決方案
 
 ---
 
-**Version**: 3.0 | **Status**: Production Ready | **Last Updated**: 2025-01-14
+**版本**：3.0 | **狀態**：已可用於正式環境 | **最後更新**：2025-01-14

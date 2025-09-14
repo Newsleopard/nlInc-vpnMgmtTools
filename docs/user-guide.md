@@ -1,13 +1,13 @@
-# VPN User Guide for Engineering Teams
+# VPN 使用者指南 - 工程團隊適用
 
-This guide helps engineering team members set up and use the AWS Client VPN system for secure access to company resources.
+本指南協助工程團隊成員設定並使用 AWS Client VPN 系統來安全存取公司資源。
 
-## 🎯 Who This Guide Is For
+## 🎯 本指南適用對象
 
-- Software Engineers
-- QA Engineers
-- DevOps Team Members
-- Anyone needing VPN access to AWS resources
+- 軟體工程師
+- QA 工程師
+- DevOps 團隊成員
+- 任何需要 VPN 存取 AWS 資源的人員
 
 ## 📊 VPN Setup Workflow
 
@@ -40,132 +40,150 @@ Permissions}
     style AdminSign fill:#ffccbc
 ```
 
-## 📋 Prerequisites
+## 📋 系統需求
 
-Before starting, ensure you have:
+開始之前，請確認您具備：
 
-- macOS 10.15+ (Catalina or newer)
-- AWS IAM user account with VPN permissions
-- Slack workspace access
-- OpenVPN client or AWS VPN Client installed
+- macOS 10.15+ (Catalina 或更新版本)
+- 具有 VPN 權限的 AWS IAM 使用者帳戶
+- Slack 工作區存取權限
+- 已安裝 OpenVPN client 或 AWS VPN Client
 
-## 🚀 Initial Setup (One-Time)
+## 🚀 初始設定（一次性）
 
-### Step 1: Check Your Permissions
+### 步驟 1：檢查您的權限
 
 ```bash
 ./team_member_setup.sh --check-permissions
 ```
 
-If you see permission errors, contact your VPN administrator.
+如果出現權限錯誤，請聯繫您的 VPN 管理員。
 
-### Step 2: Generate VPN Certificate
+### 步驟 2：產生 VPN 憑證
 
 ```bash
-# For staging environment
-./team_member_setup.sh --init --profile staging
+# 自動偵測並選擇 AWS profile（推薦）
+./team_member_setup.sh --init
 
-# For production environment
+# 或指定特定 profile（可選）
+./team_member_setup.sh --init --profile staging
 ./team_member_setup.sh --init --profile production
 ```
 
-The script will:
+腳本會：
+1. **自動偵測**您系統中所有可用的 AWS profiles
+2. **顯示互動式選單**讓您選擇要使用的 profile
+3. **自動判斷環境**（staging 或 production）基於 profile 名稱
 
-1. Download CA certificate from S3
-2. Generate your private key (kept locally)
-3. Create certificate signing request (CSR)
-4. Upload CSR for admin approval
+腳本將會：
 
-### Step 3: Wait for Admin Approval
+1. 從 S3 下載 CA 憑證
+2. 產生您的私鑰（留在本地）
+3. 建立憑證簽署要求 (CSR)
+4. 上傳 CSR 等待管理員批准
 
-You'll see a message like:
+### 步驟 3：等待管理員批准
+
+您將看到類似訊息：
 
 ```text
-⏸️  Setup paused, waiting for admin to sign your certificate...
-Username: john.doe
-CSR Location: s3://vpn-csr-exchange/csr/john.doe.csr
+⏸️  設定暫停，等待管理員簽署您的憑證...
+使用者名稱： john.doe
+CSR 位置： s3://vpn-csr-exchange/csr/john.doe.csr
 ```
 
-Notify your VPN administrator that your CSR is ready.
+通知您的 VPN 管理員 CSR 已就緒並告之 CSR 檔案名稱。
 
-### Step 4: Complete Setup
+### 步驟 4：完成設定
 
-Once approved (admin will notify you):
+一旦獲得批准（管理員將通知您）：
 
 ```bash
+# 自動使用之前選擇的 profile（推薦）
+./team_member_setup.sh --resume
+
+# 或指定特定 profile（可選）
 ./team_member_setup.sh --resume --profile staging
 ```
 
-This downloads your signed certificate and generates VPN configuration files.
+這將下載您的已簽署憑證並產生 VPN 配置檔案(`.ovpn`)。
 
-## 💻 Daily VPN Usage
+### 使用 VPN 客戶端連接
 
-### Using Slack Commands (Recommended)
+1. **下載 VPN 客戶端**：
+   - **AWS VPN Client** (推薦)：
+     - 下載：[AWS VPN Client](https://aws.amazon.com/vpn/client-vpn-download/)
+     - 支援 macOS、Windows、Linux
+   - **OpenVPN Connect**：
+     - macOS：從 App Store 或 [OpenVPN 官網](https://openvpn.net/client-connect-vpn-for-mac-os/)
+     - 其他平台：[OpenVPN 下載頁面](https://openvpn.net/vpn-client/)
 
-#### Start VPN
+2. **匯入配置**：
+   - 在 `downloads/` 資料夾中找到 `.ovpn` 檔案
+   - 匯入到您的 VPN 客戶端
+
+3. **連接**：
+   - 在 VPN 客戶端中選擇配置檔
+   - 點擊連接
+
+4. **自動斷線**：VPN 在靜置 54 分鐘後會自動斷線以節省成本
+
+## 💻 日常 VPN 使用
+
+### 使用 Slack 命令（推薦）
+
+#### 啟動 VPN
 
 ```text
-/vpn open staging     # Connect to staging environment
-/vpn open production  # Connect to production environment
+/vpn open staging     # 連接到 staging 環境
+/vpn open production  # 連接到 production 環境
 ```
 
-⏱️ **Wait Time**: The `/vpn open` command may take up to **10 minutes** to complete as AWS provisions the VPN endpoint connections. You'll see status updates in Slack during this process.
+⏱️ **等待時間**：`/vpn open` 命令可能需要長達 **10 分鐘**才能完成，因為 AWS 需要配置 VPN 端點連接。您將在此過程中在 Slack 中看到狀態更新。
 
-#### Stop VPN
+#### 停止 VPN
 
 ```text
 /vpn close staging
 /vpn close production
 ```
 
-#### Check Status
+#### 檢查狀態
 
 ```text
 /vpn check staging
 /vpn check production
 ```
 
-#### View Cost Savings
+#### 檢視成本節省
 
 ```text
 /vpn savings staging
 ```
 
-### Connecting with VPN Client
+## 🔧 疑難排解
 
-1. **Import Configuration**:
-   - Find `.ovpn` file in `downloads/` folder
-   - Import into your VPN client
+### 常見問題與解決方案
 
-2. **Connect**:
-   - Select the profile in your VPN client
-   - Click Connect
+#### “VPN endpoint is closed”
 
-3. **Auto-Disconnect**: VPN automatically disconnects after 54 minutes of inactivity to save costs
-
-## 🔧 Troubleshooting
-
-### Common Issues and Solutions
-
-#### "VPN endpoint is closed"
-
-First open the VPN endpoint via Slack:
+首先透過 Slack 開啟 VPN 端點：
 
 ```text
 /vpn open staging
 ```
 
-⏱️ **Wait for "🟢 Open" status** (up to 10 minutes), then connect your VPN client. AWS needs time to associate subnets and configure the endpoint.
+⏱️ **等待“🟢 Open”狀態**（最長 10 分鐘），然後連接您的 VPN 客戶端。AWS 需要時間來關聯子網路並配置端點。
 
 #### "Connection timed out"
 
-1. Check VPN endpoint status: `/vpn check staging`
-2. Ensure you're on stable internet
-3. Try disconnecting and reconnecting
+1. 檢查 VPN 端點狀態：`/vpn check staging`
+2. 確保您的網路連線穩定
+3. 嘗試斷線重連
 
 #### "Certificate expired"
 
-Renew your certificate:
+更新您的憑證：
 
 ```bash
 ./team_member_setup.sh --renew --profile staging
@@ -173,99 +191,99 @@ Renew your certificate:
 
 #### "Access denied to specific service"
 
-Contact admin to verify your security group permissions.
+聯絡管理員驗證您的安全群組權限。
 
-### Getting Help
+### 取得協助
 
-1. **Slack Support**: Post in #vpn-support channel
-2. **Check Status**: `/vpn check [environment]`
-3. **Admin Contact**: Reach out to VPN administrators
+1. **Slack 支援**：在 #vpn-support 頻道發文
+2. **檢查狀態**：`/vpn check [environment]`
+3. **聯絡管理員**：聯繫 VPN 管理員
 
-## ⚡ Quick Reference
+## ⚡ 快速參考
 
-### Essential Slack Commands
+### 基本 Slack 命令
 
-| Command | Purpose | Example |
+| 命令 | 用途 | 範例 |
 |---------|---------|---------|
-| `/vpn open [env]` | Start VPN | `/vpn open staging` |
-| `/vpn close [env]` | Stop VPN | `/vpn close staging` |
-| `/vpn check [env]` | Check status | `/vpn check production` |
-| `/vpn help` | Show all commands | `/vpn help` |
+| `/vpn open [env]` | 啟動 VPN | `/vpn open staging` |
+| `/vpn close [env]` | 停止 VPN | `/vpn close staging` |
+| `/vpn check [env]` | 檢查狀態 | `/vpn check production` |
+| `/vpn help` | 顯示所有命令 | `/vpn help` |
 
-### Environment Names
+### 環境名稱
 
-- `staging` (aliases: `stage`, `dev`)
-- `production` (aliases: `prod`)
+- `staging` (別名：`stage`, `dev`)
+- `production` (別名：`prod`)
 
-### File Locations
+### 檔案位置
 
 ```text
 certs/
-├── staging/          # Staging certificates
-│   ├── ca.crt       # CA certificate
-│   ├── user.crt     # Your certificate
-│   └── user.key     # Your private key (keep safe!)
-└── production/      # Production certificates
+├── staging/          # Staging 憑證
+│   ├── ca.crt       # CA 憑證
+│   ├── user.crt     # 您的憑證
+│   └── user.key     # 您的私鑰 (請妥善保管！)
+└── production/      # Production 憑證
 
 downloads/
-├── staging-vpn-config.ovpn    # Staging VPN config
-└── production-vpn-config.ovpn  # Production VPN config
+├── staging-vpn-config.ovpn    # Staging VPN 配置
+└── production-vpn-config.ovpn  # Production VPN 配置
 ```
 
-## 🔒 Security Best Practices
+## 🔒 安全最佳實務
 
-1. **Protect Your Private Key**
-   - Never share `.key` files
-   - Keep local backups in secure location
-   - Report immediately if compromised
+1. **保護您的私鑰**
+   - 絕不分享 `.key` 檔案
+   - 在安全位置保留本地備份
+   - 如有洩露立即回報
 
-2. **VPN Usage**
-   - Only connect when needed
-   - Disconnect when finished
-   - Don't share VPN access
+2. **VPN 使用**
+   - 僅在需要時連接
+   - 完成後斷線
+   - 不要分享 VPN 存取權限
 
-3. **Environment Separation**
-   - Use staging for development/testing
-   - Only use production when necessary
-   - Follow change management procedures
+3. **環境分離**
+   - 使用 staging 進行開發/測試
+   - 僅在必要時使用 production
+   - 遵循變更管理程序
 
-## 📊 Cost Optimization
+## 📊 成本優化
 
-The system automatically manages costs by:
+系統自動管理成本：
 
-- Closing idle VPNs after 54 minutes
-- Tracking usage and savings
-- Preventing 24/7 VPN charges
+- 在靜置 54 分鐘後關閉空閒 VPN
+- 追蹤使用情況和節省
+- 防止 24/7 VPN 費用
 
-View your team's savings:
+檢視您團隊的節省：
 
 ```text
 /vpn savings staging
 /vpn costs daily
 ```
 
-## 🆘 Emergency Procedures
+## 🆘 緊急程序
 
-### Lost Private Key
+### 遺失私鑰
 
-1. Notify administrator immediately
-2. Request certificate revocation
-3. Generate new certificate
+1. 立即通知管理員
+2. 要求撤銷憑證
+3. 產生新憑證
 
-### Can't Access Critical Service
+### 無法存取關鍵服務
 
-1. Check VPN connection status
-2. Verify you're in correct environment
-3. Contact admin for urgent access
+1. 檢查 VPN 連線狀態
+2. 驗證您在正確的環境中
+3. 聯絡管理員獲得緊急存取
 
-### Suspected Security Breach
+### 懷疑安全侵害
 
-1. Disconnect VPN immediately
-2. Notify security team
-3. Change AWS credentials
-4. Request new certificates
+1. 立即斷開 VPN
+2. 通知安全團隊
+3. 更改 AWS 憑據
+4. 要求新憑證
 
 ---
 
-**Need Admin Help?** Contact your VPN administrator or post in #vpn-support
-**Need Technical Details?** See [Architecture Documentation](architecture.md)
+**需要管理員協助？** 聯絡您的 VPN 管理員或在 #vpn-support 發文
+**需要技術細節？** 請參考 [架構文件](architecture.md)

@@ -1,17 +1,17 @@
-# System Architecture Documentation
+# 系統架構文件
 
-This document provides technical details about the AWS Client VPN management system architecture, design decisions, and implementation details.
+本文件提供 AWS Client VPN 管理系統架構、設計決策和實作細節的技術詳情。
 
-## 🎯 Target Audience
+## 🎯 目標讀者
 
-- Software Architects
-- Senior Engineers
-- Security Engineers
-- Anyone needing deep technical understanding
+- 軟體架構師
+- 資深工程師
+- 資安工程師
+- 需要深入技術理解的任何人
 
-## 🏗️ High-Level Architecture
+## 🏗️ 高階架構
 
-### System Overview
+### 系統概覽
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -34,20 +34,20 @@ This document provides technical details about the AWS Client VPN management sys
 └─────────────────────────────────────────────────────────┘
 ```
 
-### Technology Stack
+### 技術堆疊
 
-- **Infrastructure**: AWS CDK v2 (TypeScript)
-- **Runtime**: Node.js 20.x
-- **API**: REST API via API Gateway
-- **Functions**: AWS Lambda (Serverless)
-- **Scheduling**: EventBridge (CloudWatch Events)
-- **State**: SSM Parameter Store
-- **Security**: KMS, IAM, Security Groups
-- **Monitoring**: CloudWatch Logs/Metrics
+- **基礎設施**: AWS CDK v2 (TypeScript)
+- **執行環境**: Node.js 20.x
+- **API**: 透過 API Gateway 的 REST API
+- **函數**: AWS Lambda (無伺服器)
+- **排程**: EventBridge (CloudWatch Events)
+- **狀態**: SSM Parameter Store
+- **安全**: KMS、IAM、安全群組
+- **監控**: CloudWatch Logs/Metrics
 
-## 🌐 Network Architecture
+## 🌐 網路架構
 
-### VPC Integration
+### VPC 整合
 
 ```
 Internet Gateway
@@ -68,23 +68,23 @@ Internet Gateway
 └─────────────────────────────────┘
 ```
 
-### Client VPN Configuration
+### Client VPN 設定
 
-#### Connection Flow
-1. Client → VPN Endpoint (TLS 1.2+)
-2. Certificate validation
-3. IP assignment from VPN CIDR (172.16.0.0/22)
-4. Route establishment to VPC
-5. Traffic flow through security groups
+#### 連線流程
+1. 客戶端 → VPN 端點 (TLS 1.2+)
+2. 憑證驗證
+3. 從 VPN CIDR (172.16.0.0/22) 分配 IP
+4. 建立到 VPC 的路由
+5. 流量通過安全群組
 
-#### Routing Rules
-- VPN CIDR → Local
-- VPC CIDR → Target Network Association
-- 0.0.0.0/0 → NAT Gateway (split tunnel)
+#### 路由規則
+- VPN CIDR → 本地
+- VPC CIDR → 目標網路關聯
+- 0.0.0.0/0 → NAT 閘道 (分割隧道)
 
-### Security Groups
+### 安全群組
 
-#### Dedicated VPN Security Group
+#### 專屬 VPN 安全群組
 ```json
 {
   "GroupName": "client-vpn-sg-{environment}",
@@ -98,9 +98,9 @@ Internet Gateway
 }
 ```
 
-#### Service Access Pattern
+#### 服務存取模式
 ```bash
-# Service SG references VPN SG
+# 服務安全群組參照 VPN 安全群組
 aws ec2 authorize-security-group-ingress \
   --group-id sg-service \
   --source-group sg-vpn-client \
@@ -108,88 +108,88 @@ aws ec2 authorize-security-group-ingress \
   --port 3306
 ```
 
-## ⚡ Serverless Architecture
+## ⚡ 無伺服器架構
 
-### Lambda Functions
+### Lambda 函數
 
 #### slack-handler
-- **Purpose**: Process Slack commands
-- **Memory**: 512 MB
-- **Timeout**: 30 seconds
-- **Triggers**: API Gateway POST /slack
+- **用途**: 處理 Slack 命令
+- **記憶體**: 512 MB
+- **逾時**: 30 秒
+- **觸發器**: API Gateway POST /slack
 
 #### vpn-control
-- **Purpose**: Execute VPN operations
-- **Memory**: 512 MB
-- **Timeout**: 60 seconds
-- **Triggers**: Internal invocation
+- **用途**: 執行 VPN 操作
+- **記憶體**: 512 MB
+- **逾時**: 60 秒
+- **觸發器**: 內部調用
 
 #### vpn-monitor
-- **Purpose**: Auto-shutdown monitoring
-- **Memory**: 256 MB
-- **Timeout**: 30 seconds
-- **Triggers**: EventBridge (5-minute interval)
+- **用途**: 自動關閉監控
+- **記憶體**: 256 MB
+- **逾時**: 30 秒
+- **觸發器**: EventBridge (5 分鐘間隔)
 
-### Lambda Layer Structure
+### Lambda Layer 結構
 
 ```
 /opt/nodejs/
-├── logger.ts       # Structured logging
-├── slack.ts        # Slack utilities
-├── stateStore.ts   # SSM integration
-├── types.ts        # TypeScript types
-└── vpnManager.ts   # VPN operations
+├── logger.ts       # 結構化日誌
+├── slack.ts        # Slack 工具
+├── stateStore.ts   # SSM 整合
+├── types.ts        # TypeScript 類型
+└── vpnManager.ts   # VPN 操作
 ```
 
-### Cold Start Optimization
+### 冷啟動最佳化
 
-#### Lambda Warming System
-Eliminates cold starts through scheduled warming:
+#### Lambda 預熱系統
+透過排程預熱消除冷啟動：
 
 ```typescript
-// Warming detection
+// 預熱偵測
 const isWarmingRequest = (event: any): boolean => {
   return event.source === 'aws.events' &&
          event['detail-type'] === 'Scheduled Event' &&
          event.detail?.warming === true;
 };
 
-// Warming response
+// 預熱響應
 if (isWarmingRequest(event)) {
   return { statusCode: 200, body: 'Warmed' };
 }
 ```
 
-**Schedule**:
-- Business hours: Every 3 minutes
-- Off hours: Every 15 minutes
-- Weekends: Every 30 minutes
-- Monthly cost: ~$8-12
+**排程**:
+- 工作時間：每 3 分鐘
+- 非工作時間：每 15 分鐘
+- 週末：每 30 分鐘
+- 月度成本：約 $8-12
 
-## 🔐 Security Architecture
+## 🔐 安全架構
 
-### Certificate Management
+### 憑證管理
 
-#### PKI Hierarchy
+#### PKI 層級結構
 ```
-Root CA (Self-signed, 10-year validity)
-├── Server Certificate (VPN Endpoint)
-└── Client Certificates (1-year validity)
+根 CA (自簽，10 年有效期)
+├── 伺服器憑證 (VPN 端點)
+└── 客戶端憑證 (1 年有效期)
     ├── user1.crt
     ├── user2.crt
     └── ...
 ```
 
-#### Zero-Touch Workflow
-1. User generates CSR locally
-2. CSR uploaded to S3 (`csr/` prefix)
-3. Admin signs certificate
-4. Certificate uploaded to S3 (`cert/` prefix)
-5. User downloads certificate
+#### 零接觸工作流程
+1. 使用者本地生成 CSR
+2. CSR 上傳至 S3 (`csr/` 前綴)
+3. 管理員簽署憑證
+4. 憑證上傳至 S3 (`cert/` 前綴)
+5. 使用者下載憑證
 
-### IAM Security
+### IAM 安全
 
-#### Lambda Execution Role
+#### Lambda 執行角色
 ```json
 {
   "Version": "2012-10-17",
@@ -212,14 +212,14 @@ Root CA (Self-signed, 10-year validity)
 }
 ```
 
-### Encryption
+### 加密
 
-#### KMS Usage
-- SSM parameters encrypted with KMS
-- S3 bucket encryption at rest
-- TLS 1.2+ for all API communications
+#### KMS 使用
+- SSM 參數使用 KMS 加密
+- S3 儲存桶靜態加密
+- 所有 API 通訊使用 TLS 1.2+
 
-#### Slack Request Validation
+#### Slack 請求驗證
 ```typescript
 function verifySlackSignature(
   body: string,
@@ -237,26 +237,26 @@ function verifySlackSignature(
 }
 ```
 
-## 💰 Cost Optimization
+## 💰 成本最佳化
 
-### Auto-Shutdown Algorithm
+### 自動關閉演算法
 
-#### 54-Minute Optimization
+#### 54 分鐘最佳化
 ```
-AWS Billing: Hourly charges, minimum 1 hour
+AWS 計費：按小時收費，最少 1 小時
 
-Traditional (60-min threshold):
-Worst case = 59 min idle + 5 min detection = 64 min
-Result: Crosses into 2nd billing hour ❌
+傳統方式 (60 分鐘闾值)：
+最壞情況 = 59 分鐘閒置 + 5 分鐘偵測 = 64 分鐘
+結果：跨入第 2 個計費小時 ❌
 
-Optimized (54-min threshold):
-Worst case = 54 min idle + 5 min detection = 59 min
-Result: Stays within 1st billing hour ✅
+最佳化 (54 分鐘闾值)：
+最壞情況 = 54 分鐘閒置 + 5 分鐘偵測 = 59 分鐘
+結果：保持在第 1 個計費小時內 ✅
 
-Savings: 100% prevention of accidental 2nd hour charges
+節省：100% 防止意外的第 2 小時費用
 ```
 
-#### Implementation
+#### 實作
 ```typescript
 async function checkIdleStatus(): Promise<boolean> {
   const IDLE_MINUTES = 54;
@@ -269,27 +269,27 @@ async function checkIdleStatus(): Promise<boolean> {
 }
 ```
 
-### Cost Calculation
+### 成本計算
 
-#### Pricing Model
+#### 定價模型
 ```
-Hourly Cost = (Endpoint Association × Subnets) + (Active Connections × Users)
-            = ($0.10 × 1) + ($0.05 × N)
+每小時成本 = (端點關聯 × 子網路) + (活動連線 × 使用者)
+          = ($0.10 × 1) + ($0.05 × N)
 
-Daily Savings = (24 - ActualHours) × HourlyCost
-Annual Savings = DailySavings × WorkDays × 12
+每日節省 = (24 - 實際小時) × 每小時成本
+年度節省 = 每日節省 × 工作日 × 12
 ```
 
-#### Actual Savings
-- Traditional 24/7: $132/month
-- With automation: $35-57/month
-- Savings: 57-74% reduction
+#### 實際節省
+- 傳統 24/7：$132/月
+- 自動化後：$35-57/月
+- 節省：減少 57-74%
 
-## 🔄 State Management
+## 🔄 狀態管理
 
 ### SSM Parameter Store
 
-#### Naming Convention
+#### 命名慣例
 ```
 /vpn/{environment}/{category}/{key}
 
@@ -299,9 +299,9 @@ Examples:
 /vpn/slack/signing_secret
 ```
 
-#### State Synchronization
+#### 狀態同步
 ```typescript
-// Optimistic locking for concurrent updates
+// 並發更新的樂觀鎖定
 async function updateStateWithRetry(
   key: string,
   updater: (current: any) => any,
@@ -321,9 +321,9 @@ async function updateStateWithRetry(
 }
 ```
 
-## 🌍 Cross-Account Communication
+## 🌍 跨帳戶通訊
 
-### Request Routing
+### 請求路由
 
 ```mermaid
 sequenceDiagram
@@ -336,7 +336,7 @@ sequenceDiagram
     Staging Lambda-->>Slack: Response
 ```
 
-### Implementation
+### 實作
 ```typescript
 async function routeCommand(cmd: VpnCommand): Promise<any> {
   if (cmd.environment === CURRENT_ENV) {
@@ -351,9 +351,9 @@ async function routeCommand(cmd: VpnCommand): Promise<any> {
 }
 ```
 
-## 📊 Monitoring & Observability
+## 📊 監控與可觀察性
 
-### Structured Logging
+### 結構化日誌
 
 ```typescript
 interface LogEntry {
@@ -379,71 +379,71 @@ class Logger {
 }
 ```
 
-### Metrics
+### 指標
 
-#### Custom CloudWatch Metrics
+#### 自訂 CloudWatch 指標
 - `VPN/Automation/VpnOpenOperations`
 - `VPN/Automation/VpnCloseOperations`
 - `VPN/Automation/AutoCloseTriggered`
 - `VPN/Automation/CostSaved`
 - `VPN/Automation/IdleMinutesDetected`
 
-#### Key Performance Indicators
-- Slack response time: < 1 second
-- VPN operation completion: < 60 seconds
-- Auto-shutdown accuracy: 100%
-- Cost savings: > 50%
+#### 關鍵績效指標
+- Slack 響應時間：< 1 秒
+- VPN 操作完成：< 60 秒
+- 自動關閉準確率：100%
+- 成本節省：> 50%
 
-## 🚀 Performance Considerations
+## 🚀 效能考量
 
-### Optimization Strategies
+### 最佳化策略
 
-1. **Connection Pooling**: Reuse AWS SDK clients
-2. **Caching**: 5-minute cache for configuration
-3. **Parallel Processing**: Batch operations where possible
-4. **Memory Allocation**: Optimized per function needs
+1. **連線池化**：重用 AWS SDK 客戶端
+2. **快取**：設定 5 分鐘快取
+3. **平行處理**：盡可能批次操作
+4. **記憶體配置**：根據函數需求最佳化
 
-### Scalability Limits
+### 擴展性限制
 
-| Component | Limit | Mitigation |
-|-----------|-------|------------|
-| Lambda Concurrent | 1000 | Reserved capacity |
-| API Gateway | 10k req/s | Rate limiting |
-| SSM Parameter | 4KB | Use S3 for large data |
-| VPN Connections | 2000/endpoint | Multiple endpoints |
+| 元件 | 限制 | 緩解措施 |
+|------|------|----------|
+| Lambda 並發 | 1000 | 保留容量 |
+| API Gateway | 10k 請求/秒 | 速率限制 |
+| SSM 參數 | 4KB | 大資料使用 S3 |
+| VPN 連線 | 2000/端點 | 多個端點 |
 
-## 🔮 Future Enhancements
+## 🔮 未來增強功能
 
-### Planned Features
-- Multi-region support
-- Machine learning for usage prediction
-- Mobile app integration
-- WireGuard protocol support
-- Granular access control
+### 計劃功能
+- 多區域支援
+- 使用預測的機器學習
+- 行動應用整合
+- WireGuard 協定支援
+- 細粒度存取控制
 
-### Architecture Evolution
-- Container-based alternatives
-- GraphQL API migration
-- Event-driven architecture expansion
-- Real-time monitoring dashboard
+### 架構演進
+- 基於容器的替代方案
+- GraphQL API 遷移
+- 事件驅動架構擴展
+- 即時監控儀表板
 
-## 📚 Technical References
+## 📚 技術參考
 
-### AWS Services Used
+### 使用的 AWS 服務
 - [EC2 Client VPN](https://docs.aws.amazon.com/vpn/latest/clientvpn-admin/)
 - [Lambda](https://docs.aws.amazon.com/lambda/)
 - [API Gateway](https://docs.aws.amazon.com/apigateway/)
 - [SSM Parameter Store](https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-parameter-store.html)
 - [EventBridge](https://docs.aws.amazon.com/eventbridge/)
 
-### Design Patterns
-- Serverless First
-- Infrastructure as Code
-- Zero-Trust Security
-- Cost-Optimized Architecture
-- Event-Driven Processing
+### 設計模式
+- 無伺服器優先
+- 基礎設施即程式碼
+- 零信任安全
+- 成本最佳化架構
+- 事件驅動處理
 
 ---
 
-**For Operations:** See [Deployment Guide](deployment-guide.md)
-**For Administration:** See [Admin Guide](admin-guide.md)
+**操作相關：**請參閱[部署指南](deployment-guide.md)
+**管理相關：**請參閱[管理員指南](admin-guide.md)

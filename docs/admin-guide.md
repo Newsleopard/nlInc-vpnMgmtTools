@@ -1,17 +1,34 @@
-# VPN Administrator Guide
+# VPN 管理員指南
 
-This guide provides VPN administrators with procedures and tools for managing the AWS Client VPN system, users, and certificates.
+本指南為 VPN 管理員提供管理 AWS Client VPN 系統、使用者和憑證的程序和工具。
 
-## 🎯 Who This Guide Is For
+## 📑 目錄
 
-- VPN System Administrators
-- Security Team Members
-- IT Operations Staff
-- Team Leads managing access
+- [本指南適用對象](#-本指南適用對象)
+- [管理員工作流程](#-管理員工作流程)
+- [管理員職責](#-管理員職責)
+- [新管理員快速入門](#-新管理員快速入門)
+- [使用者管理](#-使用者管理)
+- [憑證管理](#-憑證管理)
+- [VPN 端點管理](#-vpn-端點管理)
+- [監控和報告](#-監控和報告)
+- [事件響應](#-事件響應)
+- [管理工具參考](#️-管理工具參考)
+- [成本管理](#-成本管理)
+- [安全最佳實踐](#-安全最佳實踐)
+- [管理程序](#-管理程序)
+- [取得協助](#-取得協助)
 
-## 📈 Administrator Workflows
+## 🎯 本指南適用對象
 
-### Certificate Management Flow
+- VPN 系統管理員
+- 安全團隊成員
+- IT 營運人員
+- 管理存取權限的團隊主管
+
+## 📈 管理員工作流程
+
+### 憑證管理流程
 
 ```mermaid
 flowchart LR
@@ -39,7 +56,7 @@ flowchart LR
     style U6 fill:#c8e6c9
 ```
 
-### User Onboarding Process
+### 使用者入職流程
 
 ```mermaid
 flowchart TD
@@ -68,76 +85,86 @@ flowchart TD
     style AdminSign fill:#fff9c4
 ```
 
-## 📋 Administrator Responsibilities
+## 📋 管理員職責
 
-### Core Duties
-1. **User Management** - Add/remove VPN access permissions
-2. **Certificate Management** - Sign CSRs, revoke certificates
-3. **System Monitoring** - Track usage, costs, and health
-4. **Incident Response** - Handle security events and outages
+### 核心職責
+1. **使用者管理** - 新增/移除 VPN 存取權限
+2. **憑證管理** - 簽署 CSR、撤銷憑證
+3. **系統監控** - 追蹤使用情況、成本和健康狀態
+4. **事件響應** - 處理安全事件和服務中斷
 
-### Required AWS Permissions
-- EC2 VPN endpoint management
-- IAM user and policy management
-- S3 access (certificate exchange)
-- SSM Parameter Store access
-- CloudWatch logs and metrics
+### 所需的 AWS 權限
+- EC2 VPN 端點管理
+- IAM 使用者和政策管理
+- S3 存取（憑證交換）
+- SSM Parameter Store 存取
+- CloudWatch 日誌和指標
 
-## 🚀 Quick Start for New Admins
+## 🚀 新管理員快速入門
 
-### 1. Setup Admin Access
+### 1. 設定管理員存取
 ```bash
-# Configure AWS profiles
+# 設定 AWS 設定檔
 aws configure --profile staging
 aws configure --profile production
 
-# Verify access
+# 驗證存取
 aws sts get-caller-identity --profile staging
 aws sts get-caller-identity --profile production
 ```
 
-### 2. Launch Admin Console
+### 2. 啟動管理控制台
 ```bash
+# 自動偵測並選擇 AWS profile（推薦）
+./admin-tools/aws_vpn_admin.sh
+
+# 或指定特定 profile（可選）
 ./admin-tools/aws_vpn_admin.sh --profile staging
 ```
 
-### 3. Initialize S3 Certificate Exchange
+### 3. 驗證系統存取
 ```bash
-./admin-tools/setup_csr_s3_bucket.sh --publish-assets
+# 測試基本 VPN 管理功能（自動選擇 profile）
+./admin-tools/aws_vpn_admin.sh
+
+# 或指定特定 profile
+./admin-tools/aws_vpn_admin.sh --profile staging
 ```
 
-## 👥 User Management
+**註：** S3 憑證交換系統的初始部署和基礎設施設定請參閱 [部署指南](deployment-guide.md)。
 
-### Adding New Users
+## 👥 使用者管理
 
-#### Step 1: Grant AWS Permissions
+### 新增使用者
+
+#### 步驟 1：授予 AWS 權限
 ```bash
-# Add VPN permissions to existing user
+# 為現有使用者新增 VPN 權限
 ./admin-tools/manage_vpn_users.sh add john.doe --profile staging
 
-# Create new IAM user with VPN access
+# 建立具有 VPN 存取權的新 IAM 使用者
 ./admin-tools/manage_vpn_users.sh add jane.smith --create-user --profile staging
 ```
 
-#### Step 2: Process Certificate Request
-When user submits CSR:
+#### 步驟 2：處理憑證請求
+當使用者提交 CSR 時：
 ```bash
-# Sign certificate and upload to S3
+# 簽署憑證並上傳至 S3
 ./admin-tools/sign_csr.sh --upload-s3 username.csr --profile staging
 ```
 
-#### Step 3: Verify Access
+#### 步驟 3：驗證存取
 ```bash
-# Check user permissions
+# 檢查使用者權限
 ./admin-tools/manage_vpn_users.sh status john.doe --profile staging
 
-# List all VPN users
+# 列出所有 VPN 使用者
 ./admin-tools/manage_vpn_users.sh list --profile staging
 ```
 
-### Batch User Operations
+### 批次使用者操作
 
-Create `users.txt`:
+建立 `users.txt`：
 
 ```text
 john.doe
@@ -145,31 +172,31 @@ jane.smith
 bob.wilson
 ```
 
-Add multiple users:
+新增多個使用者：
 ```bash
 ./admin-tools/manage_vpn_users.sh batch-add users.txt --profile staging
 ```
 
-### Removing User Access
+### 移除使用者存取
 
-#### Standard Removal
+#### 標準移除
 ```bash
-# Remove VPN permissions only
+# 僅移除 VPN 權限
 ./admin-tools/manage_vpn_users.sh remove john.doe --profile staging
 
-# Revoke certificate
+# 撤銷憑證
 ./admin-tools/revoke_member_access.sh john.doe --profile staging
 ```
 
-#### Complete Offboarding
-⚠️ **Warning**: This permanently deletes IAM user and all access
+#### 完整離職
+⚠️ **警告**：這將永久刪除 IAM 使用者和所有存取權
 ```bash
 ./admin-tools/employee_offboarding.sh --profile production
 ```
 
-## 📜 Certificate Management
+## 📜 憑證管理
 
-### Certificate Lifecycle Management
+### 憑證生命週期管理
 
 ```mermaid
 stateDiagram-v2
@@ -191,45 +218,45 @@ stateDiagram-v2
     note right of Revoked: User loses access
 ```
 
-### Certificate Workflow
+### 憑證工作流程
 
-1. **User generates CSR** → Uploads to S3
-2. **Admin signs certificate** → Uploads to S3
-3. **User downloads certificate** → Configures VPN
+1. **使用者產生 CSR** → 上傳至 S3
+2. **管理員簽署憑證** → 上傳至 S3
+3. **使用者下載憑證** → 設定 VPN
 
-### Signing Certificates
+### 簽署憑證
 
-#### Individual Signing
+#### 個別簽署
 ```bash
-# Download and sign CSR
+# 下載並簽署 CSR
 ./admin-tools/sign_csr.sh username.csr --upload-s3 --profile staging
 ```
 
-#### Batch Processing
+#### 批次處理
 ```bash
-# Monitor and auto-sign new CSRs
+# 監控並自動簽署新的 CSR
 ./admin-tools/process_csr_batch.sh monitor -e staging
 
-# Process all pending CSRs
+# 處理所有待處理的 CSR
 ./admin-tools/process_csr_batch.sh download -e staging
 ./admin-tools/process_csr_batch.sh process -e staging
 ./admin-tools/process_csr_batch.sh upload --auto-upload
 ```
 
-### Certificate Revocation
+### 憑證撤銷
 ```bash
-# Interactive revocation
+# 互動式撤銷
 ./admin-tools/revoke_member_access.sh
 
-# Specific user
+# 特定使用者
 ./admin-tools/revoke_member_access.sh john.doe --profile staging
 ```
 
-## 🔧 VPN Endpoint Management
+## 🔧 VPN 端點管理
 
-⏱️ **Important Timing Note**: VPN endpoint operations (opening/associating) can take up to **10 minutes** to complete due to AWS subnet association and security group configuration processes. Always allow sufficient time for operations to finish.
+⏱️ **重要時間提醒**：由於 AWS 子網路關聯和安全群組設定流程，VPN 端點操作（開啟/關聯）可能需要最多 **10 分鐘**才能完成。請始終預留充足的時間讓操作完成。
 
-### VPN Operation Flow
+### VPN 操作流程
 
 ```mermaid
 sequenceDiagram
@@ -263,150 +290,154 @@ sequenceDiagram
     Slack-->>User: 💰 Auto-closed
 ```
 
-### Using Admin Console
+### 使用管理控制台
 ```bash
+# 自動選擇 profile（推薦）
+./admin-tools/aws_vpn_admin.sh
+
+# 或指定特定 profile
 ./admin-tools/aws_vpn_admin.sh --profile staging
 ```
 
-Menu Options:
-1. **Create VPN Endpoint** - Setup new VPN
-2. **View Endpoints** - Check status
-3. **Manage Team Members** - User operations
-4. **Generate Client Config** - Create .ovpn files
-5. **Delete Endpoint** - Remove VPN
+選單選項：
+1. **建立 VPN 端點** - 設定新 VPN
+2. **檢視端點** - 檢查狀態
+3. **管理團隊成員** - 使用者操作
+4. **產生用戶端設定** - 建立 .ovpn 檔案
+5. **刪除端點** - 移除 VPN
 
-### Manual Endpoint Operations
+### 手動端點操作
 
-#### Create Endpoint
+#### 建立端點
 ```bash
-# Via admin console (recommended)
-./admin-tools/aws_vpn_admin.sh --profile staging
-# Select option 1
+# 透過管理控制台（建議）
+./admin-tools/aws_vpn_admin.sh
+# 選擇選項 1
 ```
 
-#### Fix Common Issues
+#### 修復常見問題
 ```bash
-# Fix endpoint ID mismatch
+# 修復端點 ID 不符
 ./admin-tools/tools/fix_endpoint_id.sh
 
-# Fix internet access
+# 修復網際網路存取
 ./admin-tools/tools/fix_internet_access.sh
 
-# Validate configuration
+# 驗證設定
 ./admin-tools/tools/validate_config.sh
 ```
 
-## 📊 Monitoring and Reporting
+## 📊 監控和報告
 
-### Daily Monitoring Tasks
+### 每日監控任務
 
-#### Check System Health
+#### 檢查系統健康狀態
 ```bash
-# VPN status overview
-./admin-tools/aws_vpn_admin.sh --profile staging
+# VPN 狀態概覽
+./admin-tools/aws_vpn_admin.sh
 
-# Active connections
+# 活動連線
 aws ec2 describe-client-vpn-connections \
   --client-vpn-endpoint-id cvpn-endpoint-xxxxx \
   --profile staging
 ```
 
-#### Cost Monitoring
+#### 成本監控
 ```bash
-# Generate cost analysis
+# 產生成本分析
 ./admin-tools/run-vpn-analysis.sh --profile staging
 
-# View via Slack
+# 透過 Slack 檢視
 /vpn savings staging
 /vpn costs daily
 ```
 
-### Automated Reports
+### 自動化報告
 
-#### Setup Weekly Reports
+#### 設定每週報告
 ```bash
-# Schedule weekly analysis
+# 排程每週分析
 crontab -e
-# Add: 0 9 * * MON /path/to/admin-tools/run-vpn-analysis.sh --format markdown
+# 新增：0 9 * * MON /path/to/admin-tools/run-vpn-analysis.sh --format markdown
 ```
 
-### CloudWatch Monitoring
+### CloudWatch 監控
 
-View Lambda logs:
+檢視 Lambda 日誌：
 ```bash
-# Slack handler logs
+# Slack 處理程式日誌
 aws logs tail /aws/lambda/vpn-slack-handler-staging --follow --profile staging
 
-# Monitor errors
+# 監控錯誤
 aws logs filter-log-events \
   --log-group-name /aws/lambda/vpn-control-staging \
   --filter-pattern "ERROR" \
   --profile staging
 ```
 
-## 🚨 Incident Response
+## 🚨 事件響應
 
-### VPN Outage
+### VPN 服務中斷
 
-1. **Check endpoint status**:
+1. **檢查端點狀態**：
 ```bash
 aws ec2 describe-client-vpn-endpoints --profile staging
 ```
 
-2. **Restart VPN via Slack**:
+2. **透過 Slack 重新啟動 VPN**：
 ```text
 /vpn open staging
 ```
 
-⏱️ **Note**: Allow up to 10 minutes for the VPN endpoint to fully associate and become available.
+⏱️ **注意**：請預留最多 10 分鐘讓 VPN 端點完全關聯並可用。
 
-3. **Check Lambda functions**:
+3. **檢查 Lambda 函數**：
 ```bash
 ./scripts/deploy.sh status
 ```
 
-4. **Emergency redeploy**:
+4. **緊急重新部署**：
 ```bash
 ./scripts/deploy.sh staging --secure-parameters
 ```
 
-### Security Incident
+### 安全事件
 
-1. **Immediate Actions**:
+1. **立即行動**：
 ```bash
-# Revoke compromised certificate
+# 撤銷受損憑證
 ./admin-tools/revoke_member_access.sh compromised-user --profile production
 
-# Disconnect all users
+# 中斷所有使用者連線
 /vpn close production
 ```
 
-2. **Investigation**:
+2. **調查**：
 ```bash
-# Check access logs
+# 檢查存取日誌
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=EventName,AttributeValue=AuthorizeClientVpnIngress \
   --profile production
 ```
 
-3. **Recovery**:
-- Regenerate certificates
-- Update security groups
-- Notify affected users
+3. **復原**：
+- 重新產生憑證
+- 更新安全群組
+- 通知受影響的使用者
 
-### Cost Anomaly
+### 成本異常
 
-1. **Check auto-close status**:
+1. **檢查自動關閉狀態**：
 ```
 /vpn admin cooldown staging
 ```
 
-2. **Force close if needed**:
+2. **必要時強制關閉**：
 ```
 /vpn admin force-close staging
 ```
 
-3. **Adjust idle timeout**:
+3. **調整閒置逾時**：
 ```bash
 aws ssm put-parameter \
   --name "/vpn/staging/cost/optimization_config" \
@@ -415,121 +446,121 @@ aws ssm put-parameter \
   --profile staging
 ```
 
-## 🛠️ Administrative Tools Reference
+## 🛠️ 管理工具參考
 
-### Essential Tools
+### 必要工具
 
-| Tool | Purpose | Usage |
+| 工具 | 用途 | 使用方式 |
 |------|---------|-------|
-| `aws_vpn_admin.sh` | Main admin console | `./admin-tools/aws_vpn_admin.sh --profile staging` |
-| `manage_vpn_users.sh` | User management | `./admin-tools/manage_vpn_users.sh add user` |
-| `sign_csr.sh` | Certificate signing | `./admin-tools/sign_csr.sh --upload-s3 user.csr` |
-| `setup_csr_s3_bucket.sh` | S3 setup | `./admin-tools/setup_csr_s3_bucket.sh --publish-assets` |
-| `run-vpn-analysis.sh` | Cost analysis | `./admin-tools/run-vpn-analysis.sh --profile staging` |
+| `aws_vpn_admin.sh` | 主要管理控制台 | `./admin-tools/aws_vpn_admin.sh --profile staging` |
+| `manage_vpn_users.sh` | 使用者管理 | `./admin-tools/manage_vpn_users.sh add user` |
+| `sign_csr.sh` | 憑證簽署 | `./admin-tools/sign_csr.sh --upload-s3 user.csr` |
+| `setup_csr_s3_bucket.sh` | S3 設定 | `./admin-tools/setup_csr_s3_bucket.sh --publish-assets` |
+| `run-vpn-analysis.sh` | 成本分析 | `./admin-tools/run-vpn-analysis.sh --profile staging` |
 
-### Diagnostic Tools
+### 診斷工具
 
-| Tool | Purpose | When to Use |
+| 工具 | 用途 | 使用時機 |
 |------|---------|-------------|
-| `validate_config.sh` | Check configuration | Setup issues |
-| `fix_endpoint_id.sh` | Fix endpoint mismatch | ID errors |
-| `fix_internet_access.sh` | Repair routing | No internet via VPN |
-| `debug_vpn_creation.sh` | Debug creation | Endpoint creation fails |
+| `validate_config.sh` | 檢查設定 | 設定問題 |
+| `fix_endpoint_id.sh` | 修復端點不符 | ID 錯誤 |
+| `fix_internet_access.sh` | 修復路由 | 無法透過 VPN 上網 |
+| `debug_vpn_creation.sh` | 除錯建立 | 端點建立失敗 |
 
-## 💰 Cost Management
+## 💰 成本管理
 
-### Cost Optimization Features
+### 成本最佳化功能
 
-- **Auto-shutdown**: Closes VPN after 54 minutes idle
-- **Business hours protection**: Prevents shutdown during work hours
-- **Admin override**: Disable auto-close for maintenance
+- **自動關閉**：閒置 54 分鐘後關閉 VPN
+- **工作時間保護**：防止在工作時間關閉
+- **管理員覆寫**：維護期間停用自動關閉
 
-### Managing Auto-Close
+### 管理自動關閉
 
 ```bash
-# Disable auto-close for 24 hours
+# 停用自動關閉 24 小時
 /vpn admin noclose staging
 
-# Re-enable auto-close
+# 重新啟用自動關閉
 /vpn admin autoclose staging
 
-# Check cooldown status
+# 檢查冷卻狀態
 /vpn admin cooldown staging
 ```
 
-### Cost Analysis
+### 成本分析
 ```bash
-# Monthly cost report
+# 月度成本報告
 ./admin-tools/run-vpn-analysis.sh --start-date 2025-01-01 --end-date 2025-01-31
 
-# Compare environments
+# 比較環境
 /vpn costs cumulative
 ```
 
-## 🔒 Security Best Practices
+## 🔒 安全最佳實踐
 
-### Certificate Security
-1. **CA Key Protection**
-   - Store offline in encrypted storage
-   - Never commit to repository
-   - Limit access to 2-3 admins
+### 憑證安全
+1. **CA 金鑰保護**
+   - 離線儲存於加密儲存空間
+   - 絕不提交至儲存庫
+   - 限制 2-3 位管理員存取
 
-2. **Certificate Lifecycle**
-   - Set 1-year expiration
-   - Track expiration dates
-   - Rotate CA every 2-3 years
+2. **憑證生命週期**
+   - 設定 1 年到期
+   - 追蹤到期日期
+   - 每 2-3 年輪換 CA
 
-### Access Control
-1. **Principle of Least Privilege**
-   - Grant minimal required permissions
-   - Regular access reviews (monthly)
-   - Remove unused accounts
+### 存取控制
+1. **最小權限原則**
+   - 授予最少必要權限
+   - 定期存取檢視（每月）
+   - 移除未使用的帳戶
 
-2. **Environment Separation**
-   - Different certificates per environment
-   - Separate AWS accounts recommended
-   - No cross-environment access
+2. **環境分離**
+   - 每個環境使用不同憑證
+   - 建議使用獨立的 AWS 帳戶
+   - 禁止跨環境存取
 
-### Audit and Compliance
-1. **Enable CloudTrail**
-2. **Regular security audits**
-3. **Document all access changes**
-4. **Maintain revocation lists**
+### 稽核與合規
+1. **啟用 CloudTrail**
+2. **定期安全稽核**
+3. **記錄所有存取變更**
+4. **維護撤銷清單**
 
-## 📋 Administrative Procedures
+## 📋 管理程序
 
-### Daily Tasks (5 minutes)
+### 每日任務（5 分鐘）
 
-- [ ] Check VPN endpoint status
-- [ ] Process pending CSRs
-- [ ] Review error logs
+- [ ] 檢查 VPN 端點狀態
+- [ ] 處理待處理的 CSR
+- [ ] 檢視錯誤日誌
 
-### Weekly Tasks (15 minutes)
+### 每週任務（15 分鐘）
 
-- [ ] Generate usage report
-- [ ] Review user permissions
-- [ ] Check certificate expirations
+- [ ] 產生使用報告
+- [ ] 檢視使用者權限
+- [ ] 檢查憑證到期
 
-### Monthly Tasks (30 minutes)
+### 每月任務（30 分鐘）
 
-- [ ] Full access audit
-- [ ] Cost analysis review
-- [ ] Update documentation
-- [ ] Test disaster recovery
+- [ ] 完整存取稽核
+- [ ] 成本分析檢視
+- [ ] 更新文件
+- [ ] 測試災難復原
 
-## 🆘 Getting Help
+## 🆘 取得協助
 
-### Internal Resources
-- Slack: #vpn-admin channel
-- Wiki: Internal VPN documentation
-- Team: security@company.com
+### 內部資源
+- Slack：#vpn-admin 頻道
+- Wiki：內部 VPN 文件
+- 團隊：security@company.com
 
-### External Resources
-- [AWS Client VPN Documentation](https://docs.aws.amazon.com/vpn/latest/clientvpn-admin/)
+### 外部資源
+- [AWS Client VPN 文件](https://docs.aws.amazon.com/vpn/latest/clientvpn-admin/)
 - [GitHub Issues](https://github.com/your-org/vpn-toolkit/issues)
-- AWS Support Console
+- AWS 支援控制台
 
 ---
 
-**For Deployment:** See [Deployment Guide](deployment-guide.md)
-**For Architecture:** See [Architecture Documentation](architecture.md)
+**部署相關：**請參閱[部署指南](deployment-guide.md)
+**架構相關：**請參閱[架構文件](architecture.md)
