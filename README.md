@@ -53,6 +53,7 @@
 |-------|----------|---------|
 | [**使用者指南**](docs/user-guide.md) | 工程團隊成員 | VPN 設定、日常使用、疑難排解 |
 | [**管理員指南**](docs/admin-guide.md) | VPN 系統管理員 | 使用者管理、憑證管理、監控 |
+| [**管理員交接指南**](docs/admin-handover-guide.md) | 系統管理員 | 管理員權限轉移、安全交接流程 |
 | [**部署指南**](docs/deployment-guide.md) | DevOps 開發者 | 系統部署、維護、復原 |
 | [**架構文件**](docs/architecture.md) | 技術深度解析 | 系統設計、安全性、演算法 |
 
