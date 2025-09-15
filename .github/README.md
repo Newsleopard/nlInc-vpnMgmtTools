@@ -409,23 +409,11 @@ const CONFIG = {
 - **Environment Isolation**: Complete staging/production separation
 - **Safe Defaults**: Conservative timeout and security settings
 
-## 📖 Documentation Guide
-
-Choose the guide that matches your role:
-
-| Guide | Audience | Purpose |
-|-------|----------|---------|
-| [**User Guide**](docs/user-guide.md) | Engineering Team Members | VPN setup, daily usage, troubleshooting |
-| [**Admin Guide**](docs/admin-guide.md) | VPN System Administrators | User management, certificate management, monitoring |
-| [**Admin Handover Guide**](docs/admin-handover-guide.md) | System Administrators | Admin privilege transfer, secure handover process |
-| [**Deployment Guide**](docs/deployment-guide.md) | DevOps Developers | System deployment, maintenance, recovery |
-| [**Architecture Documentation**](docs/architecture.md) | Technical Deep Dive | System design, security, algorithms |
-
 ### Additional Resources
 
-- [**CONTRIBUTING.md**](docs/development/CONTRIBUTING.md) - Contribution guidelines
-- [**SECURITY.md**](docs/development/SECURITY.md) - Security policy and reporting
-- [**CODE_OF_CONDUCT.md**](docs/development/CODE_OF_CONDUCT.md) - Community guidelines
+- [**CONTRIBUTING.md**](../docs/development/CONTRIBUTING.md) - Contribution guidelines
+- [**SECURITY.md**](../docs/development/SECURITY.md) - Security policy and reporting
+- [**CODE_OF_CONDUCT.md**](../docs/development/CODE_OF_CONDUCT.md) - Community guidelines
 
 ## 🔧 Troubleshooting
 
