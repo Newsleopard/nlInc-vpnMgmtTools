@@ -91,7 +91,8 @@ collect_files() {
     if [ -d "$PROJECT_ROOT/iam-policies" ]; then
         for policy_file in "$PROJECT_ROOT/iam-policies"/*.json; do
             if [ -f "$policy_file" ]; then
-                relative_path=$(realpath --relative-to="$PROJECT_ROOT" "$policy_file")
+                # Use basename to get relative path (macOS compatible)
+                relative_path="iam-policies/$(basename "$policy_file")"
                 HANDOVER_FILES+=("$relative_path")
             fi
         done

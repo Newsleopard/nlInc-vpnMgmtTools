@@ -209,6 +209,7 @@ Thumbs.db
 *.swp
 *.swo
 *~
+*.tar.gz.enc
 
 # 編輯器文件
 .vscode/
@@ -242,3 +243,4 @@ cdklib/cdk.metadata.json
 # CDK hotswap cache
 cdklib/.cdk-hotswap-cache/
 configs/**/vpn_endpoint.conf.bak*
+
