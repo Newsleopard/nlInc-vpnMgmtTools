@@ -6,17 +6,75 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is an AWS Client VPN dual-environment management toolkit designed for macOS, developed by [Newsleopard 電子豹](https://newsleopard.com). It provides a comprehensive solution for managing VPN endpoints, certificates, and user access across Staging and Production environments with strict environment isolation and enhanced security for production operations.
 
-**Original Author**: [CT Yeh](https://github.com/ctyeh) (ct@newsleopard.tw)  
-**Company**: [Newsleopard 電子豹](https://newsleopard.com)  
+**Original Author**: [CT Yeh](https://github.com/ctyeh) (ct@newsleopard.tw)
+**Company**: [Newsleopard 電子豹](https://newsleopard.com)
 **Status**: Reference Implementation (Open Source)
+
+## Quick Reference - Most Common Commands
+
+```bash
+# Build & Deploy
+npm run build                           # Build all Lambda functions
+npm run deploy:staging                  # Deploy to staging
+npm run deploy:production               # Deploy to production
+npm run deploy:both                     # Deploy to both environments
+./scripts/deploy.sh both --secure-parameters  # Full deployment with SSM setup
+
+# Lambda Development (from lambda/ directory)
+cd lambda && npm test                   # Run all tests
+cd lambda && npm run test:watch         # Run tests in watch mode
+cd lambda && npm run build              # Build all Lambda functions
+cd lambda && npm run build:shared       # Build shared layer only
+
+# Admin Operations
+./admin-tools/aws_vpn_admin.sh                    # Interactive admin console
+./admin-tools/manage_vpn_users.sh add username    # Add VPN user
+./admin-tools/manage_vpn_users.sh list            # List all VPN users
+
+# Team Member Setup
+./team_member_setup.sh --init                     # Start VPN setup (zero-touch)
+./team_member_setup.sh --resume                   # Complete VPN setup
+
+# Testing
+./tests/test_profile_management.sh                # Test profile management
+./tests/test_team_member_setup.sh                 # Test team setup workflow
+./tests/test_admin_tools.sh                       # Test admin tools
+
+# AWS Profile Verification
+aws configure list-profiles                       # List available profiles
+aws sts get-caller-identity --profile staging     # Verify staging profile
+aws sts get-caller-identity --profile production  # Verify production profile
+```
 
 ## Key Architecture Components
 
-- **Dual Environment Architecture**: Complete separation between Staging (🟡) and Production (🔴) environments
+### Three-Tier Architecture
+
+1. **Bash Admin Tools Layer** (`admin-tools/`, `lib/`, `team_member_setup.sh`)
+   - Certificate management and CSR signing
+   - User permission management via IAM policies
+   - VPN endpoint creation and configuration
+   - S3-based zero-touch workflow for certificate exchange
+
+2. **Serverless Automation Layer** (`lambda/`, `cdklib/`)
+   - **Lambda Functions**: Slack command handler, VPN control, idle monitoring
+   - **CDK Infrastructure**: API Gateway, EventBridge rules, Lambda layers
+   - **SSM Parameter Store**: Runtime configuration (VPN endpoints, Slack tokens, thresholds)
+
+3. **AWS Infrastructure**
+   - Client VPN endpoints with certificate-based authentication
+   - Dedicated security groups per environment
+   - S3 bucket for certificate exchange (`vpn-csr-exchange`)
+   - CloudWatch Events for idle timeout monitoring
+
+### Core Design Principles
+
+- **Dual Environment Isolation**: Complete separation between Staging (🟡) and Production (🔴) environments
 - **Direct Profile Selection**: Explicit AWS profile selection with cross-account validation (replaces stateful environment switching)
 - **Modular Library Design**: Core functionality split across `lib/` directory with specialized libraries
-- **Profile Selector Library**: New `lib/profile_selector.sh` provides intelligent profile detection and interactive selection
+- **Profile Selector Library**: `lib/profile_selector.sh` provides intelligent profile detection and interactive selection
 - **Enhanced Security**: Cross-account validation prevents wrong-environment operations, with enhanced production confirmations
+- **Cost Optimization**: 54-minute idle threshold with 5-minute monitoring interval guarantees VPN closure within first billing hour
 
 ## Environment Configuration
 
@@ -266,29 +324,100 @@ route 169.254.169.253 255.255.255.255  # VPC DNS resolver
 - Enables consistent service discovery across environments
 - Supports containerized applications expecting AWS metadata access
 
-## Core Library Functions
+## Core Bash Library Functions
 
-The `lib/` directory contains modular libraries:
+The `lib/` directory contains modular bash libraries that provide core functionality for admin tools and setup scripts. All scripts source these libraries for consistent behavior.
 
-- `core_functions.sh` - Basic utilities, logging, validation functions, AWS CLI wrappers
-- `profile_selector.sh` - **NEW** Direct AWS profile selection and validation (replaces env_manager.sh)
-- `env_core.sh` - Legacy profile utilities (minimal, mostly deprecated)
-- `aws_setup.sh` - AWS CLI setup and configuration
-- `cert_management.sh` - Certificate generation and management
-- `endpoint_management.sh` - VPN endpoint operations
-- `endpoint_creation.sh` - VPN endpoint creation logic
-- `enhanced_confirmation.sh` - Security confirmation prompts
+### Library Overview
 
-### New Profile Selection Functions (lib/profile_selector.sh)
-- `select_and_validate_profile()` - Main function for profile selection and validation
-- `aws_with_selected_profile()` - Wrapper for AWS CLI commands with selected profile
-- `detect_available_profiles()` - Scan and detect available AWS profiles
-- `map_profile_to_environment()` - Map profile names to environments using naming conventions
-- `validate_profile_account()` - Cross-account validation with account ID verification
-- `select_profile_interactive()` - Interactive profile selection with environment recommendations
-- `load_environment_config()` - Load environment-specific configuration files
+| Library | Purpose | Key Functions |
+|---------|---------|---------------|
+| `profile_selector.sh` | AWS profile management | `select_and_validate_profile()`, `aws_with_selected_profile()` |
+| `core_functions.sh` | Utilities and logging | `log_operation()`, `validate_environment()`, `check_dependencies()` |
+| `cert_management.sh` | Certificate operations | `generate_client_cert()`, `sign_csr()`, `validate_certificate()` |
+| `endpoint_management.sh` | VPN endpoint CRUD | `create_vpn_endpoint()`, `modify_vpn_endpoint()`, `delete_vpn_endpoint()` |
+| `endpoint_creation.sh` | VPN endpoint creation | `setup_vpn_infrastructure()`, `configure_client_vpn()` |
+| `security_group_operations.sh` | Security group management | `create_client_vpn_sg()`, `authorize_service_access()` |
+| `network_association.sh` | VPC/subnet operations | `associate_vpn_network()`, `configure_routing()` |
+| `enhanced_confirmation.sh` | Production safeguards | `require_enhanced_confirmation()`, `production_warning()` |
+| `aws_setup.sh` | AWS CLI setup | `install_aws_cli()`, `configure_aws_profile()` |
 
-### Legacy Functions (deprecated)
+### Profile Selection Functions (lib/profile_selector.sh)
+
+**Primary Functions:**
+
+- `select_and_validate_profile()` - Main entry point for profile selection with cross-account validation
+- `aws_with_selected_profile()` - Execute AWS CLI commands with the selected profile (replacement for `aws` command)
+- `detect_available_profiles()` - Scan `~/.aws/config` and detect all configured profiles
+- `map_profile_to_environment()` - Map profile names to environments using naming conventions (e.g., "staging" → staging)
+- `validate_profile_account()` - Verify profile's AWS account ID matches target environment
+- `select_profile_interactive()` - Display interactive menu for profile selection with recommendations
+- `load_environment_config()` - Load environment-specific `.env` files
+
+**Usage Example:**
+
+```bash
+#!/bin/bash
+source "lib/profile_selector.sh"
+
+# Interactive profile selection with validation
+select_and_validate_profile "staging"
+
+# Execute AWS commands with selected profile
+aws_with_selected_profile ec2 describe-vpcs
+aws_with_selected_profile s3 ls
+
+# Check if profile is set
+if [[ -n "$SELECTED_AWS_PROFILE" ]]; then
+    echo "Using profile: $SELECTED_AWS_PROFILE"
+fi
+```
+
+### Core Functions (lib/core_functions.sh)
+
+**Logging and Output:**
+
+- `log_operation()` - Centralized logging with timestamps and severity levels
+- `print_success()`, `print_error()`, `print_warning()`, `print_info()` - Colored console output
+- `create_log_entry()` - Write to environment-specific log files
+
+**Validation:**
+
+- `validate_environment()` - Check if environment is valid (staging/production)
+- `check_dependencies()` - Verify required tools are installed (aws, jq, openssl, etc.)
+- `validate_vpc_configuration()` - Check VPC, subnet, and network configuration
+- `validate_certificate()` - Verify certificate validity and expiration
+
+**AWS Utilities:**
+
+- `get_vpc_cidr()` - Get VPC CIDR block
+- `get_subnet_id()` - Get subnet ID from VPC
+- `check_vpn_endpoint_exists()` - Verify VPN endpoint existence
+
+### Certificate Management (lib/cert_management.sh)
+
+**Key Functions:**
+
+- `initialize_easy_rsa()` - Set up Easy-RSA PKI infrastructure
+- `generate_ca_certificate()` - Create CA cert and private key
+- `generate_client_cert()` - Generate client certificate and private key
+- `sign_csr()` - Sign Certificate Signing Request
+- `upload_certs_to_acm()` - Upload certificates to AWS Certificate Manager
+- `revoke_certificate()` - Revoke client certificate and update CRL
+
+### Endpoint Management (lib/endpoint_management.sh)
+
+**Key Functions:**
+
+- `create_vpn_endpoint()` - Create new Client VPN endpoint
+- `modify_vpn_endpoint()` - Update endpoint configuration
+- `delete_vpn_endpoint()` - Remove VPN endpoint and cleanup resources
+- `associate_target_network()` - Associate VPN endpoint with VPC subnet
+- `create_authorization_rule()` - Create authorization rules for VPN access
+- `export_client_config()` - Generate OpenVPN configuration file
+
+### Legacy Functions (Deprecated)
+
 - `aws_with_env_profile()` - Use `aws_with_selected_profile()` instead
 - `env_validate_profile_integration()` - Use `validate_profile_account()` instead
 - `select_aws_profile_for_environment()` - Use `select_profile_interactive()` instead
@@ -629,52 +758,103 @@ The new admin now has full access to:
 
 ## Lambda Function Development
 
-### TypeScript Compilation for CDK
+### TypeScript Compilation and Build Process
 
-All Lambda functions use TypeScript and require proper compilation for CDK deployment:
+All Lambda functions use TypeScript and require proper compilation for CDK deployment. The build system uses npm workspaces to manage dependencies across multiple Lambda functions and a shared layer.
 
-**Build Process:**
+**Recommended Build Commands:**
 ```bash
-# Manual build (if needed)
+# From project root
+npm run build                    # Build all Lambda functions (runs lambda/npm build)
+npm run deploy:staging           # Build and deploy to staging
+npm run deploy:both              # Build and deploy to both environments
+
+# From lambda/ directory
+cd lambda
+npm run build                    # Build shared layer + all functions
+npm run build:shared             # Build shared layer only
+npm run build:slack-handler      # Build specific function
+npm test                         # Run all tests
+npm run test:watch               # Run tests in watch mode
+npm run test:coverage            # Generate coverage report
+```
+
+**Manual Build (if needed):**
+
+```bash
 cd lambda/slack-handler && ./build.sh
 cd lambda/vpn-control && ./build.sh
 cd lambda/vpn-monitor && ./build.sh
 cd lambda/shared && npx tsc
-
-# Automatic build during deployment
-./scripts/deploy.sh staging  # Automatically builds all Lambda functions and shared layer
 ```
 
-**Important Notes:**
-- Each Lambda function has a `build.sh` script that ensures TypeScript compiles to the correct directory structure for CDK
-- CDK expects `dist/index.js` but TypeScript creates nested directories like `dist/slack-handler/index.js`
-- The shared layer compiles correctly to `dist/` without needing a build script
-- **Note**: If npm cache issues occur during builds, use `sudo chown -R $(whoami):$(id -gn) ~/.npm` to fix permissions
-- Source code changes are automatically applied during deployment via CDK environment variables
-- The deploy script now automatically builds all Lambda functions and the shared layer before CDK deployment
-- Always use the deploy script rather than manual CDK commands to ensure proper compilation
+**Important Build Notes:**
 
-**File Structure After Build:**
+- Each Lambda function has a `build.sh` script that ensures correct directory structure for CDK
+- CDK expects `dist/index.js` but TypeScript creates nested directories - build scripts handle this
+- The shared layer (`lambda/shared/`) compiles to `dist/` and is deployed as a Lambda Layer
+- **Troubleshooting**: If npm cache issues occur, use `sudo chown -R $(whoami):$(id -gn) ~/.npm`
+- Always use `./scripts/deploy.sh` rather than manual `cdk deploy` to ensure proper compilation
+- The deploy script automatically builds all functions before CDK deployment
+
+**Lambda Directory Structure:**
 ```
 lambda/
-├── slack-handler/dist/
-│   ├── index.js          # Main handler (required by CDK)
-│   ├── index.d.ts        # TypeScript declarations
-│   └── shared/           # Compiled shared modules
-├── vpn-control/dist/
-│   ├── index.js          # Main handler (required by CDK)
-│   ├── index.d.ts        # TypeScript declarations
-│   └── shared/           # Compiled shared modules
-├── vpn-monitor/dist/
-│   ├── index.js          # Main handler (required by CDK)
-│   ├── index.d.ts        # TypeScript declarations
-│   └── shared/           # Compiled shared modules
-└── shared/dist/          # Lambda Layer content
-    ├── logger.js
-    ├── slack.js
-    ├── stateStore.js
-    ├── types.js
-    └── vpnManager.js
+├── shared/                    # Shared utilities (Lambda Layer)
+│   ├── logger.ts             # Centralized logging
+│   ├── slack.ts              # Slack API utilities
+│   ├── stateStore.ts         # DynamoDB state management
+│   ├── types.ts              # Shared TypeScript types
+│   ├── vpnManager.ts         # VPN control operations
+│   └── dist/                 # Compiled layer (deployed to Lambda)
+├── slack-handler/            # Slack command endpoint
+│   ├── index.ts              # Main handler
+│   ├── build.sh              # Build script
+│   └── dist/index.js         # Compiled output (required by CDK)
+├── vpn-control/              # VPN control operations
+│   ├── index.ts
+│   ├── build.sh
+│   └── dist/index.js
+├── vpn-monitor/              # Idle timeout monitoring
+│   ├── index.ts
+│   ├── build.sh
+│   └── dist/index.js
+├── __tests__/                # Jest unit tests
+└── package.json              # Workspace configuration
+```
+
+### CDK Stack Structure
+
+The infrastructure is defined in AWS CDK (TypeScript) with two main stacks:
+
+**Main Stack** (`cdklib/lib/vpn-automation-stack.ts`):
+- API Gateway REST API with Slack webhook endpoint
+- Lambda functions (slack-handler, vpn-control, vpn-monitor)
+- Lambda Layer with shared utilities
+- EventBridge rule for 5-minute monitoring interval
+- DynamoDB table for VPN state tracking
+- IAM roles and permissions
+
+**Secure Parameters Stack** (`cdklib/lib/secure-parameter-management-stack.ts`):
+- SSM Parameter Store parameters (with KMS encryption)
+- Slack tokens, VPN endpoint IDs, configuration
+- Deployed separately with `--secure-parameters` flag
+
+**Deployment Commands:**
+
+```bash
+# Deploy everything with SSM parameters
+./scripts/deploy.sh both --secure-parameters
+
+# Deploy specific environment
+./scripts/deploy.sh staging --staging-profile default
+./scripts/deploy.sh production --production-profile prod
+
+# Check deployment status
+./scripts/deploy.sh status
+
+# View CDK diff before deployment
+cd cdklib && cdk diff VpnAutomation-staging
 ```
 
 ### Lambda and SSM Configuration Strategy
@@ -684,6 +864,23 @@ This serverless application uses a best-practice approach to configuration, sepa
 - **SSM Parameter Store for Dynamic Configuration**: All operational parameters (VPN endpoint IDs, idle timeouts, Slack tokens) are stored in SSM. Lambda functions fetch these values **at runtime** on every invocation. This allows for real-time configuration changes without needing to redeploy the function.
 
 - **Lambda Environment Variables for Static Context**: Environment variables (e.g., `APP_ENV`) are set during deployment to give the function its **bootstrap identity**. The function reads `process.env.APP_ENV` (`staging` or `production`) to know which set of SSM parameters to query. This makes the Lambda code itself environment-agnostic.
+
+**SSM Parameter Hierarchy:**
+
+```
+/vpn/{environment}/
+├── slack/
+│   ├── bot_token           # Slack bot OAuth token
+│   ├── signing_secret      # Request signature verification
+│   └── api_key             # API key for Lambda invocations
+├── vpn/
+│   ├── endpoint_id         # Client VPN endpoint ID
+│   └── region              # AWS region
+├── cost/
+│   └── optimization_config # { "idleTimeoutMinutes": 54 }
+└── cross_account/
+    └── production_api_url  # Staging-to-production routing (staging only)
+```
 
 ### Cost Optimization: 54-Minute Idle Threshold (Updated June 2025)
 
