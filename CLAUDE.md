@@ -921,23 +921,41 @@ The Slack App's Request URL for the `/vpn` command is highly stable due to the s
 
 ## Recent Updates (January 2026)
 
-### Client-Side Idle Timeout Enhancement
+### Automated VPN Schedule & Enhanced Idle Detection
 
-**100-Minute Traffic-Based Idle Timeout:**
-- Updated OpenVPN client config to use `inactive 6000 10000` (100 minutes, 10KB threshold)
-- Traffic threshold ensures keepalive packets don't prevent idle detection
-- Provides reliable automatic disconnection for forgotten VPN sessions
+**Weekday Auto-Open (9:30 AM Taiwan Time):**
+- VPN endpoint automatically opens at 9:30 AM on weekdays (Mon-Fri)
+- EventBridge scheduled rule triggers vpn-control Lambda
+- Slack notification sent when VPN auto-opens
+- No manual intervention needed for daily VPN startup
+
+**Business Hours Protection (9:30 AM - 5:30 PM):**
+- Server-side auto-close is disabled during business hours
+- Prevents accidental VPN closure during work time
+- After 5:30 PM, idle detection resumes
+
+**100-Minute Traffic-Based Client Idle Timeout:**
+- OpenVPN client config uses `inactive 6000 10000` (100 minutes, 10KB threshold)
+- Traffic threshold ensures keepalive packets don't reset the timer
+- Only real usage (SSH, HTTP, database queries) resets the 100-minute timer
+
+**Daily Schedule Flow:**
+```
+09:30 - VPN auto-opens (EventBridge trigger)
+09:30-17:30 - Business hours protection (no auto-close)
+17:30 - Server idle detection starts
+17:30 + 100 min = 19:10 - Client auto-disconnects (if no traffic)
+19:10 + 54 min = 20:04 - Server auto-closes endpoint (if no connections)
+```
 
 **Files Updated:**
-- `team_member_setup.sh` - Client config generation
-- `lib/endpoint_management.sh` - Admin config generation
-- `README.md` - Documentation updates
-- `CLAUDE.md` - Technical documentation
+- `lambda/vpn-control/index.ts` - Auto-open handler
+- `lambda/vpn-monitor/index.ts` - Business hours 9:30-17:30
+- `cdklib/lib/vpn-automation-stack.ts` - EventBridge auto-open rule
+- `lambda/shared/slack.ts` - Updated help text
+- `team_member_setup.sh` - Client config (100-min idle)
+- `lib/endpoint_management.sh` - Admin config
 
-**How It Works:**
-- OpenVPN `inactive` directive monitors TUN/TAP interface traffic
-- 10KB threshold filters out keepalive/protocol overhead (~50 bytes each)
-- Only real usage (SSH, HTTP, database queries) resets the 100-minute timer
-- Client automatically disconnects when truly idle
-
-This enhancement ensures reliable idle detection regardless of OpenVPN keepalive behavior.
+**Cost Estimate (4 users, 2 concurrent avg):**
+- Daily: ~$2.07 (endpoint 11hr + connections)
+- Monthly (22 workdays): ~$46 / NT$1,460

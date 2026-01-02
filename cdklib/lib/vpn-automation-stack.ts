@@ -425,6 +425,35 @@ export class VpnAutomationStack extends cdk.Stack {
       });
     });
 
+    // Scheduled VPN Auto-Open Rule (weekdays 9:30 AM Taiwan time = 1:30 AM UTC)
+    const autoOpenRule = new events.Rule(this, 'VpnAutoOpenRule', {
+      schedule: events.Schedule.expression('cron(30 1 ? * MON-FRI *)'),
+      description: `Scheduled VPN auto-open for ${environment} environment (weekdays 9:30 AM Taiwan time)`,
+      enabled: true
+    });
+
+    // Auto-open event payload
+    const autoOpenEventPayload = {
+      source: 'aws.events',
+      'detail-type': 'Scheduled Event',
+      detail: {
+        autoOpen: true,
+        environment: environment,
+        timestamp: '{{aws.events.scheduled-time}}'
+      }
+    };
+
+    // Add vpn-control as target for auto-open rule
+    autoOpenRule.addTarget(new targets.LambdaFunction(vpnControl, {
+      event: events.RuleTargetInput.fromObject(autoOpenEventPayload)
+    }));
+
+    // Grant CloudWatch Events permission to invoke vpn-control for auto-open
+    vpnControl.addPermission('AllowAutoOpenInvoke', {
+      principal: new iam.ServicePrincipal('events.amazonaws.com'),
+      sourceArn: autoOpenRule.ruleArn
+    });
+
     // Epic 4.1: Enhanced CloudWatch log groups with custom retention
     const slackHandlerLogGroup = new logs.LogGroup(this, 'SlackHandlerLogGroup', {
       logGroupName: `/aws/lambda/${slackHandler.functionName}`,
@@ -798,6 +827,16 @@ export class VpnAutomationStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'MonitoringSchedule', {
       value: 'Every 5 minutes',
       description: 'VPN monitoring schedule (CloudWatch Events)'
+    });
+
+    new cdk.CfnOutput(this, 'AutoOpenSchedule', {
+      value: 'Weekdays 9:30 AM Taiwan time (1:30 AM UTC)',
+      description: 'VPN auto-open schedule for workdays'
+    });
+
+    new cdk.CfnOutput(this, 'BusinessHoursProtection', {
+      value: 'Weekdays 9:30 AM - 5:30 PM Taiwan time',
+      description: 'No auto-close during business hours'
     });
 
     new cdk.CfnOutput(this, 'IdleThreshold', {

@@ -184,7 +184,7 @@ function getHelpMessage(): string {
       {
         color: '#764FA5',
         title: '🤖 Auto-Cost Optimization',
-        text: '• Client auto-disconnects after 100 minutes idle (traffic-based)\n• Business hours protection (9 AM - 6 PM)\n• 30-minute cooldown prevents rapid cycling\n• Manual activity detection (15-min grace period)\n• Prevents 24/7 waste: saves ~$1.80/day per environment',
+        text: '• 🌅 Auto-open weekdays 9:30 AM Taiwan time\n• Client auto-disconnects after 100 minutes idle (traffic-based)\n• Business hours protection (9:30 AM - 5:30 PM) - no auto-close\n• After 5:30 PM: auto-close ~154 min after last activity\n• 30-minute cooldown prevents rapid cycling',
         footer: 'VPN Automation System'
       }
     ]

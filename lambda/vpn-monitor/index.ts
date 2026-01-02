@@ -397,38 +397,48 @@ export const handler = async (
 // Helper function to check if current time is during business hours
 function isBusinessHours(): boolean {
   const now = new Date();
-  
+
   // If timezone is specified and not UTC, adjust for it
   let hour: number;
+  let minute: number;
   let dayOfWeek: number;
-  
+
   if (BUSINESS_HOURS_TIMEZONE === 'UTC') {
     hour = now.getUTCHours();
+    minute = now.getUTCMinutes();
     dayOfWeek = now.getUTCDay();
   } else {
     // For simplicity, support common timezones with offset
     const timezoneOffsets: { [key: string]: number } = {
       'EST': -5, 'EDT': -4,  // US Eastern
-      'PST': -8, 'PDT': -7,  // US Pacific  
+      'PST': -8, 'PDT': -7,  // US Pacific
       'CST': -6, 'CDT': -5,  // US Central
       'MST': -7, 'MDT': -6,  // US Mountain
       'GMT': 0, 'UTC': 0,    // GMT/UTC
       'Asia/Taipei': 8,      // Taiwan Standard Time (UTC+8)
       'TST': 8, 'Taiwan': 8  // Alternative Taiwan timezone names
     };
-    
+
     const offset = timezoneOffsets[BUSINESS_HOURS_TIMEZONE] || 0;
     const adjustedTime = new Date(now.getTime() + (offset * 60 * 60 * 1000));
     hour = adjustedTime.getUTCHours();
+    minute = adjustedTime.getUTCMinutes();
     dayOfWeek = adjustedTime.getUTCDay();
   }
-  
-  // Business hours: Monday-Friday, 9 AM - 6 PM in specified timezone
+
+  // Business hours: Monday-Friday, 9:30 AM - 5:30 PM in specified timezone
   const isWeekday = dayOfWeek >= 1 && dayOfWeek <= 5;
-  const isBusinessHour = hour >= 9 && hour < 18;
-  
-  console.log(`Business hours check: ${BUSINESS_HOURS_TIMEZONE} time, hour=${hour}, day=${dayOfWeek}, weekday=${isWeekday}, business_hour=${isBusinessHour}`);
-  
+
+  // Check if after 9:30 AM: hour > 9 OR (hour == 9 AND minute >= 30)
+  const isAfterStart = hour > 9 || (hour === 9 && minute >= 30);
+
+  // Check if before 5:30 PM: hour < 17 OR (hour == 17 AND minute < 30)
+  const isBeforeEnd = hour < 17 || (hour === 17 && minute < 30);
+
+  const isBusinessHour = isAfterStart && isBeforeEnd;
+
+  console.log(`Business hours check: ${BUSINESS_HOURS_TIMEZONE} time, hour=${hour}, minute=${minute}, day=${dayOfWeek}, weekday=${isWeekday}, business_hour=${isBusinessHour}`);
+
   return isWeekday && isBusinessHour;
 }
 

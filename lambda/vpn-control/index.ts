@@ -13,9 +13,16 @@ const ENVIRONMENT = process.env.ENVIRONMENT || 'staging';
 
 // Warming detection helper function
 const isWarmingRequest = (event: any): boolean => {
-  return event.source === 'aws.events' && 
+  return event.source === 'aws.events' &&
          event['detail-type'] === 'Scheduled Event' &&
          event.detail?.warming === true;
+};
+
+// Auto-open detection helper function (for scheduled VPN opening)
+const isAutoOpenRequest = (event: any): boolean => {
+  return event.source === 'aws.events' &&
+         event['detail-type'] === 'Scheduled Event' &&
+         event.detail?.autoOpen === true;
 };
 
 export const handler = async (
@@ -35,6 +42,67 @@ export const handler = async (
         environment: ENVIRONMENT
       })
     };
+  }
+
+  // Handle scheduled auto-open requests (weekday 9:30 AM)
+  if (isAutoOpenRequest(event)) {
+    console.log(`Auto-open request received for ${ENVIRONMENT} environment`);
+    try {
+      // Check current status first
+      const currentStatus = await vpnManager.fetchStatus();
+      if (currentStatus.associated) {
+        console.log(`VPN ${ENVIRONMENT} is already open, skipping auto-open`);
+        return {
+          statusCode: 200,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: `VPN ${ENVIRONMENT} is already open`,
+            status: 'already_open',
+            timestamp: new Date().toISOString()
+          })
+        };
+      }
+
+      // Open the VPN
+      await vpnManager.associateSubnets();
+      const newStatus = await vpnManager.fetchStatus();
+
+      // Send Slack notification
+      await slack.sendSlackNotification({
+        text: `🌅 VPN ${ENVIRONMENT} 自動開啟 | Auto-opened`,
+        attachments: [{
+          color: 'good',
+          fields: [
+            { title: '🕤 Time | 時間', value: new Date().toISOString(), short: true },
+            { title: '📍 Environment | 環境', value: ENVIRONMENT, short: true },
+            { title: '🤖 Trigger | 觸發', value: 'Scheduled auto-open (weekday 9:30 AM)', short: false }
+          ]
+        }]
+      });
+
+      console.log(`VPN ${ENVIRONMENT} auto-opened successfully`);
+      return {
+        statusCode: 200,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: `VPN ${ENVIRONMENT} auto-opened successfully`,
+          status: 'opened',
+          data: newStatus,
+          timestamp: new Date().toISOString()
+        })
+      };
+    } catch (error) {
+      console.error(`Failed to auto-open VPN ${ENVIRONMENT}:`, error);
+      return {
+        statusCode: 500,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: `Failed to auto-open VPN ${ENVIRONMENT}`,
+          error: error instanceof Error ? error.message : 'Unknown error',
+          timestamp: new Date().toISOString()
+        })
+      };
+    }
   }
 
   // Initialize structured logger for Epic 4.1
