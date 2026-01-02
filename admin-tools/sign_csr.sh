@@ -527,8 +527,7 @@ show_completion_instructions() {
         echo -e "   ${CYAN}aws_with_profile s3 cp $output_cert s3://$S3_BUCKET/cert/${CSR_USERNAME}.crt --sse aws:kms${NC}"
         echo -e ""
         echo -e "${BLUE}4. 通知用戶執行恢復命令：${NC}"
-        echo -e "   傳統模式: ${CYAN}./team_member_setup.sh --resume-cert${NC}"
-        echo -e "   零接觸模式: ${CYAN}./team_member_setup.sh --resume${NC}"
+        echo -e "   ${CYAN}./team_member_setup.sh --resume${NC}"
     fi
     
     echo -e ""

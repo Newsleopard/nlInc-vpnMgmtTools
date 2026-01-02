@@ -166,20 +166,14 @@ aws configure list-profiles
 ./admin-tools/aws_vpn_admin.sh --profile prod --environment prod
 ./admin-tools/aws_vpn_admin.sh  # Interactive profile selection
 
-# Team member setup (secure CSR workflow)
-# Zero-Touch Workflow (Recommended)
+# Team member setup (S3-only zero-touch workflow)
+./team_member_setup.sh                    # Initialize VPN setup (default: --init)
 ./team_member_setup.sh --init             # Download config from S3, generate & upload CSR
 ./team_member_setup.sh --resume           # Download signed cert from S3, complete setup
+./team_member_setup.sh --check-permissions # Check S3 access permissions
 
-# Traditional CSR Workflow (Legacy)
-./team_member_setup.sh                    # Generate CSR locally (Phase 1)  
-./team_member_setup.sh --resume-cert      # Resume with local signed cert (Phase 2)
-
-# Override Options for Special Cases
-./team_member_setup.sh --no-s3            # Disable S3 integration
-./team_member_setup.sh --bucket my-bucket # Use custom S3 bucket
-./team_member_setup.sh --ca-path /path    # Use local CA certificate
-./team_member_setup.sh --endpoint-id ID   # Override endpoint ID
+# Optional: Use custom S3 bucket
+./team_member_setup.sh --bucket my-bucket # Use custom S3 bucket name
 
 # Revoke user access
 ./admin-tools/revoke_member_access.sh
@@ -226,9 +220,10 @@ aws configure list-profiles
 ### CSR Processing (Zero-Touch Workflow)
 
 ```bash
-# Sign individual CSR with zero-touch delivery
-./admin-tools/sign_csr.sh --upload-s3 user.csr         # Sign and auto-upload to S3
-./admin-tools/sign_csr.sh -e production user.csr       # Traditional local signing
+# Sign individual CSR with zero-touch delivery (username only - recommended)
+./admin-tools/sign_csr.sh --upload-s3 john             # Just username, auto-download CSR from S3
+./admin-tools/sign_csr.sh --upload-s3 john.csr         # Also works with .csr extension
+./admin-tools/sign_csr.sh -e production john.csr       # Traditional local signing
 
 # Batch process CSRs from S3 (Admin efficiency)
 ./admin-tools/process_csr_batch.sh download -e production    # Download CSRs from S3
@@ -554,8 +549,8 @@ The zero-touch workflow eliminates manual file transfers between admins and team
 
 ### Workflow Steps
 1. **Admin Setup**: `./admin-tools/setup_csr_s3_bucket.sh --publish-assets`
-2. **Team Member Init**: `./team_member_setup.sh --init` 
-3. **Admin Signs**: `./admin-tools/sign_csr.sh --upload-s3 user.csr`
+2. **Team Member Init**: `./team_member_setup.sh --init`
+3. **Admin Signs**: `./admin-tools/sign_csr.sh --upload-s3 username` (just username, no .csr needed)
 4. **Team Member Complete**: `./team_member_setup.sh --resume`
 
 ### S3 Bucket Structure
@@ -619,9 +614,7 @@ The toolkit provides comprehensive user management capabilities for VPN access, 
 #### Common Issues and Solutions:
 
 **Issue**: `AccessDenied` when uploading CSR to S3
-**Solutions**:
-1. **Admin fixes**: `./admin-tools/manage_vpn_users.sh add USERNAME`
-2. **User workaround**: `./team_member_setup.sh --no-s3` (traditional mode)
+**Solution**: Admin must grant S3 permissions: `./admin-tools/manage_vpn_users.sh add USERNAME`
 
 **Issue**: User not found in AWS
 **Solution**: `./admin-tools/manage_vpn_users.sh add USERNAME --create-user`
@@ -745,7 +738,7 @@ aws sts get-caller-identity --profile production
 ### 4. Verify Admin Access
 ```bash
 # Test admin can sign CSRs and upload to S3
-./admin-tools/sign_csr.sh --upload-s3 test.csr
+./admin-tools/sign_csr.sh --upload-s3 testuser    # Just username, no .csr needed
 
 # Test admin can manage users
 ./admin-tools/manage_vpn_users.sh list

@@ -95,12 +95,11 @@ cd nlInc-vpnMgmtTools
 ### 步驟 4：產生 VPN 憑證
 
 ```bash
-# 自動偵測並選擇 AWS profile（推薦）
+# 初始化 VPN 設定（會互動式選擇 AWS profile 和環境）
 ./team_member_setup.sh --init
 
-# 或指定特定環境（可選）
-./team_member_setup.sh --init --profile staging
-./team_member_setup.sh --init --profile prod
+# 或直接執行（預設為 --init 模式）
+./team_member_setup.sh
 ```
 
 腳本執行時會：
@@ -136,11 +135,8 @@ CSR 位置： s3://vpn-csr-exchange-xxx/csr/john.doe.csr
 收到管理員通知憑證已簽署後：
 
 ```bash
-# 自動使用之前選擇的 profile（推薦）
+# 恢復設定並完成 VPN 配置
 ./team_member_setup.sh --resume
-
-# 或指定特定 profile（可選）
-./team_member_setup.sh --resume --profile staging
 ```
 
 **預期結果：**
@@ -364,10 +360,14 @@ mysql -h your-rds-endpoint.region.rds.amazonaws.com -u username -p
 
 #### ❌ "Certificate expired" 或 "Certificate verification failed"
 
-**解決方案**：更新您的憑證
+**解決方案**：重新申請憑證
 
 ```bash
-./team_member_setup.sh --renew --profile staging
+# 重新執行初始化流程
+./team_member_setup.sh --init
+
+# 等待管理員簽署後，執行恢復
+./team_member_setup.sh --resume
 ```
 
 然後重新匯入新的 `.ovpn` 檔案到 VPN 客戶端。
