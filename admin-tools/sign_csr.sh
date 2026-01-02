@@ -141,9 +141,18 @@ show_usage() {
 # 生成環境特定的存儲桶名稱
 get_default_bucket_name() {
     # 使用環境和帳戶ID來確保存儲桶名稱唯一性，與 setup_csr_s3_bucket.sh 保持一致
+    # 注意：bucket 名稱使用短名稱 (prod/staging)，與目錄使用 production 不同
     local env_suffix=""
     if [[ -n "$SELECTED_ENVIRONMENT" ]]; then
-        env_suffix="-${SELECTED_ENVIRONMENT}"
+        # Map canonical environment name to bucket suffix
+        case "$SELECTED_ENVIRONMENT" in
+            "production")
+                env_suffix="-prod"
+                ;;
+            *)
+                env_suffix="-${SELECTED_ENVIRONMENT}"
+                ;;
+        esac
     fi
     
     # 如果有帳戶ID，使用它來確保唯一性
@@ -296,7 +305,8 @@ validate_csr() {
     local subject
     subject=$(openssl req -in "$csr_file" -noout -subject 2>/dev/null)
     local username
-    username=$(echo "$subject" | sed -n 's/.*CN=\([^,]*\).*/\1/p')
+    # Handle both formats: "CN=name" and "CN = name" (with spaces)
+    username=$(echo "$subject" | sed -n 's/.*CN *= *\([^,]*\).*/\1/p')
     
     if [ -z "$username" ]; then
         echo -e "${RED}無法從 CSR 中提取用戶名${NC}"
@@ -315,19 +325,9 @@ find_ca_files() {
     
     echo -e "${BLUE}查找 CA 證書和私鑰...${NC}"
     
-    # 映射環境名稱到實際文件夾名稱
-    local env_folder
-    case "$environment" in
-        "production")
-            env_folder="prod"
-            ;;
-        "staging")
-            env_folder="staging"
-            ;;
-        *)
-            env_folder="$environment"
-            ;;
-    esac
+    # 使用正規化的環境名稱作為文件夾名稱
+    # 文件夾使用完整名稱 (production/staging)，與 S3 bucket 使用短名稱 (prod/staging) 不同
+    local env_folder="$environment"
     
     # 查找 CA 證書
     local ca_cert_paths=(
