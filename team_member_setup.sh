@@ -465,13 +465,13 @@ setup_ca_cert_and_environment() {
         echo -e "${GREEN}✓ 找到 CA 證書檔案: $ca_cert_path${NC}"
     fi
     
-    # 從 CA 證書偵測環境
+    # 從 CA 證書偵測環境（允許失敗，因為可能無法從證書判斷）
     local detected_env
-    detected_env=$(detect_environment_from_ca_cert "$ca_cert_path")
-    
+    detected_env=$(detect_environment_from_ca_cert "$ca_cert_path") || detected_env="unknown"
+
     # 從 AWS profile 偵測環境
     local profile_env
-    profile_env=$(detect_environment_from_profile "$SELECTED_AWS_PROFILE")
+    profile_env=$(detect_environment_from_profile "$SELECTED_AWS_PROFILE") || profile_env="unknown"
     
     echo -e "\\n${BLUE}環境偵測結果:${NC}"
     echo -e "  從 CA 證書偵測: ${detected_env:-無法判斷}"
