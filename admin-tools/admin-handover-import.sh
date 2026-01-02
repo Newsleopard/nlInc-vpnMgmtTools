@@ -258,13 +258,13 @@ test_system_connectivity() {
     echo -e "${YELLOW}🌐 測試系統連線...${NC}"
 
     # 測試 AWS VPN 端點
-    for env in "staging" "prod"; do
+    for env in "staging" "production"; do
         config_file="$PROJECT_ROOT/configs/$env"
         if [ "$env" = "staging" ]; then
             config_file="$config_file/staging.env"
-            profile="staging"
+            profile="default"
         else
-            config_file="$config_file/prod.env"
+            config_file="$config_file/production.env"
             profile="prod"
         fi
 
@@ -307,12 +307,12 @@ show_system_summary() {
 
     # 環境設定狀態
     echo -e "${BLUE}📋 環境設定狀態：${NC}"
-    for env in "staging" "prod"; do
+    for env in "staging" "production"; do
         config_file="$PROJECT_ROOT/configs/$env"
         if [ "$env" = "staging" ]; then
             config_file="$config_file/staging.env"
         else
-            config_file="$config_file/prod.env"
+            config_file="$config_file/production.env"
         fi
 
         if [ -f "$config_file" ]; then
@@ -325,7 +325,7 @@ show_system_summary() {
 
     # 憑證狀態
     echo -e "${BLUE}🔒 憑證狀態：${NC}"
-    for env in "staging" "prod"; do
+    for env in "staging" "production"; do
         ca_key="$PROJECT_ROOT/certs/$env/pki/private/ca.key"
         ca_cert="$PROJECT_ROOT/certs/$env/pki/ca.crt"
 

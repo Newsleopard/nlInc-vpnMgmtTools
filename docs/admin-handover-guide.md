@@ -99,7 +99,7 @@ certs/staging/pki/
 ├── issued/server.crt        # Staging 伺服器憑證
 └── private/server.key       # Staging 伺服器私鑰 🔒
 
-certs/prod/pki/
+certs/production/pki/
 ├── ca.crt                   # Production CA 憑證
 ├── private/ca.key          # Production CA 私鑰 🔒
 ├── issued/server.crt       # Production 伺服器憑證
@@ -112,8 +112,8 @@ configs/staging/
 ├── staging.env             # Staging 環境設定 🔒
 └── vpn_endpoint.conf       # Staging VPN 端點資訊
 
-configs/prod/
-├── prod.env               # Production 環境設定 🔒
+configs/production/
+├── production.env         # Production 環境設定 🔒
 └── vpn_endpoint.conf      # Production VPN 端點資訊
 ```
 
@@ -248,5 +248,5 @@ iam-policies/              # IAM 政策檔案
 - 如有任何疑慮，請立即聯繫技術支援
 - 完成交接後請儘速刪除所有臨時檔案
 
-**最後更新**：2025-01-14
-**版本**：1.0
+**最後更新**：2026-01-02
+**版本**：1.1
