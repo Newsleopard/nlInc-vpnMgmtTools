@@ -869,11 +869,13 @@ update_s3_bucket_name() {
 # 檢查 S3 存儲桶訪問權限
 check_s3_access() {
     echo -e "${BLUE}檢查 S3 存儲桶訪問權限...${NC}"
-    
+
     # 更新存儲桶名稱
     update_s3_bucket_name
-    
-    if ! aws s3 ls "s3://$S3_BUCKET/public/" --profile "$SELECTED_AWS_PROFILE" &>/dev/null; then
+
+    # 使用 head-object 檢查存取權限（只需要 s3:GetObject，不需要 s3:ListBucket）
+    # 這對於只有有限 IAM 權限的團隊成員更友好
+    if ! aws s3api head-object --bucket "$S3_BUCKET" --key "public/ca.crt" --profile "$SELECTED_AWS_PROFILE" &>/dev/null; then
         echo -e "${RED}無法訪問 S3 存儲桶: $S3_BUCKET${NC}"
         echo -e "${YELLOW}請檢查：${NC}"
         echo -e "  • 存儲桶是否存在"
@@ -881,7 +883,7 @@ check_s3_access() {
         echo -e "  • AWS profile 是否有效"
         return 1
     fi
-    
+
     echo -e "${GREEN}✓ S3 存儲桶訪問正常${NC}"
     return 0
 }
@@ -1155,17 +1157,17 @@ zero_touch_init_mode() {
     # 檢查必要工具
     check_team_prerequisites
 
-    # 檢查 S3 訪問（如果未停用）
+    # 初始化環境和 AWS 配置（必須先執行以設定 SELECTED_AWS_PROFILE）
+    echo -e "\n${YELLOW}[1/6] 初始化環境和 AWS 配置...${NC}"
+    init_environment_and_aws
+
+    # 檢查 S3 訪問（在 AWS profile 設定後執行）
     if [ "$DISABLE_S3" != true ]; then
         if ! check_s3_access; then
             echo -e "${YELLOW}S3 訪問失敗，切換到本地模式${NC}"
             DISABLE_S3=true
         fi
     fi
-
-    # 初始化環境和 AWS 配置
-    echo -e "\n${YELLOW}[1/6] 初始化環境和 AWS 配置...${NC}"
-    init_environment_and_aws
 
     # 零接觸模式：從 S3 下載 CA 證書（如果 S3 未被停用）
     if [ "$DISABLE_S3" != true ]; then
