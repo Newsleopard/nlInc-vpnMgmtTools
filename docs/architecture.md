@@ -241,25 +241,29 @@ function verifySlackSignature(
 
 ### 自動關閉演算法
 
-#### 54 分鐘最佳化
+#### 100 分鐘流量偵測最佳化
 ```
-AWS 計費：按小時收費，最少 1 小時
+雙層閒置偵測機制：
 
-傳統方式 (60 分鐘闾值)：
-最壞情況 = 59 分鐘閒置 + 5 分鐘偵測 = 64 分鐘
-結果：跨入第 2 個計費小時 ❌
+Client 端 (OpenVPN config)：
+inactive 6000 10000  # 100 分鐘, 10KB 流量閾值
+→ Keepalive 封包 (~50 bytes) 不會重設計時器
+→ 只有實際使用 (SSH, HTTP 等) 才會重設
+→ 100 分鐘無實際流量自動斷線 ✅
 
-最佳化 (54 分鐘闾值)：
-最壞情況 = 54 分鐘閒置 + 5 分鐘偵測 = 59 分鐘
-結果：保持在第 1 個計費小時內 ✅
-
-節省：100% 防止意外的第 2 小時費用
+Server 端 (Lambda Monitor)：
+→ 每 5 分鐘檢查連線狀態
+→ 無人連線時自動關閉 VPN 端點
 ```
 
 #### 實作
-```typescript
+```bash
+# OpenVPN client config (client-side)
+inactive 6000 10000  # 100 minutes, 10KB threshold
+
+# Lambda monitor (server-side)
 async function checkIdleStatus(): Promise<boolean> {
-  const IDLE_MINUTES = 54;
+  const IDLE_MINUTES = 54;  // Server-side for endpoint management
   const lastActivity = await getLastActivity();
   const idleTime = (Date.now() - lastActivity) / 60000;
 

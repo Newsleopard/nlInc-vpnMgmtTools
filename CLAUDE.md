@@ -74,7 +74,7 @@ aws sts get-caller-identity --profile production  # Verify production profile
 - **Modular Library Design**: Core functionality split across `lib/` directory with specialized libraries
 - **Profile Selector Library**: `lib/profile_selector.sh` provides intelligent profile detection and interactive selection
 - **Enhanced Security**: Cross-account validation prevents wrong-environment operations, with enhanced production confirmations
-- **Cost Optimization**: 54-minute idle threshold with 5-minute monitoring interval guarantees VPN closure within first billing hour
+- **Cost Optimization**: 100-minute client-side idle timeout with traffic threshold ensures automatic disconnection when VPN is not actively used
 
 ## Environment Configuration
 
@@ -256,16 +256,16 @@ The `team_member_setup.sh` script automatically configures advanced DNS, routing
 
 #### Cost Optimization Configuration
 
-**Automatic Idle Timeout (54 minutes):**
+**Automatic Idle Timeout (100 minutes):**
 ```
-inactive 3240  # 54 minutes in seconds
+inactive 6000 10000  # 100 minutes, 10KB traffic threshold
 ```
 
 **Benefits:**
-- **Cost Savings**: Automatically disconnects idle VPN sessions at 54 minutes, perfectly aligned with AWS hourly billing
-- **Mathematical Guarantee**: 54 minutes + 5-minute detection delay = 59 minutes maximum (within first billing hour)
-- **User Experience**: Sufficient time for active work sessions while preventing forgotten connections
-- **AWS Billing Optimization**: Prevents $0.10/hour charges from extending into second billing hour
+- **Cost Savings**: Automatically disconnects idle VPN sessions after 100 minutes of inactivity
+- **Traffic-Based Detection**: 10KB threshold ensures keepalive packets don't reset the timer
+- **User Experience**: Generous timeout for work sessions while preventing forgotten connections
+- **Smart Detection**: Only actual data traffic (SSH, HTTP, etc.) resets the timer, not protocol overhead
 
 #### DNS Configuration Features
 
@@ -875,23 +875,23 @@ This serverless application uses a best-practice approach to configuration, sepa
     └── production_api_url  # Staging-to-production routing (staging only)
 ```
 
-### Cost Optimization: 54-Minute Idle Threshold (Updated June 2025)
+### Cost Optimization: Dual-Layer Idle Detection
 
-The VPN monitoring system has been optimized for maximum cost efficiency with AWS's hourly billing model:
+The VPN system uses a dual-layer idle detection approach for cost optimization:
 
 **Key Optimization Details:**
-- **Idle Threshold**: Updated from 60 minutes to **54 minutes** for optimal cost savings
-- **Monitoring Interval**: VPN Monitor Lambda runs every 5 minutes via CloudWatch Events
-- **Mathematical Guarantee**: 54 minutes + 5-minute detection delay = 59 minutes maximum (within first billing hour)
-- **Cost Impact**: Prevents potential $0.10 charges from crossing billing hour boundaries
+- **Client-Side Idle Timeout**: 100 minutes with 10KB traffic threshold in OpenVPN config
+- **Server-Side Monitoring**: VPN Monitor Lambda runs every 5 minutes via CloudWatch Events
+- **Traffic-Based Detection**: Only actual data traffic resets the timer (keepalive packets ignored)
+- **Cost Impact**: Prevents charges from forgotten VPN connections
 
 **Implementation Locations:**
-```typescript
-// Lambda source code (fallback defaults)
-const IDLE_MINUTES = Number(process.env.IDLE_MINUTES || 54);
+```bash
+# OpenVPN client config (primary - client-side)
+inactive 6000 10000  # 100 minutes, 10KB threshold
 
-// CDK deployment (primary configuration)
-IDLE_MINUTES: '54'
+# Lambda source code (server-side monitoring)
+const IDLE_MINUTES = Number(process.env.IDLE_MINUTES || 54);
 
 // SSM Parameter Store (runtime configuration)
 /vpn/{environment}/cost/optimization_config: { "idleTimeoutMinutes": 54 }
@@ -919,28 +919,25 @@ The Slack App's Request URL for the `/vpn` command is highly stable due to the s
 1. Run `./scripts/deploy.sh status` to get the new `staging` API Gateway URL.
 2. Go to your Slack App settings (`https://api.slack.com/apps/.../slash-commands`), edit the `/vpn` command, and paste the new URL into the **Request URL** field.
 
-## Recent Updates (June 2025)
+## Recent Updates (January 2026)
 
-### Cost Optimization Enhancement
+### Client-Side Idle Timeout Enhancement
 
-**54-Minute Idle Threshold Implementation:**
-- Updated all Lambda source code from 60-minute to 54-minute default idle threshold
-- Maintained consistency across CDK deployment, SSM parameters, and source code
-- Updated test files and documentation to reflect the optimization
-- Provides mathematical guarantee of cost savings with AWS hourly billing model
+**100-Minute Traffic-Based Idle Timeout:**
+- Updated OpenVPN client config to use `inactive 6000 10000` (100 minutes, 10KB threshold)
+- Traffic threshold ensures keepalive packets don't prevent idle detection
+- Provides reliable automatic disconnection for forgotten VPN sessions
 
 **Files Updated:**
-- `lambda/vpn-monitor/index.ts` - Main monitoring logic
-- `lambda/shared/stateStore.ts` - Default configuration values
-- `lambda/shared/slack.ts` - Help text and notifications
-- All test files in `lambda/__tests__/` - Test configurations
+- `team_member_setup.sh` - Client config generation
+- `lib/endpoint_management.sh` - Admin config generation
 - `README.md` - Documentation updates
 - `CLAUDE.md` - Technical documentation
 
-**Impact:**
-- 100% guarantee of VPN closure within first billing hour
-- Eliminates risk of $0.10 additional charges from timing edge cases
-- Maintains user experience while maximizing cost efficiency
-- Annual savings potential: $684-$1,368 across dual environments
+**How It Works:**
+- OpenVPN `inactive` directive monitors TUN/TAP interface traffic
+- 10KB threshold filters out keepalive/protocol overhead (~50 bytes each)
+- Only real usage (SSH, HTTP, database queries) resets the 100-minute timer
+- Client automatically disconnects when truly idle
 
-This optimization builds on the existing cost management system while providing mathematical certainty for cost control in AWS's hourly billing model.
+This enhancement ensures reliable idle detection regardless of OpenVPN keepalive behavior.

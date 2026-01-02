@@ -84,7 +84,7 @@ We're open-sourcing this complete, production-tested solution to help other team
 
 ### 💰 Tailored for Small Teams
 
-🔹 **Automatic cost optimization** - Auto-shutdown after 54 minutes idle, save $900+ annually  
+🔹 **Automatic cost optimization** - Auto-shutdown after 100 minutes idle (traffic-based detection)  
 🔹 **Zero maintenance burden** - Set up once, use long-term  
 🔹 **Dual environment management** - Complete staging/production isolation  
 🔹 **Comprehensive documentation** - Detailed guides from setup to usage  
@@ -106,20 +106,19 @@ We're open-sourcing this complete, production-tested solution to help other team
 
 ## 🚀 Key Features & Innovations
 
-### 🎯 54-Minute Cost Optimization Algorithm
+### 🎯 100-Minute Traffic-Based Idle Detection
 
-**Mathematical Guarantee for Cost Savings:**
+**Smart Cost Optimization:**
 
-- **Idle Threshold**: 54 minutes (mathematically perfect for AWS hourly billing)
-- **Detection Interval**: 5-minute CloudWatch Events
-- **Maximum Runtime**: 54 + 5 = 59 minutes (within first billing hour)
-- **Annual Savings**: $900-1,200 (57-74% reduction vs 24/7 operation)
+- **Client-Side Idle Timeout**: 100 minutes with 10KB traffic threshold
+- **Traffic-Based Detection**: Keepalive packets don't reset the timer
+- **Server-Side Monitoring**: 5-minute CloudWatch Events for endpoint management
+- **Reliable Detection**: Only actual usage (SSH, HTTP, etc.) resets the timer
 
-```typescript
-// Cost optimization logic
-const IDLE_MINUTES = 54; // Optimized for AWS billing
-const MONITOR_INTERVAL = 5; // Minutes between checks
-// Guarantees closure within first billing hour
+```bash
+# OpenVPN client config
+inactive 6000 10000  # 100 minutes, 10KB threshold
+# Keepalive packets (~50 bytes) won't prevent idle detection
 ```
 
 ### 🔄 Zero-Touch Certificate Workflow

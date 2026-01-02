@@ -1859,8 +1859,9 @@ setup_vpn_client() {
     {
         echo ""
         echo "# === 成本優化配置 ==="
-        echo "# 54 分鐘（3240 秒）閒置自動斷線，優化 AWS 計費"
-        echo "inactive 3240"
+        echo "# 100 分鐘（6000 秒）無實際流量自動斷線"
+        echo "# 10000 bytes 閾值確保 keepalive 封包不會重設計時器"
+        echo "inactive 6000 10000"
         echo ""
         echo "# === AWS 域名分割 DNS 配置 ==="
         echo "# 確保 AWS 內部服務域名通過 VPC DNS 解析"
