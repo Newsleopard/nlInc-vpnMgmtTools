@@ -476,9 +476,16 @@ setup_ca_cert_and_environment() {
     echo -e "\\n${BLUE}環境偵測結果:${NC}"
     echo -e "  從 CA 證書偵測: ${detected_env:-無法判斷}"
     echo -e "  從 AWS profile 偵測: ${profile_env:-無法判斷}"
-    
+
+    # 決定最終偵測結果：優先使用 CA 證書，其次使用 profile
+    local final_detected_env="$detected_env"
+    if [ "$detected_env" = "unknown" ] && [ "$profile_env" != "unknown" ]; then
+        final_detected_env="$profile_env"
+        echo -e "${BLUE}使用 AWS profile 偵測結果: $profile_env${NC}"
+    fi
+
     # 環境確認
-    TARGET_ENVIRONMENT=$(confirm_environment_selection "$detected_env" "$ca_cert_path" "$SELECTED_AWS_PROFILE")
+    TARGET_ENVIRONMENT=$(confirm_environment_selection "$final_detected_env" "$ca_cert_path" "$SELECTED_AWS_PROFILE")
     
     if [ -z "$TARGET_ENVIRONMENT" ]; then
         echo -e "${RED}環境選擇失敗${NC}"
