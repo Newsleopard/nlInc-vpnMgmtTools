@@ -513,22 +513,10 @@ setup_vpn_endpoint_info() {
     echo -e "\\n${YELLOW}[3/6] 設定 VPN 端點資訊...${NC}"
     
     local endpoint_id=""
-    
+
     # 首先嘗試從 vpn_endpoint.conf 載入端點 ID
-    local env_folder
-    case "$TARGET_ENVIRONMENT" in
-        "production")
-            env_folder="prod"
-            ;;
-        "staging")
-            env_folder="staging"
-            ;;
-        *)
-            env_folder="$TARGET_ENVIRONMENT"
-            ;;
-    esac
-    
-    local endpoint_config="$TEAM_SCRIPT_DIR/configs/$env_folder/vpn_endpoint.conf"
+    # TARGET_ENVIRONMENT 現在統一使用 "prod" 或 "staging"
+    local endpoint_config="$TEAM_SCRIPT_DIR/configs/$TARGET_ENVIRONMENT/vpn_endpoint.conf"
     if [ -f "$endpoint_config" ]; then
         echo -e "${BLUE}從配置檔案載入 VPN 端點資訊...${NC}"
         # 載入端點配置檔案
@@ -1289,21 +1277,8 @@ zero_touch_resume_mode() {
     fi
     
     # 載入 VPN 端點配置（如果存在）
-    # 映射邏輯環境名稱到實際文件夾名稱
-    local env_folder
-    case "$TARGET_ENVIRONMENT" in
-        "production")
-            env_folder="prod"
-            ;;
-        "staging")
-            env_folder="staging"
-            ;;
-        *)
-            env_folder="$TARGET_ENVIRONMENT"
-            ;;
-    esac
-    
-    local endpoint_config="$TEAM_SCRIPT_DIR/configs/$env_folder/vpn_endpoint.conf"
+    # TARGET_ENVIRONMENT 現在統一使用 "prod" 或 "staging"
+    local endpoint_config="$TEAM_SCRIPT_DIR/configs/$TARGET_ENVIRONMENT/vpn_endpoint.conf"
     if [ -f "$endpoint_config" ]; then
         source "$endpoint_config"
         echo -e "${GREEN}✓ 已載入 VPN 端點配置${NC}"

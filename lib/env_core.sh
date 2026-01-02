@@ -91,11 +91,12 @@ detect_available_aws_profiles() {
 # 根據 AWS profile 推測環境
 detect_environment_from_profile() {
     local selected_profile="$1"
-    
+
     # 根據 profile 名稱推測環境
+    # 使用 "prod" 而非 "production" 以匹配現有目錄結構 (certs/prod/, configs/prod/)
     case "$selected_profile" in
         *prod*|*production*)
-            echo "production"
+            echo "prod"
             ;;
         *stg*|*staging*)
             echo "staging"
@@ -111,35 +112,36 @@ detect_environment_from_profile() {
 }
 
 # 從 CA 證書路徑或內容判斷環境
+# 使用 "prod" 而非 "production" 以匹配現有目錄結構
 detect_environment_from_ca_cert() {
     local ca_cert_path="$1"
-    
+
     if [ ! -f "$ca_cert_path" ]; then
         echo "unknown"
         return 1
     fi
-    
+
     # 從檔案路徑判斷
     if [[ "$ca_cert_path" == *"staging"* ]] || [[ "$ca_cert_path" == *"stg"* ]]; then
         echo "staging"
         return 0
     elif [[ "$ca_cert_path" == *"production"* ]] || [[ "$ca_cert_path" == *"prod"* ]]; then
-        echo "production"
+        echo "prod"
         return 0
     fi
-    
+
     # 從證書內容判斷（檢查 CN 或 O 欄位）
     local cert_subject
     cert_subject=$(openssl x509 -in "$ca_cert_path" -noout -subject 2>/dev/null)
-    
+
     if [[ "$cert_subject" == *"staging"* ]] || [[ "$cert_subject" == *"Staging"* ]]; then
         echo "staging"
         return 0
     elif [[ "$cert_subject" == *"production"* ]] || [[ "$cert_subject" == *"Production"* ]]; then
-        echo "production"
+        echo "prod"
         return 0
     fi
-    
+
     # 無法判斷
     echo "unknown"
     return 1
@@ -171,8 +173,8 @@ confirm_environment_selection() {
     # 手動選擇環境
     echo -e "\n${YELLOW}請手動選擇目標環境：${NC}" >&2
     echo "1) staging - $(get_env_display_name "staging")" >&2
-    echo "2) production - $(get_env_display_name "production")" >&2
-    
+    echo "2) prod - $(get_env_display_name "prod")" >&2
+
     local choice
     while true; do
         read -p "請選擇 (1/2): " choice
@@ -182,7 +184,7 @@ confirm_environment_selection() {
                 return 0
                 ;;
             2)
-                echo "production"
+                echo "prod"
                 return 0
                 ;;
             *)
