@@ -184,7 +184,7 @@ function getHelpMessage(): string {
       {
         color: '#764FA5',
         title: '🤖 Auto-Cost Optimization',
-        text: '• Idle VPNs auto-close after 54 minutes (configurable)\n• Business hours protection (9 AM - 6 PM)\n• 30-minute cooldown prevents rapid cycling\n• Manual activity detection (15-min grace period)\n• Prevents 24/7 waste: saves ~$1.80/day per environment',
+        text: '• Client auto-disconnects after 100 minutes idle (traffic-based)\n• Business hours protection (9 AM - 6 PM)\n• 30-minute cooldown prevents rapid cycling\n• Manual activity detection (15-min grace period)\n• Prevents 24/7 waste: saves ~$1.80/day per environment',
         footer: 'VPN Automation System'
       }
     ]

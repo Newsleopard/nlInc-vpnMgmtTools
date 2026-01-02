@@ -273,7 +273,7 @@ mysql -h your-rds-endpoint.region.rds.amazonaws.com -u username -p
 ```
 
 > 💡 **節省成本**：VPN 端點開啟時會產生費用。不使用時請關閉端點。
-> 系統會在靜置 54 分鐘後自動關閉端點。
+> 系統會在靜置 100 分鐘（無實際流量）後自動斷線。
 
 ---
 
@@ -430,7 +430,7 @@ mysql -h your-rds-endpoint.region.rds.amazonaws.com -u username -p
 
 系統自動管理成本：
 
-- ⏱️ 在靜置 **54 分鐘**後自動關閉 VPN 端點
+- ⏱️ 在靜置 **100 分鐘**（無實際流量）後自動斷線
 - 📊 追蹤使用情況和節省金額
 - 💰 防止 24/7 VPN 費用累積
 
