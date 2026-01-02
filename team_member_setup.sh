@@ -1151,21 +1151,51 @@ select_environment_from_config() {
 # 零接觸初始化模式
 zero_touch_init_mode() {
     echo -e "\n${YELLOW}[零接觸模式] 初始化 VPN 設定...${NC}"
-    
+
     # 檢查必要工具
     check_team_prerequisites
-    
+
+    # 檢查 S3 訪問（如果未停用）
+    if [ "$DISABLE_S3" != true ]; then
+        if ! check_s3_access; then
+            echo -e "${YELLOW}S3 訪問失敗，切換到本地模式${NC}"
+            DISABLE_S3=true
+        fi
+    fi
+
     # 初始化環境和 AWS 配置
     echo -e "\n${YELLOW}[1/6] 初始化環境和 AWS 配置...${NC}"
     init_environment_and_aws
-    
+
+    # 零接觸模式：從 S3 下載 CA 證書（如果 S3 未被停用）
+    if [ "$DISABLE_S3" != true ]; then
+        echo -e "\n${BLUE}從 S3 下載 CA 證書...${NC}"
+        if ! download_ca_from_s3; then
+            echo -e "${YELLOW}⚠ 無法從 S3 下載 CA 證書，將改為手動輸入${NC}"
+        fi
+    fi
+
     # 設置 CA 證書和環境
     echo -e "\n${YELLOW}[2/6] 設置 CA 證書和環境...${NC}"
     setup_ca_cert_and_environment
-    
-    # 設置 VPN 端點信息
+
+    # 零接觸模式：從 S3 下載端點配置（如果 S3 未被停用且沒有指定 ENDPOINT_ID）
     echo -e "\n${YELLOW}[3/6] 設置 VPN 端點信息...${NC}"
-    setup_vpn_endpoint_info
+    if [ "$DISABLE_S3" != true ] && [ -z "$ENDPOINT_ID" ]; then
+        if download_endpoints_from_s3; then
+            if select_environment_from_config; then
+                echo -e "${GREEN}✓ 使用 S3 端點配置${NC}"
+            else
+                echo -e "${YELLOW}端點配置解析失敗，手動設置${NC}"
+                setup_vpn_endpoint_info
+            fi
+        else
+            echo -e "${YELLOW}端點配置下載失敗，手動設置${NC}"
+            setup_vpn_endpoint_info
+        fi
+    else
+        setup_vpn_endpoint_info
+    fi
     
     # 設置用戶信息
     echo -e "\n${YELLOW}[4/6] 設定用戶資訊...${NC}"
