@@ -518,7 +518,7 @@ setup_vpn_endpoint_info() {
     local env_folder
     case "$TARGET_ENVIRONMENT" in
         "production")
-            env_folder="prod"
+            env_folder="production"
             ;;
         "staging")
             env_folder="staging"
@@ -527,7 +527,7 @@ setup_vpn_endpoint_info() {
             env_folder="$TARGET_ENVIRONMENT"
             ;;
     esac
-    
+
     local endpoint_config="$TEAM_SCRIPT_DIR/configs/$env_folder/vpn_endpoint.conf"
     if [ -f "$endpoint_config" ]; then
         echo -e "${BLUE}從配置檔案載入 VPN 端點資訊...${NC}"
@@ -1233,7 +1233,7 @@ zero_touch_resume_mode() {
     local config_envs=()
     
     # 搜尋所有環境的配置文件
-    for env_folder in prod staging; do
+    for env_folder in production staging; do
         local potential_config="$TEAM_SCRIPT_DIR/configs/$env_folder/user_vpn_config.env"
         if [ -f "$potential_config" ]; then
             found_configs+=("$potential_config")
@@ -1307,7 +1307,7 @@ zero_touch_resume_mode() {
     local env_folder
     case "$TARGET_ENVIRONMENT" in
         "production")
-            env_folder="prod"
+            env_folder="production"
             ;;
         "staging")
             env_folder="staging"
@@ -1316,7 +1316,7 @@ zero_touch_resume_mode() {
             env_folder="$TARGET_ENVIRONMENT"
             ;;
     esac
-    
+
     local endpoint_config="$TEAM_SCRIPT_DIR/configs/$env_folder/vpn_endpoint.conf"
     if [ -f "$endpoint_config" ]; then
         source "$endpoint_config"
