@@ -508,74 +508,6 @@ setup_ca_cert_and_environment() {
     log_team_setup_message "環境設定完成: $TARGET_ENVIRONMENT, CA證書: $ca_cert_path"
 }
 
-# 獲取 VPN 端點資訊
-setup_vpn_endpoint_info() {
-    echo -e "\\n${YELLOW}[3/6] 設定 VPN 端點資訊...${NC}"
-    
-    local endpoint_id=""
-    
-    # 首先嘗試從 vpn_endpoint.conf 載入端點 ID
-    local env_folder
-    case "$TARGET_ENVIRONMENT" in
-        "production")
-            env_folder="production"
-            ;;
-        "staging")
-            env_folder="staging"
-            ;;
-        *)
-            env_folder="$TARGET_ENVIRONMENT"
-            ;;
-    esac
-
-    local endpoint_config="$TEAM_SCRIPT_DIR/configs/$env_folder/vpn_endpoint.conf"
-    if [ -f "$endpoint_config" ]; then
-        echo -e "${BLUE}從配置檔案載入 VPN 端點資訊...${NC}"
-        # 載入端點配置檔案
-        source "$endpoint_config"
-        endpoint_id="$ENDPOINT_ID"
-        echo -e "${GREEN}✓ 從配置檔案載入端點 ID: $endpoint_id${NC}"
-    fi
-    
-    # 如果沒有從配置檔案載入到端點 ID，要求用戶輸入
-    if [ -z "$endpoint_id" ]; then
-        echo -e "${BLUE}請向管理員獲取以下資訊：${NC}"
-        if ! read_secure_input "請輸入 Client VPN 端點 ID: " endpoint_id "validate_endpoint_id"; then
-            echo -e "${RED}VPN 端點 ID 驗證失敗${NC}"
-            return 1
-        fi
-    fi
-    
-    # 驗證端點 ID
-    echo -e "${BLUE}驗證 VPN 端點...${NC}"
-    echo -e "${BLUE}使用參數: --client-vpn-endpoint-ids $endpoint_id --region $AWS_REGION --profile $AWS_PROFILE${NC}"
-    local endpoint_check
-    endpoint_check=$(aws ec2 describe-client-vpn-endpoints --client-vpn-endpoint-ids "$endpoint_id" --region "$AWS_REGION" --profile "$AWS_PROFILE" 2>/dev/null || echo "not_found")
-    
-    if [[ "$endpoint_check" == "not_found" ]]; then
-        echo -e "${RED}無法找到指定的 VPN 端點。請確認 ID 是否正確，以及您是否有權限訪問。${NC}"
-        log_team_setup_message "VPN 端點驗證失敗: $endpoint_id"
-        return 1
-    fi
-    
-    echo -e "${GREEN}✓ VPN 端點驗證成功${NC}"
-    
-    # 保存配置
-    cat > "$USER_CONFIG_FILE" << EOF
-AWS_REGION=$AWS_REGION
-AWS_PROFILE=$SELECTED_AWS_PROFILE
-ENDPOINT_ID=$endpoint_id
-TARGET_ENVIRONMENT=$TARGET_ENVIRONMENT
-USERNAME=""
-CLIENT_CERT_ARN=""
-EOF
-    
-    # 設置配置文件權限
-    chmod 600 "$USER_CONFIG_FILE"
-    
-    log_team_setup_message "VPN 端點配置完成: $endpoint_id"
-}
-
 # 設定用戶資訊
 setup_user_info() {
     echo -e "\\n${YELLOW}[4/6] 設定用戶資訊...${NC}"
@@ -1154,7 +1086,7 @@ select_environment_from_config() {
         fi
     fi
 
-    # 創建配置文件（與 setup_vpn_endpoint_info 保持一致）
+    # 創建配置文件
     cat > "$USER_CONFIG_FILE" << EOF
 AWS_REGION=$AWS_REGION
 AWS_PROFILE=$SELECTED_AWS_PROFILE
@@ -1181,55 +1113,50 @@ zero_touch_init_mode() {
     check_team_prerequisites
 
     # 初始化環境和 AWS 配置（必須先執行以設定 SELECTED_AWS_PROFILE）
-    echo -e "\n${YELLOW}[1/6] 初始化環境和 AWS 配置...${NC}"
+    echo -e "\n${YELLOW}[1/5] 初始化環境和 AWS 配置...${NC}"
     init_environment_and_aws
 
-    # 檢查 S3 訪問（在 AWS profile 設定後執行）
-    if [ "$DISABLE_S3" != true ]; then
-        if ! check_s3_access; then
-            echo -e "${YELLOW}S3 訪問失敗，切換到本地模式${NC}"
-            DISABLE_S3=true
-        fi
+    # 檢查 S3 訪問（必須成功）
+    if ! check_s3_access; then
+        echo -e "${RED}S3 訪問失敗，無法繼續${NC}"
+        echo -e "${YELLOW}請確認：${NC}"
+        echo -e "  • AWS profile 配置正確"
+        echo -e "  • 已被管理員授予 S3 存取權限"
+        echo -e "  • 網路連線正常"
+        echo -e "\n${BLUE}如需檢查權限，請執行: $0 --check-permissions${NC}"
+        return 1
     fi
 
-    # 零接觸模式：從 S3 下載 CA 證書（如果 S3 未被停用）
-    if [ "$DISABLE_S3" != true ]; then
-        echo -e "\n${BLUE}從 S3 下載 CA 證書...${NC}"
-        if ! download_ca_from_s3; then
-            echo -e "${YELLOW}⚠ 無法從 S3 下載 CA 證書，將改為手動輸入${NC}"
-        fi
+    # 從 S3 下載 CA 證書
+    echo -e "\n${YELLOW}[2/5] 從 S3 下載 CA 證書...${NC}"
+    if ! download_ca_from_s3; then
+        echo -e "${RED}無法從 S3 下載 CA 證書，請聯繫管理員${NC}"
+        return 1
     fi
 
     # 設置 CA 證書和環境
-    echo -e "\n${YELLOW}[2/6] 設置 CA 證書和環境...${NC}"
     setup_ca_cert_and_environment
 
-    # 零接觸模式：從 S3 下載端點配置（如果 S3 未被停用且沒有指定 ENDPOINT_ID）
-    echo -e "\n${YELLOW}[3/6] 設置 VPN 端點信息...${NC}"
-    if [ "$DISABLE_S3" != true ] && [ -z "$ENDPOINT_ID" ]; then
-        if download_endpoints_from_s3; then
-            if select_environment_from_config; then
-                echo -e "${GREEN}✓ 使用 S3 端點配置${NC}"
-            else
-                echo -e "${YELLOW}端點配置解析失敗，手動設置${NC}"
-                setup_vpn_endpoint_info
-            fi
-        else
-            echo -e "${YELLOW}端點配置下載失敗，手動設置${NC}"
-            setup_vpn_endpoint_info
-        fi
-    else
-        setup_vpn_endpoint_info
+    # 從 S3 下載端點配置
+    echo -e "\n${YELLOW}[3/5] 設置 VPN 端點信息...${NC}"
+    if ! download_endpoints_from_s3; then
+        echo -e "${RED}端點配置下載失敗，請聯繫管理員${NC}"
+        return 1
     fi
-    
+    if ! select_environment_from_config; then
+        echo -e "${RED}端點配置解析失敗，請聯繫管理員${NC}"
+        return 1
+    fi
+    echo -e "${GREEN}✓ 使用 S3 端點配置${NC}"
+
     # 設置用戶信息
-    echo -e "\n${YELLOW}[4/6] 設定用戶資訊...${NC}"
+    echo -e "\n${YELLOW}[4/5] 設定用戶資訊...${NC}"
     setup_user_info
-    
+
     # 生成 CSR 用於零接觸模式
-    echo -e "\n${YELLOW}[5/6] 生成 CSR 用於零接觸交換...${NC}"
+    echo -e "\n${YELLOW}[5/5] 生成 CSR 用於零接觸交換...${NC}"
     generate_csr_for_zero_touch
-    
+
     return 0
 }
 
@@ -1338,33 +1265,30 @@ zero_touch_resume_mode() {
     else
         echo -e "${YELLOW}警告: 找不到 VPN 端點配置文件: $endpoint_config${NC}"
     fi
-    
-    # 檢查 S3 訪問（如果啟用）
-    if [ "$DISABLE_S3" = false ]; then
-        if ! check_s3_access; then
-            echo -e "${YELLOW}S3 訪問失敗，切換到本地模式${NC}"
-            DISABLE_S3=true
-        fi
+
+    # 檢查 S3 訪問（必須成功）
+    echo -e "${BLUE}檢查 S3 存儲桶訪問權限...${NC}"
+    if ! check_s3_access; then
+        echo -e "${RED}S3 訪問失敗，無法繼續${NC}"
+        echo -e "${YELLOW}請確認：${NC}"
+        echo -e "  • AWS profile 配置正確"
+        echo -e "  • 已被管理員授予 S3 存取權限"
+        echo -e "\n${BLUE}如需檢查權限，請執行: $0 --check-permissions${NC}"
+        return 1
     fi
-    
-    # 下載簽署證書
+
+    # 從 S3 下載簽署證書
+    echo -e "${BLUE}從 S3 下載證書...${NC}"
     local cert_file="$USER_CERT_DIR/${USERNAME}.crt"
-    if [ "$DISABLE_S3" = false ]; then
-        if download_certificate_from_s3 "$USERNAME" "$cert_file"; then
-            echo -e "${GREEN}✓ 使用 S3 下載的證書${NC}"
-        else
-            echo -e "${YELLOW}證書下載失敗，檢查本地文件${NC}"
-            if [ ! -f "$cert_file" ]; then
-                echo -e "${RED}找不到簽署證書，請等待管理員簽署或檢查文件位置${NC}"
-                return 1
-            fi
-        fi
-    else
-        if [ ! -f "$cert_file" ]; then
-            echo -e "${RED}找不到簽署證書: $cert_file${NC}"
-            return 1
-        fi
+    if ! download_certificate_from_s3 "$USERNAME" "$cert_file"; then
+        echo -e "${RED}證書下載失敗${NC}"
+        echo -e "${YELLOW}可能原因：${NC}"
+        echo -e "  • 管理員尚未簽署您的 CSR"
+        echo -e "  • 證書尚未上傳到 S3"
+        echo -e "\n${BLUE}請聯繫管理員確認證書是否已簽署${NC}"
+        return 1
     fi
+    echo -e "${GREEN}✓ 證書已從 S3 下載${NC}"
     
     # 驗證證書
     if ! resume_with_signed_certificate; then
@@ -1444,16 +1368,19 @@ generate_csr_for_zero_touch() {
     fi
     chmod 644 "${USERNAME}.csr"
     echo -e "${GREEN}✓ CSR 已生成: ${USERNAME}.csr${NC}"
-    
-    # 上傳 CSR 到 S3（如果啟用）
-    if [ "$DISABLE_S3" = false ]; then
-        if upload_csr_to_s3 "$cert_dir/${USERNAME}.csr" "$USERNAME"; then
-            echo -e "${GREEN}✓ CSR 已上傳到 S3，等待管理員簽署${NC}"
-        else
-            echo -e "${YELLOW}CSR 上傳失敗，請手動提供給管理員${NC}"
-        fi
+
+    # 上傳 CSR 到 S3（必須成功）
+    if ! upload_csr_to_s3 "$cert_dir/${USERNAME}.csr" "$USERNAME"; then
+        echo -e "${RED}CSR 上傳失敗${NC}"
+        echo -e "${YELLOW}請確認：${NC}"
+        echo -e "  • AWS profile 配置正確"
+        echo -e "  • 已被管理員授予 S3 存取權限"
+        echo -e "\n${BLUE}如需檢查權限，請執行: $0 --check-permissions${NC}"
+        cd "$original_dir" || true
+        return 1
     fi
-    
+    echo -e "${GREEN}✓ CSR 已上傳到 S3，等待管理員簽署${NC}"
+
     # 顯示零接觸等待指示
     show_zero_touch_instructions "$cert_dir/${USERNAME}.csr"
     
@@ -1468,50 +1395,31 @@ generate_csr_for_zero_touch() {
 # 顯示零接觸等待指示
 show_zero_touch_instructions() {
     local csr_file="$1"
-    
+
     echo -e "\n${GREEN}=============================================${NC}"
     echo -e "${GREEN}       零接觸 CSR 生成完成！       ${NC}"
     echo -e "${GREEN}=============================================${NC}"
     echo -e ""
     echo -e "${CYAN}📋 下一步操作：${NC}"
     echo -e ""
-    
-    if [ "$DISABLE_S3" = false ]; then
-        echo -e "${GREEN}✅ CSR 已自動上傳到 S3 存儲桶${NC}"
-        echo -e "   位置: ${YELLOW}s3://$S3_BUCKET/csr/${USERNAME}.csr${NC}"
-        echo -e ""
-        echo -e "${BLUE}🔔 通知管理員${NC}"
-        echo -e "   告知管理員您的 CSR 已準備好簽署"
-        echo -e "   用戶名: ${CYAN}$USERNAME${NC}"
-        echo -e "   環境: ${CYAN}$(get_env_display_name "$TARGET_ENVIRONMENT")${NC}"
-        echo -e ""
-        echo -e "${BLUE}⏳ 等待簽署完成${NC}"
-        echo -e "   管理員簽署後，證書將自動上傳到:"
-        echo -e "   ${YELLOW}s3://$S3_BUCKET/cert/${USERNAME}.crt${NC}"
-        echo -e ""
-        echo -e "${BLUE}🎯 完成設定${NC}"
-        echo -e "   當管理員告知證書已簽署後，執行:"
-        echo -e "   ${CYAN}./team_member_setup.sh --resume${NC}"
-    else
-        echo -e "${YELLOW}⚠ S3 功能已停用${NC}"
-        echo -e ""
-        echo -e "${BLUE}📧 手動提交 CSR${NC}"
-        echo -e "   請將以下 CSR 文件提供給管理員:"
-        echo -e "   ${YELLOW}$csr_file${NC}"
-        echo -e ""
-        echo -e "${BLUE}📬 等待證書${NC}"
-        echo -e "   管理員簽署後，請將證書放置在:"
-        echo -e "   ${YELLOW}$USER_CERT_DIR/${USERNAME}.crt${NC}"
-        echo -e ""
-        echo -e "${BLUE}🎯 完成設定${NC}"
-        echo -e "   收到證書後，執行:"
-        echo -e "   ${CYAN}./team_member_setup.sh --resume${NC}"
-    fi
-    
+    echo -e "${GREEN}✅ CSR 已自動上傳到 S3 存儲桶${NC}"
+    echo -e "   位置: ${YELLOW}s3://$S3_BUCKET/csr/${USERNAME}.csr${NC}"
+    echo -e ""
+    echo -e "${BLUE}🔔 通知管理員${NC}"
+    echo -e "   告知管理員您的 CSR 已準備好簽署"
+    echo -e "   用戶名: ${CYAN}$USERNAME${NC}"
+    echo -e "   環境: ${CYAN}$(get_env_display_name "$TARGET_ENVIRONMENT")${NC}"
+    echo -e ""
+    echo -e "${BLUE}⏳ 等待簽署完成${NC}"
+    echo -e "   管理員簽署後，證書將自動上傳到:"
+    echo -e "   ${YELLOW}s3://$S3_BUCKET/cert/${USERNAME}.crt${NC}"
+    echo -e ""
+    echo -e "${BLUE}🎯 完成設定${NC}"
+    echo -e "   當管理員告知證書已簽署後，執行:"
+    echo -e "   ${CYAN}./team_member_setup.sh --resume${NC}"
     echo -e ""
     echo -e "${YELLOW}💡 提示：${NC}"
     echo -e "• 請保留此 CSR 文件直到設定完成"
-    echo -e "• 零接觸模式可自動處理大部分配置"
     echo -e "• 如有問題，請聯繫系統管理員"
     echo -e ""
     echo -e "${BLUE}設定暫停，等待證書簽署...${NC}"
@@ -1640,46 +1548,14 @@ main() {
     if [ "$INIT_MODE" = true ]; then
         # 零接觸初始化模式
         show_welcome
-        check_team_prerequisites
-        echo -e "${BLUE}DEBUG: 準備調用 zero_touch_init_mode${NC}"
-        log_team_setup_message "DEBUG: 準備調用 zero_touch_init_mode"
         zero_touch_init_mode
-        echo -e "${BLUE}DEBUG: zero_touch_init_mode 已完成${NC}"
-        log_team_setup_message "DEBUG: zero_touch_init_mode 已完成"
     elif [ "$RESUME_MODE" = true ]; then
         # 零接觸恢復模式
         show_welcome
-        check_team_prerequisites
         zero_touch_resume_mode
-    elif [ "$RESUME_CERT_MODE" = true ]; then
-        # 傳統恢復模式（向後相容）
-        show_welcome
-        check_team_prerequisites
-        init_environment_and_aws
-        setup_ca_cert_and_environment
-        setup_vpn_endpoint_info
-        setup_user_info
-        generate_client_certificate
-        import_certificate
-        setup_vpn_client
-        show_connection_instructions
-        test_connection
     elif [ "$CHECK_PERMISSIONS_MODE" = true ]; then
         # 權限檢查模式
         check_permissions_mode
-    else
-        # 傳統完整模式（向後相容）
-        show_welcome
-        check_team_prerequisites
-        init_environment_and_aws
-        setup_ca_cert_and_environment
-        setup_vpn_endpoint_info
-        setup_user_info
-        generate_client_certificate
-        import_certificate
-        setup_vpn_client
-        show_connection_instructions
-        test_connection
     fi
     
     if [ -n "$LOG_FILE" ]; then
@@ -1766,16 +1642,12 @@ check_permissions_mode() {
 
 # 解析命令行參數
 parse_arguments() {
-    RESUME_CERT_MODE=false
     INIT_MODE=false
     RESUME_MODE=false
     CHECK_PERMISSIONS_MODE=false
     S3_BUCKET="vpn-csr-exchange"  # 將在運行時更新為環境特定名稱
-    DISABLE_S3=false
-    CA_PATH=""
-    ENDPOINT_ID=""
     ACCOUNT_ID=""  # 將在運行時設置
-    
+
     while [[ $# -gt 0 ]]; do
         case $1 in
             --init)
@@ -1786,28 +1658,12 @@ parse_arguments() {
                 RESUME_MODE=true
                 shift
                 ;;
-            --resume-cert)
-                RESUME_CERT_MODE=true
-                shift
-                ;;
             --check-permissions)
                 CHECK_PERMISSIONS_MODE=true
                 shift
                 ;;
             --bucket)
                 S3_BUCKET="$2"
-                shift 2
-                ;;
-            --no-s3)
-                DISABLE_S3=true
-                shift
-                ;;
-            --ca-path)
-                CA_PATH="$2"
-                shift 2
-                ;;
-            --endpoint-id)
-                ENDPOINT_ID="$2"
                 shift 2
                 ;;
             -h|--help)
@@ -1821,20 +1677,19 @@ parse_arguments() {
                 ;;
         esac
     done
-    
+
     # 檢查互斥模式
     local mode_count=0
     [ "$INIT_MODE" = true ] && ((mode_count++))
     [ "$RESUME_MODE" = true ] && ((mode_count++))
-    [ "$RESUME_CERT_MODE" = true ] && ((mode_count++))
     [ "$CHECK_PERMISSIONS_MODE" = true ] && ((mode_count++))
-    
+
     if [ $mode_count -gt 1 ]; then
         echo -e "${RED}錯誤: 不能同時使用多個模式${NC}"
         show_usage
         exit 1
     fi
-    
+
     # 如果沒有指定模式，預設為 init 模式（零接觸工作流程）
     if [ $mode_count -eq 0 ]; then
         INIT_MODE=true
@@ -1848,16 +1703,10 @@ show_usage() {
     echo "工作模式:"
     echo "  --init           初始化模式：從 S3 下載配置，生成 CSR 並上傳 (預設)"
     echo "  --resume         恢復模式：從 S3 下載簽署證書並完成 VPN 設定"
-    echo "  --resume-cert    舊版恢復模式：使用本地證書繼續設定 (向後相容)"
     echo "  --check-permissions  檢查當前用戶的 S3 權限狀態"
     echo ""
     echo "S3 配置選項:"
-    echo "  --bucket NAME    使用指定的 S3 存儲桶 (預設: vpn-csr-exchange)"
-    echo "  --no-s3          停用 S3 整合，使用本地檔案"
-    echo ""
-    echo "覆蓋選項 (用於測試和特殊情況):"
-    echo "  --ca-path PATH   使用指定的 CA 證書文件，而非從 S3 下載"
-    echo "  --endpoint-id ID 使用指定的端點 ID，而非從 S3 下載的配置"
+    echo "  --bucket NAME    使用指定的 S3 存儲桶 (預設: vpn-csr-exchange-{env}-{account})"
     echo ""
     echo "其他選項:"
     echo "  -h, --help       顯示此幫助訊息"
@@ -1867,8 +1716,6 @@ show_usage() {
     echo "  $0 --init        # 明確指定初始化模式"
     echo "  $0 --resume      # 恢復模式 (管理員簽署證書後)"
     echo "  $0 --check-permissions  # 檢查 S3 權限配置"
-    echo "  $0 --no-s3       # 停用 S3，使用傳統本地檔案模式"
-    echo "  $0 --bucket my-bucket --init  # 使用自定義 S3 存儲桶"
     echo ""
     echo "工作流程:"
     echo "  1. 執行 '$0 --init' 生成 CSR 並上傳到 S3"
@@ -2144,13 +1991,12 @@ main() {
     ZERO_TOUCH_INIT_MODE=false
     ZERO_TOUCH_RESUME_MODE=false
     CHECK_PERMISSIONS_MODE=false
-    DISABLE_S3=false
     VERBOSE=false
-    
+
     # S3 相關變數
     S3_BUCKET="vpn-csr-exchange"  # 將在運行時更新為環境特定名稱
     SELECTED_AWS_PROFILE=""
-    
+
     # 解析命令行參數
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -2170,10 +2016,6 @@ main() {
                 S3_BUCKET="$2"
                 shift 2
                 ;;
-            --no-s3)
-                DISABLE_S3=true
-                shift
-                ;;
             -v|--verbose)
                 VERBOSE=true
                 shift
@@ -2189,10 +2031,15 @@ main() {
                 ;;
         esac
     done
-    
+
     # 設置全域變數
     TEAM_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    
+
+    # 如果沒有指定模式，預設為 init 模式
+    if [ "$ZERO_TOUCH_INIT_MODE" = false ] && [ "$ZERO_TOUCH_RESUME_MODE" = false ] && [ "$CHECK_PERMISSIONS_MODE" = false ]; then
+        ZERO_TOUCH_INIT_MODE=true
+    fi
+
     # 執行對應模式
     if [ "$ZERO_TOUCH_INIT_MODE" = true ]; then
         # 零接觸初始化模式
@@ -2203,19 +2050,6 @@ main() {
     elif [ "$CHECK_PERMISSIONS_MODE" = true ]; then
         # 權限檢查模式
         check_permissions_mode
-    else
-        # 傳統完整模式（向後相容）
-        show_welcome
-        check_team_prerequisites
-        init_environment_and_aws
-        setup_ca_cert_and_environment
-        setup_vpn_endpoint_info
-        setup_user_info
-        generate_client_certificate
-        import_certificate
-        setup_vpn_client
-        show_connection_instructions
-        test_connection
     fi
     
     if [ -n "$LOG_FILE" ]; then
