@@ -1153,9 +1153,23 @@ select_environment_from_config() {
             echo -e "${YELLOW}⚠ CA 證書移動失敗，但繼續執行${NC}"
         fi
     fi
-    
+
+    # 創建配置文件（與 setup_vpn_endpoint_info 保持一致）
+    cat > "$USER_CONFIG_FILE" << EOF
+AWS_REGION=$AWS_REGION
+AWS_PROFILE=$SELECTED_AWS_PROFILE
+ENDPOINT_ID=$ENDPOINT_ID
+TARGET_ENVIRONMENT=$TARGET_ENVIRONMENT
+USERNAME=""
+CLIENT_CERT_ARN=""
+EOF
+
+    # 設置配置文件權限
+    chmod 600 "$USER_CONFIG_FILE"
+    echo -e "${GREEN}✓ 配置文件已創建: $USER_CONFIG_FILE${NC}"
+
     log_team_setup_message "環境設定完成: $TARGET_ENVIRONMENT, 端點: $ENDPOINT_ID"
-    
+
     return 0
 }
 
