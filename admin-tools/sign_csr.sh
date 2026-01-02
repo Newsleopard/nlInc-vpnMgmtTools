@@ -12,11 +12,11 @@ PARENT_DIR="$(dirname "$SCRIPT_DIR")"
 for arg in "$@"; do
     if [[ "$arg" == "-h" || "$arg" == "--help" ]]; then
         cat << 'EOF'
-用法: $0 [選項] <csr-file> [days-valid] [output-dir]
+用法: $0 [選項] <username|csr-file> [days-valid] [output-dir]
 
 參數:
+  username      使用者名稱（使用 --upload-s3 時自動從 S3 下載 CSR）
   csr-file      要簽署的 CSR 文件路徑或檔名
-                (使用 --upload-s3 時，可自動從 S3 下載 CSR)
   days-valid    證書有效天數 (預設: 365)
   output-dir    輸出目錄 (預設: CSR 文件所在目錄)
 
@@ -30,7 +30,9 @@ for arg in "$@"; do
   -h, --help           顯示此幫助訊息
 
 範例:
-  $0 user.csr                           # 簽署 CSR，預設 365 天
+  $0 --upload-s3 john                  # 零接觸模式：僅需使用者名稱（推薦）
+  $0 --upload-s3 john.csr              # 零接觸模式：亦支援完整檔名
+  $0 user.csr                           # 簽署本地 CSR，預設 365 天
   $0 user.csr 180                      # 簽署 CSR，180 天有效期
   $0 user.csr 365 /output/path         # 指定輸出目錄
 
@@ -95,11 +97,11 @@ NC='\033[0m' # No Color
 
 # 使用說明
 show_usage() {
-    echo "用法: $0 [選項] <csr-file> [days-valid] [output-dir]"
+    echo "用法: $0 [選項] <username|csr-file> [days-valid] [output-dir]"
     echo ""
     echo "參數:"
+    echo "  username      使用者名稱（使用 --upload-s3 時自動從 S3 下載 CSR）"
     echo "  csr-file      要簽署的 CSR 文件路徑或檔名"
-    echo "                (使用 --upload-s3 時，可自動從 S3 下載 CSR)"
     echo "  days-valid    證書有效天數 (預設: 365)"
     echo "  output-dir    輸出目錄 (預設: CSR 文件所在目錄)"
     echo ""
@@ -113,21 +115,23 @@ show_usage() {
     echo "  -h, --help           顯示此幫助訊息"
     echo ""
     echo "範例:"
-    echo "  $0 user.csr                           # 簽署 CSR，預設 365 天"
-    echo "  $0 user.csr 180                      # 簽署 CSR，180 天有效期"
-    echo "  $0 user.csr 365 /output/path         # 指定輸出目錄"
-    echo "  $0 -e production user.csr            # 指定 production 環境"
-    echo "  $0 --upload-s3 user.csr              # 簽署並上傳到 S3"
-    echo "  $0 -b my-bucket --upload-s3 user.csr # 使用自定義 S3 存儲桶"
+    echo "  $0 --upload-s3 john                    # 零接觸模式：僅需使用者名稱（推薦）"
+    echo "  $0 --upload-s3 john.csr                # 零接觸模式：亦支援完整檔名"
+    echo "  $0 user.csr                            # 簽署本地 CSR，預設 365 天"
+    echo "  $0 user.csr 180                        # 簽署 CSR，180 天有效期"
+    echo "  $0 user.csr 365 /output/path           # 指定輸出目錄"
+    echo "  $0 -e production user.csr              # 指定 production 環境"
+    echo "  $0 -b my-bucket --upload-s3 john       # 使用自定義 S3 存儲桶"
     echo ""
-    echo "零接觸工作流程:"
-    echo "  $0 --upload-s3 -e production user.csr  # 簽署並自動上傳供用戶下載"
+    echo "零接觸工作流程（推薦）:"
+    echo "  $0 --upload-s3 john                    # 僅需使用者名稱，自動下載 CSR 並上傳簽署後的證書"
+    echo "  $0 --upload-s3 -e production john      # 指定 production 環境"
     echo ""
     echo "注意:"
     echo "• 此工具需要 CA 私鑰存在於環境配置目錄中"
     echo "• 簽署的證書將放置在指定的輸出目錄"
     echo "• 使用 --upload-s3 可實現零接觸證書交付"
-    echo "• 使用 --upload-s3 時，如本地無 CSR 文件會自動從 S3 下載"
+    echo "• 使用 --upload-s3 時，可只提供使用者名稱（自動從 S3 下載 CSR）"
     echo "• 所有操作都會記錄到日誌文件中"
 }
 
@@ -604,14 +608,28 @@ main() {
     
     # 檢查必需參數
     if [ -z "$csr_file" ]; then
-        echo -e "${RED}錯誤: 必須指定 CSR 文件${NC}"
+        echo -e "${RED}錯誤: 必須指定使用者名稱或 CSR 文件${NC}"
         show_usage
         exit 1
     fi
-    
+
+    # 零接觸模式：如果提供的是使用者名稱（不含 .csr），自動轉換為 CSR 檔名
+    # 這允許管理員使用 `sign_csr.sh --upload-s3 john` 而非 `sign_csr.sh --upload-s3 john.csr`
+    local original_input="$csr_file"
+    if [ "$UPLOAD_S3" = true ] && [[ ! "$csr_file" =~ \.csr$ ]] && [[ ! "$csr_file" =~ / ]]; then
+        # 輸入是純使用者名稱（不含路徑和 .csr 副檔名）
+        echo -e "${BLUE}零接觸模式：將使用者名稱 '$csr_file' 轉換為 CSR 檔名${NC}"
+        csr_file="${csr_file}.csr"
+    fi
+
     # 設置預設輸出目錄
     if [ -z "$output_dir" ]; then
-        output_dir="$(dirname "$csr_file")"
+        # 如果輸入是純使用者名稱，使用當前目錄作為輸出
+        if [[ ! "$original_input" =~ / ]]; then
+            output_dir="$(pwd)"
+        else
+            output_dir="$(dirname "$csr_file")"
+        fi
     fi
     
     # 使用當前環境或指定的環境
@@ -620,10 +638,16 @@ main() {
         echo -e "${BLUE}使用當前環境: $environment${NC}"
     fi
     
+    # 正規化環境名稱（prod -> production）
+    if [[ "$environment" == "prod" ]]; then
+        environment="production"
+        echo -e "${BLUE}正規化環境名稱: prod -> production${NC}"
+    fi
+
     # 驗證環境有效性
     if [[ ! "$environment" =~ ^(staging|production)$ ]]; then
         echo -e "${RED}無效的環境: $environment${NC}"
-        echo -e "${YELLOW}有效環境: staging, production${NC}"
+        echo -e "${YELLOW}有效環境: staging, production, prod${NC}"
         exit 1
     fi
     
