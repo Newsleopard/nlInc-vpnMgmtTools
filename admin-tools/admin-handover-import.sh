@@ -223,12 +223,12 @@ verify_certificates() {
     fi
 
     # 檢查 Production 環境憑證
-    if [ -f "$PROJECT_ROOT/certs/prod/pki/private/ca.key" ] && [ -f "$PROJECT_ROOT/certs/prod/pki/ca.crt" ]; then
+    if [ -f "$PROJECT_ROOT/certs/production/pki/private/ca.key" ] && [ -f "$PROJECT_ROOT/certs/production/pki/ca.crt" ]; then
         echo -n "驗證 Production CA 憑證... "
-        if openssl x509 -in "$PROJECT_ROOT/certs/prod/pki/ca.crt" -noout -text &>/dev/null; then
+        if openssl x509 -in "$PROJECT_ROOT/certs/production/pki/ca.crt" -noout -text &>/dev/null; then
             # 檢查憑證和私鑰是否匹配
-            cert_modulus=$(openssl x509 -in "$PROJECT_ROOT/certs/prod/pki/ca.crt" -noout -modulus 2>/dev/null)
-            key_modulus=$(openssl rsa -in "$PROJECT_ROOT/certs/prod/pki/private/ca.key" -noout -modulus 2>/dev/null)
+            cert_modulus=$(openssl x509 -in "$PROJECT_ROOT/certs/production/pki/ca.crt" -noout -modulus 2>/dev/null)
+            key_modulus=$(openssl rsa -in "$PROJECT_ROOT/certs/production/pki/private/ca.key" -noout -modulus 2>/dev/null)
 
             if [ "$cert_modulus" = "$key_modulus" ]; then
                 echo -e "${GREEN}✅ 有效${NC}"

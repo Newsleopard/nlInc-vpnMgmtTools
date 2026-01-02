@@ -1081,32 +1081,46 @@ select_environment_from_config() {
     fi
     
     # 如果只有一個環境，自動選擇
+    local selected_env
     if [ ${#env_array[@]} -eq 1 ]; then
-        TARGET_ENVIRONMENT="${env_array[0]}"
-        echo -e "${GREEN}✓ 自動選擇環境: $TARGET_ENVIRONMENT${NC}"
+        selected_env="${env_array[0]}"
+        echo -e "${GREEN}✓ 自動選擇環境: $selected_env${NC}"
     else
         # 用戶選擇環境
         local choice
         while true; do
             read -p "請選擇環境 (1-${#env_array[@]}): " choice
             if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#env_array[@]} ]; then
-                TARGET_ENVIRONMENT="${env_array[$((choice-1))]}"
-                echo -e "${GREEN}✓ 選擇環境: $TARGET_ENVIRONMENT${NC}"
+                selected_env="${env_array[$((choice-1))]}"
+                echo -e "${GREEN}✓ 選擇環境: $selected_env${NC}"
                 break
             else
                 echo -e "${RED}無效選擇，請輸入 1-${#env_array[@]}${NC}"
             fi
         done
     fi
+
+    # 標準化環境名稱：prod -> production
+    case "$selected_env" in
+        prod|production)
+            TARGET_ENVIRONMENT="production"
+            ;;
+        staging|stg)
+            TARGET_ENVIRONMENT="staging"
+            ;;
+        *)
+            TARGET_ENVIRONMENT="$selected_env"
+            ;;
+    esac
     
-    # 提取環境配置
+    # 提取環境配置 (使用原始 JSON key)
     if command -v jq >/dev/null 2>&1; then
-        ENDPOINT_ID=$(jq -r ".[\"$TARGET_ENVIRONMENT\"].endpoint_id" "$ENDPOINTS_CONFIG_FILE" 2>/dev/null)
-        AWS_REGION=$(jq -r ".[\"$TARGET_ENVIRONMENT\"].region" "$ENDPOINTS_CONFIG_FILE" 2>/dev/null)
+        ENDPOINT_ID=$(jq -r ".[\"$selected_env\"].endpoint_id" "$ENDPOINTS_CONFIG_FILE" 2>/dev/null)
+        AWS_REGION=$(jq -r ".[\"$selected_env\"].region" "$ENDPOINTS_CONFIG_FILE" 2>/dev/null)
     else
         # 備用解析方法
         local env_section
-        env_section=$(sed -n "/\"$TARGET_ENVIRONMENT\"[[:space:]]*:/,/}/p" "$ENDPOINTS_CONFIG_FILE")
+        env_section=$(sed -n "/\"$selected_env\"[[:space:]]*:/,/}/p" "$ENDPOINTS_CONFIG_FILE")
         ENDPOINT_ID=$(echo "$env_section" | grep -o '"endpoint_id"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"endpoint_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
         AWS_REGION=$(echo "$env_section" | grep -o '"region"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"region"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
     fi

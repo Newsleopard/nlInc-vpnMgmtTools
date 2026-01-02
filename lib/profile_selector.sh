@@ -68,13 +68,13 @@ detect_available_profiles() {
 map_profile_to_environment() {
     local profile="$1"
     local profile_lower=$(echo "$profile" | tr '[:upper:]' '[:lower:]')
-    
+
     case "$profile_lower" in
         *staging*|*dev*|*test*)
             echo "staging"
             ;;
         *prod*|*production*)
-            echo "prod"  # Map to "prod" to match directory structure
+            echo "production"  # Use canonical name "production"
             ;;
         default)
             echo "staging"  # Default fallback

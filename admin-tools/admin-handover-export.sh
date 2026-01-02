@@ -56,11 +56,11 @@ collect_files() {
         echo -e "${YELLOW}⚠️  未找到 Staging 環境 CA 憑證${NC}"
     fi
 
-    if [ -f "$PROJECT_ROOT/certs/prod/pki/private/ca.key" ]; then
-        HANDOVER_FILES+=("certs/prod/pki/private/ca.key")
-        HANDOVER_FILES+=("certs/prod/pki/ca.crt")
-        HANDOVER_FILES+=("certs/prod/pki/private/server.key")
-        HANDOVER_FILES+=("certs/prod/pki/issued/server.crt")
+    if [ -f "$PROJECT_ROOT/certs/production/pki/private/ca.key" ]; then
+        HANDOVER_FILES+=("certs/production/pki/private/ca.key")
+        HANDOVER_FILES+=("certs/production/pki/ca.crt")
+        HANDOVER_FILES+=("certs/production/pki/private/server.key")
+        HANDOVER_FILES+=("certs/production/pki/issued/server.crt")
         echo -e "${GREEN}✅ 找到 Production 環境 CA 憑證${NC}"
     else
         echo -e "${YELLOW}⚠️  未找到 Production 環境 CA 憑證${NC}"
@@ -75,9 +75,9 @@ collect_files() {
         echo -e "${YELLOW}⚠️  未找到 Staging 環境設定檔${NC}"
     fi
 
-    if [ -f "$PROJECT_ROOT/configs/prod/prod.env" ]; then
-        HANDOVER_FILES+=("configs/prod/prod.env")
-        HANDOVER_FILES+=("configs/prod/vpn_endpoint.conf")
+    if [ -f "$PROJECT_ROOT/configs/production/production.env" ]; then
+        HANDOVER_FILES+=("configs/production/production.env")
+        HANDOVER_FILES+=("configs/production/vpn_endpoint.conf")
         echo -e "${GREEN}✅ 找到 Production 環境設定檔${NC}"
     else
         echo -e "${YELLOW}⚠️  未找到 Production 環境設定檔${NC}"
