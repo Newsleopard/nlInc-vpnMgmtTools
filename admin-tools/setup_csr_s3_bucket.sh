@@ -780,8 +780,8 @@ show_completion_info() {
         echo -e "   ${CYAN}./team_member_setup.sh --resume${NC}  # 下載證書並完成設置"
         echo -e ""
         echo -e "${BLUE}4. 管理員簽署流程：${NC}"
-        echo -e "   ${CYAN}./admin-tools/sign_csr.sh --upload-s3 -e production user.csr${NC}"
-        echo -e "   ${CYAN}# 或使用批次處理工具${NC}"
+        echo -e "   ${CYAN}./admin-tools/sign_csr.sh --upload-s3 -e production username${NC}"
+        echo -e "   ${CYAN}# 僅需使用者名稱，無需 .csr 副檔名${NC}"
     else
         echo -e "${BLUE}2. 發布公用資產 (零接觸工作流程)：${NC}"
         echo -e "   ${CYAN}./admin-tools/setup_csr_s3_bucket.sh --publish-assets${NC}"

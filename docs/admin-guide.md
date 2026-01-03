@@ -150,8 +150,8 @@ aws sts get-caller-identity --profile production
 #### 步驟 2：處理憑證請求
 當使用者提交 CSR 時：
 ```bash
-# 簽署憑證並上傳至 S3
-./admin-tools/sign_csr.sh --upload-s3 username.csr --profile staging
+# 簽署憑證並上傳至 S3（僅需使用者名稱，無需 .csr 副檔名）
+./admin-tools/sign_csr.sh --upload-s3 username --profile staging
 ```
 
 #### 步驟 3：驗證存取
@@ -229,8 +229,8 @@ stateDiagram-v2
 
 #### 個別簽署
 ```bash
-# 下載並簽署 CSR
-./admin-tools/sign_csr.sh username.csr --upload-s3 --profile staging
+# 簽署 CSR（僅需使用者名稱，自動從 S3 下載 CSR）
+./admin-tools/sign_csr.sh --upload-s3 username --profile staging
 ```
 
 #### 批次處理
@@ -455,7 +455,7 @@ aws ssm put-parameter \
 |------|---------|-------|
 | `aws_vpn_admin.sh` | 主要管理控制台 | `./admin-tools/aws_vpn_admin.sh --profile staging` |
 | `manage_vpn_users.sh` | 使用者管理 | `./admin-tools/manage_vpn_users.sh add user` |
-| `sign_csr.sh` | 憑證簽署 | `./admin-tools/sign_csr.sh --upload-s3 user.csr` |
+| `sign_csr.sh` | 憑證簽署 | `./admin-tools/sign_csr.sh --upload-s3 username` |
 | `setup_csr_s3_bucket.sh` | S3 設定 | `./admin-tools/setup_csr_s3_bucket.sh --publish-assets` |
 | `run-vpn-analysis.sh` | 成本分析 | `./admin-tools/run-vpn-analysis.sh --profile staging` |
 
