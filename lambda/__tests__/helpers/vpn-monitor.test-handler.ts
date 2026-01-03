@@ -44,14 +44,19 @@ async function publishMetric(metricName: string, value: number, unit: string = '
   }
 }
 
-// Check if current time is during business hours (Monday-Friday, 9 AM - 6 PM UTC)
+// Check if current time is during business hours (Monday-Friday, 9:30 AM - 5:30 PM Taiwan time)
 function isBusinessHours(): boolean {
   const now = new Date();
   const day = now.getUTCDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
   const hour = now.getUTCHours();
-  
-  // Monday (1) to Friday (5), 9 AM to 6 PM UTC
-  return day >= 1 && day <= 5 && hour >= 9 && hour < 18;
+  const minute = now.getUTCMinutes();
+
+  // Monday (1) to Friday (5), 9:30 AM to 5:30 PM UTC
+  const isWeekday = day >= 1 && day <= 5;
+  const isAfterStart = hour > 9 || (hour === 9 && minute >= 30);
+  const isBeforeEnd = hour < 17 || (hour === 17 && minute < 30);
+
+  return isWeekday && isAfterStart && isBeforeEnd;
 }
 
 // Calculate idle time in minutes

@@ -870,7 +870,7 @@ This serverless application uses a best-practice approach to configuration, sepa
 │   ├── endpoint_id         # Client VPN endpoint ID
 │   └── region              # AWS region
 ├── cost/
-│   └── optimization_config # { "idleTimeoutMinutes": 54 }
+│   └── optimization_config # { "idleTimeoutMinutes": 30 }
 └── cross_account/
     └── production_api_url  # Staging-to-production routing (staging only)
 ```
@@ -891,10 +891,10 @@ The VPN system uses a dual-layer idle detection approach for cost optimization:
 inactive 6000 10000  # 100 minutes, 10KB threshold
 
 # Lambda source code (server-side monitoring)
-const IDLE_MINUTES = Number(process.env.IDLE_MINUTES || 54);
+const IDLE_MINUTES = Number(process.env.IDLE_MINUTES || 30);
 
 // SSM Parameter Store (runtime configuration)
-/vpn/{environment}/cost/optimization_config: { "idleTimeoutMinutes": 54 }
+/vpn/{environment}/cost/optimization_config: { "idleTimeoutMinutes": 30 }
 ```
 
 **Configuration Hierarchy:**
@@ -921,23 +921,104 @@ The Slack App's Request URL for the `/vpn` command is highly stable due to the s
 
 ## Recent Updates (January 2026)
 
-### Client-Side Idle Timeout Enhancement
+### Automated VPN Schedule & Enhanced Idle Detection
 
-**100-Minute Traffic-Based Idle Timeout:**
-- Updated OpenVPN client config to use `inactive 6000 10000` (100 minutes, 10KB threshold)
-- Traffic threshold ensures keepalive packets don't prevent idle detection
-- Provides reliable automatic disconnection for forgotten VPN sessions
+**Weekday Auto-Open (10:00 AM Taiwan Time):**
+- VPN endpoint automatically opens at 10:00 AM on weekdays (Mon-Fri)
+- EventBridge scheduled rule triggers vpn-control Lambda
+- Slack notification sent when VPN auto-opens
+- No manual intervention needed for daily VPN startup
+
+**Business Hours Protection (10:00 AM - 5:00 PM):**
+- Server-side auto-close is disabled during business hours
+- Prevents accidental VPN closure during work time
+- After 5:00 PM, idle detection resumes
+
+**Weekend Soft-Close (Friday 8:00 PM):**
+- VPN automatically closes on Friday evening (soft close)
+- Respects active connections - if users are connected, delays 30 minutes and retries
+- Continues retrying every 30 minutes until all connections end
+- Slack notifications include: connection count, usernames, next retry time
+- Prevents weekend charges from forgotten connections
+
+**100-Minute Traffic-Based Client Idle Timeout:**
+- OpenVPN client config uses `inactive 6000 10000` (100 minutes, 10KB threshold)
+- Traffic threshold ensures keepalive packets don't reset the timer
+- Only real usage (SSH, HTTP, database queries) resets the 100-minute timer
+
+**Daily Schedule Flow (Weekdays):**
+```
+09:30 - VPN auto-opens (EventBridge trigger, Production only by default)
+09:30-17:30 - Business hours protection (no auto-close)
+17:30 - Server idle detection starts
+17:30 + 100 min = 19:10 - Client auto-disconnects (if no traffic)
+19:10 + 30 min = 19:40 - Server auto-closes endpoint (if no connections)
+```
+
+**Weekly Schedule Flow:**
+```
+Mon-Thu: 09:30 open → idle detection closes (typically ~19:40)
+Friday:  09:30 open → 20:00 soft-close (respects active connections)
+Sat-Sun: Closed (no auto-open)
+```
+
+**Environment-Specific Auto-Open Defaults:**
+- **Production**: Auto-open enabled by default (VPN opens at 9:30 on weekdays)
+- **Staging**: Auto-open disabled by default (must enable via `/vpn schedule open on staging`)
+
+**Soft Close Behavior:**
+- When scheduled close triggers and users are connected:
+  1. Delays 30 minutes, sends Slack notification with usernames
+  2. Retries check every 30 minutes
+  3. Closes only when no active connections remain
+  4. SSM parameter stores pending close state
+  5. vpn-monitor Lambda handles retries (every 5 min check)
 
 **Files Updated:**
-- `team_member_setup.sh` - Client config generation
-- `lib/endpoint_management.sh` - Admin config generation
-- `README.md` - Documentation updates
-- `CLAUDE.md` - Technical documentation
+- `lambda/vpn-control/index.ts` - Auto-open and soft-close handlers
+- `lambda/vpn-monitor/index.ts` - Business hours + pending close retry
+- `lambda/shared/vpnManager.ts` - Connection details with usernames
+- `lambda/shared/stateStore.ts` - deleteParameter for pending close
+- `lambda/shared/slack.ts` - Updated help text with soft close info
+- `lambda/shared/types.ts` - VpnConnectionDetail interface
+- `cdklib/lib/vpn-automation-stack.ts` - EventBridge rules (open, weekend soft-close)
+- `team_member_setup.sh` - Client config (100-min idle)
+- `lib/endpoint_management.sh` - Admin config
 
-**How It Works:**
-- OpenVPN `inactive` directive monitors TUN/TAP interface traffic
-- 10KB threshold filters out keepalive/protocol overhead (~50 bytes each)
-- Only real usage (SSH, HTTP, database queries) resets the 100-minute timer
-- Client automatically disconnects when truly idle
+**Cost Structure (AWS Client VPN us-east-1):**
 
-This enhancement ensures reliable idle detection regardless of OpenVPN keepalive behavior.
+| 計費項目 | 費率 | 說明 |
+|---------|------|------|
+| Endpoint Association | $0.10/hour/subnet | 固定成本，與使用者數無關 |
+| Client Connection | $0.05/hour/connection | 按同時連線數計費 |
+
+**成本計算公式：**
+```
+每日成本 = ($0.10 × 運行小時 × subnet數) + ($0.05 × 運行小時 × 平均同時連線數)
+每月成本 = 每日成本 × 22 工作日
+```
+
+**Quick Cost Reference (typical ~10hr/day, 1 subnet):**
+
+| 同時連線數 | 每日成本 | 每月成本 (22天) | 適用情境 |
+|-----------|---------|----------------|---------|
+| 1 | $1.50 | $33 / NT$1,050 | 單人或輪流使用 |
+| 2 | $2.00 | $44 / NT$1,400 | 小團隊 (4人以下) |
+| 3 | $2.50 | $55 / NT$1,750 | 中型團隊 (6人以下) |
+| 4 | $3.00 | $66 / NT$2,100 | 較大團隊 (8人以下) |
+| 5 | $3.50 | $77 / NT$2,450 | 大型團隊 (10人以下) |
+
+**Current Estimate (4 users, 2 concurrent avg):**
+- Typical daily: ~$2.00 (endpoint ~10hr + 2 connections)
+- Monthly (22 workdays): ~$44 / NT$1,400
+
+**Cost Optimization Features:**
+- Weekend soft-close: Saves ~$4.80/weekend (48hr × $0.10), respects active connections
+- Idle detection: Closes VPN when no traffic (client 100min + server 30min)
+- Soft close: Never interrupts active users, delays until connections end
+- Estimated monthly savings vs 24/7: ~$48 (66% reduction)
+
+**Comparison with Pritunl (t3.medium):**
+- Pritunl: ~$20-25/month (固定成本，不隨使用者數增加)
+- AWS VPN 損益平衡點：約 1 位同時連線時成本相近
+- 混合方案：Staging 用 Pritunl ($15), Production 用 AWS VPN ($44) = $59/month

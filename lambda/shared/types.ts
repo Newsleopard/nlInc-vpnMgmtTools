@@ -12,11 +12,20 @@ export interface VpnConfig {
   SUBNET_ID: string;     // e.g., "subnet-02bd062360a525a95"
 }
 
+// VPN connection detail for active connections
+export interface VpnConnectionDetail {
+  connectionId: string;
+  username: string;  // From CommonName (certificate-based auth) or Username (AD auth)
+  clientIp: string;
+  establishedTime: Date;
+}
+
 // Runtime status from EC2 API + Parameter Store
 export interface VpnStatus {
   associated: boolean;
   associationState?: 'associated' | 'associating' | 'disassociating' | 'disassociated' | 'failed';
   activeConnections: number;
+  activeConnectionDetails?: VpnConnectionDetail[];  // Detailed info for each active connection
   lastActivity: Date;
   endpointId: string;
   subnetId: string;
@@ -37,13 +46,90 @@ export interface SlackCommand {
   trigger_id: string;
 }
 
-// Parsed VPN command (Enhanced for Epic 3.2)
+// Valid environment types
+export type VpnEnvironment = 'staging' | 'production';
+
+// Cost report types (used by cost-analysis command)
+export type CostReportType = 'daily' | 'cumulative' | 'summary';
+
+// Combined environment or report type (for commands that use environment field flexibly)
+export type VpnEnvironmentOrReportType = VpnEnvironment | CostReportType;
+
+// Valid VPN actions grouped by category
+export type VpnCoreAction = 'open' | 'close' | 'check';
+export type VpnAdminAction = 'admin-noclose' | 'admin-autoclose' | 'admin-cooldown' | 'admin-force-close';
+export type VpnCostAction = 'cost-savings' | 'cost-analysis';
+export type VpnScheduleAction =
+  | 'schedule-on' | 'schedule-off' | 'schedule-check'
+  | 'schedule-open-on' | 'schedule-open-off'
+  | 'schedule-close-on' | 'schedule-close-off'
+  | 'schedule-help';
+export type VpnHelpAction = 'help';
+
+export type VpnAction =
+  | VpnCoreAction
+  | VpnAdminAction
+  | VpnCostAction
+  | VpnScheduleAction
+  | VpnHelpAction;
+
+// Duration format pattern (Nh, Nd, Nm - e.g., "2h", "24h", "7d", "30m")
+export type DurationString = string;
+
+/**
+ * Validate duration string format
+ * @param s - String to validate
+ * @returns true if valid duration format
+ */
+export function isValidDurationString(s: string): boolean {
+  if (!s || typeof s !== 'string') return false;
+  return /^(\d+)([hdm])$/.test(s.trim().toLowerCase());
+}
+
+/**
+ * Check if a value is a valid VPN environment
+ */
+export function isVpnEnvironment(value: string): value is VpnEnvironment {
+  return value === 'staging' || value === 'production';
+}
+
+/**
+ * Check if a value is a cost report type
+ */
+export function isCostReportType(value: string): value is CostReportType {
+  return value === 'daily' || value === 'cumulative' || value === 'summary';
+}
+
+// Parsed VPN command (Enhanced for Epic 3.2 and Schedule Commands)
 export interface VpnCommandRequest {
-  action: 'open' | 'close' | 'check' | 'admin-noclose' | 'admin-autoclose' | 'admin-cooldown' | 'admin-force-close' | 'cost-savings' | 'cost-analysis' | 'help';
-  environment: 'staging' | 'production' | string; // Allow string for report types
+  action: VpnAction;
+  environment: VpnEnvironmentOrReportType; // Supports environment or report type for cost commands
   user: string;
   requestId: string;
-  helpMessage?: string; // For help commands
+  helpMessage?: string;      // For help commands
+  duration?: DurationString; // For schedule-off with duration (e.g., "2h", "24h", "7d")
+}
+
+// Schedule status response data (Requirements: 3.1, 3.2, 3.3, 3.4, 3.5)
+export interface ScheduleStatusData {
+  autoOpen: {
+    enabled: boolean;
+    nextScheduledTime?: string;
+    disabledUntil?: string;
+  };
+  autoClose: {
+    enabled: boolean;
+    idleTimeoutMinutes: number;
+    disabledUntil?: string;
+  };
+  businessHoursProtection: {
+    enabled: boolean;
+    start: string;
+    end: string;
+    timezone: string;
+  };
+  lastModified: string;
+  modifiedBy: string;
 }
 
 // API Gateway event for cross-account calls

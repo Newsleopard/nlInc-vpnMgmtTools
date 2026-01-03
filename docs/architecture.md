@@ -263,13 +263,25 @@ inactive 6000 10000  # 100 minutes, 10KB threshold
 
 # Lambda monitor (server-side)
 async function checkIdleStatus(): Promise<boolean> {
-  const IDLE_MINUTES = 54;  // Server-side for endpoint management
+  const IDLE_MINUTES = 30;  // Server-side for endpoint management
   const lastActivity = await getLastActivity();
   const idleTime = (Date.now() - lastActivity) / 60000;
 
   return idleTime >= IDLE_MINUTES &&
-         !isBusinessHours() &&
+         !isBusinessHours() &&  // 9:30-17:30 Taiwan time
          !hasAdminOverride();
+}
+
+// Soft close: respects active connections
+async function handleSoftClose(): Promise<void> {
+  const status = await getVpnStatus();
+  if (status.activeConnections > 0) {
+    // Delay 30 minutes and retry
+    await schedulePendingClose(30, 'weekend');
+    await notifySlack(`VPN close delayed - ${status.activeConnections} active connections`);
+    return;
+  }
+  await closeVpn();
 }
 ```
 

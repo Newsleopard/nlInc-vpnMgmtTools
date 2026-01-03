@@ -6,7 +6,7 @@ import {
   DescribeClientVpnConnectionsCommand,
   DescribeClientVpnEndpointsCommand
 } from '@aws-sdk/client-ec2';
-import { VpnState, VpnStatus } from './types';
+import { VpnState, VpnStatus, VpnConnectionDetail } from './types';
 import * as stateStore from './stateStore';
 
 const ec2 = new EC2Client({});
@@ -160,10 +160,17 @@ export async function fetchStatus(): Promise<VpnStatus> {
       }))
     ]);
     
-    // Count active connections
-    const activeConnections = connections.Connections?.filter(
+    // Get active connection details including usernames
+    const activeConnectionDetails: VpnConnectionDetail[] = connections.Connections?.filter(
       conn => conn.Status?.Code === 'active'
-    ).length || 0;
+    ).map(conn => ({
+      connectionId: conn.ConnectionId || '',
+      username: conn.CommonName || conn.Username || 'unknown',
+      clientIp: conn.ClientIp || '',
+      establishedTime: new Date(conn.ConnectionEstablishedTime || Date.now())
+    })) || [];
+
+    const activeConnections = activeConnectionDetails.length;
     
     // Check actual association status from AWS
     const targetAssociation = associations.ClientVpnTargetNetworks?.find(
@@ -187,6 +194,7 @@ export async function fetchStatus(): Promise<VpnStatus> {
       associated: actuallyAssociated,
       associationState: associationState as 'associated' | 'associating' | 'disassociating' | 'disassociated' | 'failed',
       activeConnections,
+      activeConnectionDetails,
       lastActivity: new Date(state.lastActivity),
       endpointId: config.ENDPOINT_ID,
       subnetId: config.SUBNET_ID

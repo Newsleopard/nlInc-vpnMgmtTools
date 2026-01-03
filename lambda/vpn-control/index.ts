@@ -7,15 +7,30 @@ import * as vpnManager from '/opt/nodejs/vpnManager';
 import * as stateStore from '/opt/nodejs/stateStore';
 import * as slack from '/opt/nodejs/slack';
 import { createLogger, extractLogContext, withPerformanceLogging } from '/opt/nodejs/logger';
+import * as scheduleManager from '/opt/nodejs/scheduleManager';
 
 const cloudwatch = new CloudWatchClient({});
 const ENVIRONMENT = process.env.ENVIRONMENT || 'staging';
 
 // Warming detection helper function
 const isWarmingRequest = (event: any): boolean => {
-  return event.source === 'aws.events' && 
+  return event.source === 'aws.events' &&
          event['detail-type'] === 'Scheduled Event' &&
          event.detail?.warming === true;
+};
+
+// Auto-open detection helper function (for scheduled VPN opening)
+const isAutoOpenRequest = (event: any): boolean => {
+  return event.source === 'aws.events' &&
+         event['detail-type'] === 'Scheduled Event' &&
+         event.detail?.autoOpen === true;
+};
+
+// Auto-close detection helper function (for scheduled VPN closing - weekend/daily safety)
+const isAutoCloseRequest = (event: any): boolean => {
+  return event.source === 'aws.events' &&
+         event['detail-type'] === 'Scheduled Event' &&
+         event.detail?.autoClose === true;
 };
 
 export const handler = async (
@@ -35,6 +50,278 @@ export const handler = async (
         environment: ENVIRONMENT
       })
     };
+  }
+
+  // Handle scheduled auto-close requests (weekend - soft close)
+  if (isAutoCloseRequest(event)) {
+    const closeReason = (event as any).detail?.reason || 'scheduled';
+    const isSoftClose = (event as any).detail?.softClose !== false;
+    const retryDelayMinutes = (event as any).detail?.retryDelayMinutes || 30;
+
+    console.log(`Auto-close request: ${ENVIRONMENT}, reason: ${closeReason}, soft: ${isSoftClose}, retryDelay: ${retryDelayMinutes}min`);
+
+    try {
+      // Check current status first
+      const currentStatus = await vpnManager.fetchStatus();
+
+      // Skip if already closed
+      if (!currentStatus.associated) {
+        console.log(`VPN ${ENVIRONMENT} is already closed, skipping auto-close`);
+        // Clear any pending close since VPN is already closed
+        await clearPendingClose();
+        return {
+          statusCode: 200,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: `VPN ${ENVIRONMENT} is already closed`,
+            status: 'already_closed',
+            timestamp: new Date().toISOString()
+          })
+        };
+      }
+
+      // Skip if currently disassociating (in-progress)
+      if (currentStatus.associationState === 'disassociating') {
+        console.log(`VPN ${ENVIRONMENT} is currently disassociating, skipping auto-close`);
+        return {
+          statusCode: 200,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: `VPN ${ENVIRONMENT} is currently closing`,
+            status: 'in_progress',
+            timestamp: new Date().toISOString()
+          })
+        };
+      }
+
+      // SOFT CLOSE: If active connections exist, delay and retry
+      if (isSoftClose && currentStatus.activeConnections > 0) {
+        const connectionDetails = currentStatus.activeConnectionDetails || [];
+        const usernames = connectionDetails.map(c => c.username).join(', ') || 'unknown';
+        const nextCheckTime = new Date(Date.now() + retryDelayMinutes * 60 * 1000);
+        const nextCheckTimeStr = nextCheckTime.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });
+
+        console.log(`VPN ${ENVIRONMENT} has ${currentStatus.activeConnections} active connections (${usernames}), delaying close by ${retryDelayMinutes} minutes`);
+
+        // Schedule retry close via SSM parameter (vpn-monitor will pick it up)
+        await schedulePendingClose(retryDelayMinutes, closeReason);
+
+        // Send Slack notification about delay
+        await slack.sendSlackNotification({
+          text: `⏳ VPN ${ENVIRONMENT} 關閉延遲 | Close delayed (active connections)`,
+          attachments: [{
+            color: 'warning',
+            fields: [
+              { title: '👥 連線數 | Connections', value: currentStatus.activeConnections.toString(), short: true },
+              { title: '👤 使用者 | Users', value: usernames, short: true },
+              { title: '⏰ 下次檢查 | Next Check', value: nextCheckTimeStr, short: true },
+              { title: '📅 原因 | Reason', value: closeReason === 'weekend' ? '週末關閉 | Weekend close' : '排程關閉 | Scheduled close', short: true },
+              { title: '💡 提示 | Note', value: '尊重活躍連線，30 分鐘後再次檢查 | Respecting active connections, will check again in 30 minutes', short: false }
+            ]
+          }]
+        });
+
+        await publishMetric('SoftCloseDelayed', 1);
+
+        return {
+          statusCode: 200,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: `VPN ${ENVIRONMENT} close delayed due to ${currentStatus.activeConnections} active connections`,
+            status: 'delayed',
+            activeConnections: currentStatus.activeConnections,
+            users: usernames,
+            nextCheck: nextCheckTime.toISOString(),
+            timestamp: new Date().toISOString()
+          })
+        };
+      }
+
+      // No active connections (or hard close) - proceed with close
+      await vpnManager.disassociateSubnets();
+      const newStatus = await vpnManager.fetchStatus();
+
+      // Clear pending close since we're closing now
+      await clearPendingClose();
+
+      // Send Slack notification
+      await slack.sendSlackNotification({
+        text: `🌙 VPN ${ENVIRONMENT} 自動關閉 | Auto-closed`,
+        attachments: [{
+          color: '#36a64f',
+          fields: [
+            { title: '🕤 Time | 時間', value: new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' }), short: true },
+            { title: '📍 Environment | 環境', value: ENVIRONMENT, short: true },
+            { title: '🤖 Trigger | 觸發', value: 'Weekend auto-close (Friday 8PM) | 週末自動關閉 (週五 8PM)', short: false },
+            { title: '💰 Cost Saving | 成本節省', value: 'Preventing weekend charges | 避免週末費用', short: false }
+          ]
+        }]
+      });
+
+      await publishMetric('ScheduledAutoCloseOperations', 1);
+
+      console.log(`VPN ${ENVIRONMENT} auto-closed successfully (reason: ${closeReason})`);
+      return {
+        statusCode: 200,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: `VPN ${ENVIRONMENT} auto-closed successfully`,
+          status: 'closed',
+          reason: closeReason,
+          data: newStatus,
+          timestamp: new Date().toISOString()
+        })
+      };
+    } catch (error) {
+      console.error(`Failed to auto-close VPN ${ENVIRONMENT}:`, error);
+
+      // Send Slack error notification
+      await slack.sendSlackNotification({
+        text: `❌ VPN ${ENVIRONMENT} 自動關閉失敗 | Auto-close failed`,
+        attachments: [{
+          color: 'danger',
+          fields: [
+            { title: '🕤 Time | 時間', value: new Date().toISOString(), short: true },
+            { title: '📍 Environment | 環境', value: ENVIRONMENT, short: true },
+            { title: '📅 Reason | 原因', value: closeReason, short: true },
+            { title: '❌ Error | 錯誤', value: error instanceof Error ? error.message : 'Unknown error', short: false }
+          ]
+        }]
+      });
+
+      return {
+        statusCode: 500,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: `Failed to auto-close VPN ${ENVIRONMENT}`,
+          error: error instanceof Error ? error.message : 'Unknown error',
+          timestamp: new Date().toISOString()
+        })
+      };
+    }
+  }
+
+  // Handle scheduled auto-open requests (weekday 10:00 AM)
+  if (isAutoOpenRequest(event)) {
+    console.log(`Auto-open request received for ${ENVIRONMENT} environment`);
+    try {
+      // Check if auto-open schedule is enabled (Requirements: 6.1, 6.4)
+      const isAutoOpenScheduleEnabled = await scheduleManager.isAutoOpenEnabled(ENVIRONMENT);
+      if (!isAutoOpenScheduleEnabled) {
+        console.log(`Auto-open schedule is disabled for ${ENVIRONMENT}, skipping scheduled open`);
+        
+        // Send notification about skipped operation
+        await slack.sendSlackNotification({
+          text: `📅 VPN ${ENVIRONMENT} 自動開啟已跳過 | Auto-open skipped`,
+          attachments: [{
+            color: '#ffaa00',
+            fields: [
+              { title: '🕤 Time | 時間', value: new Date().toISOString(), short: true },
+              { title: '📍 Environment | 環境', value: ENVIRONMENT, short: true },
+              { title: '📅 Reason | 原因', value: 'Auto-open schedule disabled | 自動開啟排程已停用', short: false },
+              { title: '🔧 Re-enable | 重新啟用', value: `/vpn schedule on ${ENVIRONMENT}`, short: false }
+            ]
+          }]
+        });
+        
+        await publishMetric('ScheduleDisabledSkips', 1);
+        
+        return {
+          statusCode: 200,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: `Auto-open skipped for ${ENVIRONMENT} - schedule disabled`,
+            status: 'schedule_disabled',
+            timestamp: new Date().toISOString()
+          })
+        };
+      }
+      
+      // Check current status first
+      const currentStatus = await vpnManager.fetchStatus();
+
+      // Skip if already open
+      if (currentStatus.associated) {
+        console.log(`VPN ${ENVIRONMENT} is already open, skipping auto-open`);
+        return {
+          statusCode: 200,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: `VPN ${ENVIRONMENT} is already open`,
+            status: 'already_open',
+            timestamp: new Date().toISOString()
+          })
+        };
+      }
+
+      // Skip if currently associating (in-progress)
+      if (currentStatus.associationState === 'associating') {
+        console.log(`VPN ${ENVIRONMENT} is currently associating, skipping auto-open`);
+        return {
+          statusCode: 200,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: `VPN ${ENVIRONMENT} is currently opening`,
+            status: 'in_progress',
+            timestamp: new Date().toISOString()
+          })
+        };
+      }
+
+      // Open the VPN
+      await vpnManager.associateSubnets();
+      const newStatus = await vpnManager.fetchStatus();
+
+      // Send Slack notification
+      await slack.sendSlackNotification({
+        text: `🌅 VPN ${ENVIRONMENT} 自動開啟 | Auto-opened`,
+        attachments: [{
+          color: 'good',
+          fields: [
+            { title: '🕤 Time | 時間', value: new Date().toISOString(), short: true },
+            { title: '📍 Environment | 環境', value: ENVIRONMENT, short: true },
+            { title: '🤖 Trigger | 觸發', value: 'Scheduled auto-open (weekday 10:00 AM)', short: false }
+          ]
+        }]
+      });
+
+      console.log(`VPN ${ENVIRONMENT} auto-opened successfully`);
+      return {
+        statusCode: 200,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: `VPN ${ENVIRONMENT} auto-opened successfully`,
+          status: 'opened',
+          data: newStatus,
+          timestamp: new Date().toISOString()
+        })
+      };
+    } catch (error) {
+      console.error(`Failed to auto-open VPN ${ENVIRONMENT}:`, error);
+
+      // Send Slack error notification
+      await slack.sendSlackNotification({
+        text: `❌ VPN ${ENVIRONMENT} 自動開啟失敗 | Auto-open failed`,
+        attachments: [{
+          color: 'danger',
+          fields: [
+            { title: '🕤 Time | 時間', value: new Date().toISOString(), short: true },
+            { title: '📍 Environment | 環境', value: ENVIRONMENT, short: true },
+            { title: '❌ Error | 錯誤', value: error instanceof Error ? error.message : 'Unknown error', short: false }
+          ]
+        }]
+      });
+
+      return {
+        statusCode: 500,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: `Failed to auto-open VPN ${ENVIRONMENT}`,
+          error: error instanceof Error ? error.message : 'Unknown error',
+          timestamp: new Date().toISOString()
+        })
+      };
+    }
   }
 
   // Initialize structured logger for Epic 4.1
@@ -366,6 +653,51 @@ async function recordManualActivity(): Promise<void> {
   } catch (error) {
     console.error('Failed to record manual activity timestamp:', error);
     // Don't throw as this shouldn't break the main operation
+  }
+}
+
+// Schedule pending close - stores retry time in SSM for vpn-monitor to pick up
+async function schedulePendingClose(delayMinutes: number, reason: string): Promise<void> {
+  try {
+    const retryTime = new Date(Date.now() + delayMinutes * 60 * 1000).toISOString();
+    const pendingClose = {
+      retryTime,
+      reason,
+      attempts: 1,
+      scheduledAt: new Date().toISOString()
+    };
+
+    // Check if there's an existing pending close to increment attempts
+    try {
+      const existingParam = await stateStore.readParameter(`/vpn/automation/pending_close/${ENVIRONMENT}`);
+      if (existingParam) {
+        const existing = JSON.parse(existingParam);
+        pendingClose.attempts = (existing.attempts || 0) + 1;
+      }
+    } catch {
+      // No existing pending close, this is the first attempt
+    }
+
+    await stateStore.writeParameter(
+      `/vpn/automation/pending_close/${ENVIRONMENT}`,
+      JSON.stringify(pendingClose)
+    );
+
+    console.log(`Scheduled pending close for ${ENVIRONMENT}: retry at ${retryTime}, attempt #${pendingClose.attempts}`);
+  } catch (error) {
+    console.error('Failed to schedule pending close:', error);
+    // Don't throw as this shouldn't break the main operation
+  }
+}
+
+// Clear pending close - removes the pending close SSM parameter
+async function clearPendingClose(): Promise<void> {
+  try {
+    await stateStore.deleteParameter(`/vpn/automation/pending_close/${ENVIRONMENT}`);
+    console.log(`Cleared pending close for ${ENVIRONMENT}`);
+  } catch (error) {
+    // Parameter might not exist, which is fine
+    console.log(`No pending close to clear for ${ENVIRONMENT} (or already cleared)`);
   }
 }
 

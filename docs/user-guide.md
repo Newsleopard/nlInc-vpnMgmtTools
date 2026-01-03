@@ -290,6 +290,34 @@ mysql -h your-rds-endpoint.region.rds.amazonaws.com -u username -p
 | `/vpn check [env]` | 檢查端點狀態 | `/vpn check production` |
 | `/vpn help` | 顯示所有命令 | `/vpn help` |
 
+### 排程管理命令 | Schedule Management Commands
+
+VPN 系統具備自動排程功能，您可以透過以下命令管理：
+
+| 命令 | 用途 | 範例 |
+|------|------|------|
+| `/vpn schedule on [env]` | 啟用自動排程 | `/vpn schedule on staging` |
+| `/vpn schedule off [env]` | 停用自動排程 | `/vpn schedule off staging` |
+| `/vpn schedule off [env] [duration]` | 暫時停用排程 | `/vpn schedule off staging 2h` |
+| `/vpn schedule check [env]` | 檢查排程狀態 | `/vpn schedule check staging` |
+| `/vpn schedule help` | 排程命令說明 | `/vpn schedule help` |
+
+#### 細粒度排程控制 | Granular Schedule Control
+
+| 命令 | 用途 |
+|------|------|
+| `/vpn schedule open on [env]` | 僅啟用自動開啟（平日 9:30） |
+| `/vpn schedule open off [env]` | 僅停用自動開啟 |
+| `/vpn schedule close on [env]` | 僅啟用自動關閉（閒置 100 分鐘） |
+| `/vpn schedule close off [env]` | 僅停用自動關閉 |
+
+#### 持續時間格式 | Duration Format
+
+| 格式 | 說明 | 範例 |
+|------|------|------|
+| `Nh` | N 小時 | `2h`, `24h` |
+| `Nd` | N 天 | `1d`, `7d` |
+
 ### 進階命令
 
 | 命令 | 用途 | 範例 |
@@ -303,6 +331,64 @@ mysql -h your-rds-endpoint.region.rds.amazonaws.com -u username -p
 |----------|----------|
 | `staging` | `stage`, `stg`, `dev` |
 | `production` | `prod` |
+
+---
+
+## ⏰ 排程管理使用情境 | Schedule Management Scenarios
+
+VPN 系統預設會在平日 9:30（台灣時間）自動開啟（Production 預設啟用，Staging 預設停用），並在閒置時自動關閉（客戶端 100 分鐘 + 伺服器端 30 分鐘）。週末軟關閉（週五 20:00）會尊重活躍連線，若有使用者連線中會延遲 30 分鐘後再檢查。以下是常見的排程管理情境：
+
+### 情境 1：長時間作業 | Long-Running Tasks
+
+進行資料庫遷移或大量資料處理時，防止 VPN 被自動關閉：
+
+```text
+# 停用自動關閉 4 小時
+/vpn schedule close off staging 4h
+
+# 作業完成後，排程會自動恢復
+# 或手動恢復：
+/vpn schedule close on staging
+```
+
+### 情境 2：週末或假日 | Weekends or Holidays
+
+假日期間不需要自動開啟 VPN：
+
+```text
+# 停用自動開啟 2 天
+/vpn schedule open off staging 2d
+
+# 假日結束後會自動恢復
+```
+
+### 情境 3：檢查目前排程狀態 | Check Current Status
+
+不確定排程是否啟用時：
+
+```text
+/vpn schedule check staging
+```
+
+會顯示：
+- 自動開啟狀態和下次排程時間
+- 自動關閉狀態和閒置逾時設定
+- 營業時間保護狀態
+- 如果有停用，顯示剩餘時間
+
+### 情境 4：完全停用自動排程 | Disable All Automation
+
+特殊情況需要完全手動控制：
+
+```text
+# 停用所有自動排程
+/vpn schedule off staging
+
+# 需要時手動恢復
+/vpn schedule on staging
+```
+
+> 💡 **提示**：建議使用帶有持續時間的命令（如 `2h`, `1d`），這樣排程會自動恢復，避免忘記重新啟用。
 
 ---
 
@@ -479,6 +565,12 @@ mysql -h your-rds-endpoint.region.rds.amazonaws.com -u username -p
 │  4️⃣  完成工作後  客戶端 Disconnect → /vpn close staging │
 ├─────────────────────────────────────────────────────────┤
 │  ⚠️  重要：必須先執行步驟 1-2，才能進行步驟 3            │
+├─────────────────────────────────────────────────────────┤
+│                    排程管理快速參考                       │
+├─────────────────────────────────────────────────────────┤
+│  📅 檢查排程    /vpn schedule check staging              │
+│  ⏸️ 暫停 2 小時 /vpn schedule off staging 2h            │
+│  ▶️ 恢復排程    /vpn schedule on staging                │
 ├─────────────────────────────────────────────────────────┤
 │  🆘 遇到問題？在 #vpn-endpoint-access 頻道發問           │
 └─────────────────────────────────────────────────────────┘

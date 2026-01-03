@@ -164,7 +164,7 @@ export class VpnAutomationStack extends cdk.Stack {
 
     // Epic 5.1: Environment variables for Lambda functions with secure parameter management
     const commonEnvironment = {
-      IDLE_MINUTES: '54',
+      IDLE_MINUTES: '30',
       ENVIRONMENT: environment,
       VPN_STATE_PREFIX: `/vpn/${environment}/`,
       SIGNING_SECRET_PARAM: `/vpn/${environment}/slack/signing_secret`,
@@ -423,6 +423,68 @@ export class VpnAutomationStack extends cdk.Stack {
         principal: new iam.ServicePrincipal('events.amazonaws.com'),
         sourceArn: weekendWarmingRule.ruleArn
       });
+    });
+
+    // Scheduled VPN Auto-Open Rule (weekdays 10:00 AM Taiwan time = 2:00 AM UTC)
+    const autoOpenRule = new events.Rule(this, 'VpnAutoOpenRule', {
+      schedule: events.Schedule.expression('cron(0 2 ? * MON-FRI *)'),
+      description: `Scheduled VPN auto-open for ${environment} environment (weekdays 10:00 AM Taiwan time)`,
+      enabled: true
+    });
+
+    // Auto-open event payload
+    const autoOpenEventPayload = {
+      source: 'aws.events',
+      'detail-type': 'Scheduled Event',
+      detail: {
+        autoOpen: true,
+        environment: environment,
+        timestamp: '{{aws.events.scheduled-time}}'
+      }
+    };
+
+    // Add vpn-control as target for auto-open rule
+    autoOpenRule.addTarget(new targets.LambdaFunction(vpnControl, {
+      event: events.RuleTargetInput.fromObject(autoOpenEventPayload)
+    }));
+
+    // Grant CloudWatch Events permission to invoke vpn-control for auto-open
+    vpnControl.addPermission('AllowAutoOpenInvoke', {
+      principal: new iam.ServicePrincipal('events.amazonaws.com'),
+      sourceArn: autoOpenRule.ruleArn
+    });
+
+    // Scheduled VPN Auto-Close Rule (Friday 8:00 PM Taiwan time = 12:00 PM UTC)
+    // Ensures VPN is closed for the weekend to save costs
+    const weekendCloseRule = new events.Rule(this, 'VpnWeekendCloseRule', {
+      schedule: events.Schedule.expression('cron(0 12 ? * FRI *)'),
+      description: `Scheduled VPN weekend close for ${environment} environment (Friday 8:00 PM Taiwan time)`,
+      enabled: true
+    });
+
+    // Weekend close event payload (soft close - respects active connections)
+    const weekendCloseEventPayload = {
+      source: 'aws.events',
+      'detail-type': 'Scheduled Event',
+      detail: {
+        autoClose: true,
+        reason: 'weekend',
+        softClose: true,           // Respect active connections
+        retryDelayMinutes: 30,     // Retry after 30 minutes if connections exist
+        environment: environment,
+        timestamp: '{{aws.events.scheduled-time}}'
+      }
+    };
+
+    // Add vpn-control as target for weekend close rule
+    weekendCloseRule.addTarget(new targets.LambdaFunction(vpnControl, {
+      event: events.RuleTargetInput.fromObject(weekendCloseEventPayload)
+    }));
+
+    // Grant CloudWatch Events permission to invoke vpn-control for weekend close
+    vpnControl.addPermission('AllowWeekendCloseInvoke', {
+      principal: new iam.ServicePrincipal('events.amazonaws.com'),
+      sourceArn: weekendCloseRule.ruleArn
     });
 
     // Epic 4.1: Enhanced CloudWatch log groups with custom retention
@@ -798,6 +860,21 @@ export class VpnAutomationStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'MonitoringSchedule', {
       value: 'Every 5 minutes',
       description: 'VPN monitoring schedule (CloudWatch Events)'
+    });
+
+    new cdk.CfnOutput(this, 'AutoOpenSchedule', {
+      value: 'Weekdays 10:00 AM Taiwan time (2:00 AM UTC)',
+      description: 'VPN auto-open schedule for workdays'
+    });
+
+    new cdk.CfnOutput(this, 'BusinessHoursProtection', {
+      value: 'Weekdays 10:00 AM - 5:00 PM Taiwan time',
+      description: 'No auto-close during business hours'
+    });
+
+    new cdk.CfnOutput(this, 'WeekendCloseSchedule', {
+      value: 'Friday 8:00 PM Taiwan time (soft close, respects active connections)',
+      description: 'VPN auto-close for weekend cost savings (delays 30min if connections active)'
     });
 
     new cdk.CfnOutput(this, 'IdleThreshold', {
