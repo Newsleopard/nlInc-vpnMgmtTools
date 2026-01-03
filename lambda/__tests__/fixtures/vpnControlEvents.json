@@ -68,5 +68,23 @@
     },
     "body": "{invalid json",
     "isBase64Encoded": false
+  },
+
+  "vpnAutoOpenEvent": {
+    "source": "aws.events",
+    "detail-type": "Scheduled Event",
+    "detail": {
+      "autoOpen": true,
+      "environment": "staging",
+      "timestamp": "2026-01-03T01:30:00Z"
+    }
+  },
+
+  "vpnWarmingEvent": {
+    "source": "aws.events",
+    "detail-type": "Scheduled Event",
+    "detail": {
+      "warming": true
+    }
   }
 }

@@ -93,6 +93,20 @@ export const handler = async (
       };
     } catch (error) {
       console.error(`Failed to auto-open VPN ${ENVIRONMENT}:`, error);
+
+      // Send Slack error notification
+      await slack.sendSlackNotification({
+        text: `❌ VPN ${ENVIRONMENT} 自動開啟失敗 | Auto-open failed`,
+        attachments: [{
+          color: 'danger',
+          fields: [
+            { title: '🕤 Time | 時間', value: new Date().toISOString(), short: true },
+            { title: '📍 Environment | 環境', value: ENVIRONMENT, short: true },
+            { title: '❌ Error | 錯誤', value: error instanceof Error ? error.message : 'Unknown error', short: false }
+          ]
+        }]
+      });
+
       return {
         statusCode: 500,
         headers: { 'Content-Type': 'application/json' },

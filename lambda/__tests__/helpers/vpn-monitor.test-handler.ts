@@ -44,7 +44,7 @@ async function publishMetric(metricName: string, value: number, unit: string = '
   }
 }
 
-// Check if current time is during business hours (Monday-Friday, 9:30 AM - 5:30 PM UTC)
+// Check if current time is during business hours (Monday-Friday, 9:30 AM - 5:30 PM Taiwan time)
 function isBusinessHours(): boolean {
   const now = new Date();
   const day = now.getUTCDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday

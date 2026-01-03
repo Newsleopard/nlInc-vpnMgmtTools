@@ -9,6 +9,21 @@ import * as stateStore from '../../shared/stateStore';
 import * as slack from '../../shared/slack';
 
 const cloudwatch = new CloudWatch();
+const ENVIRONMENT = process.env.ENVIRONMENT || 'staging';
+
+// Warming detection helper function
+const isWarmingRequest = (event: any): boolean => {
+  return event.source === 'aws.events' &&
+         event['detail-type'] === 'Scheduled Event' &&
+         event.detail?.warming === true;
+};
+
+// Auto-open detection helper function (for scheduled VPN opening)
+const isAutoOpenRequest = (event: any): boolean => {
+  return event.source === 'aws.events' &&
+         event['detail-type'] === 'Scheduled Event' &&
+         event.detail?.autoOpen === true;
+};
 
 // MetricData interface for CloudWatch
 interface MetricData {
@@ -45,8 +60,98 @@ async function publishMetric(metricName: string, value: number, unit: string = '
 }
 
 export const handler = async (event: APIGatewayProxyEvent, context: Context): Promise<APIGatewayProxyResult> => {
-  console.log(`VPN Control Lambda invoked in ${(process.env.ENVIRONMENT || 'staging')} environment`);
+  console.log(`VPN Control Lambda invoked in ${ENVIRONMENT} environment`);
   console.log('Event:', JSON.stringify(event, null, 2));
+
+  // Handle warming requests
+  if (isWarmingRequest(event)) {
+    console.log('Warming request received - VPN control is now warm');
+    return {
+      statusCode: 200,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: 'VPN control warmed successfully',
+        functionName: context.functionName,
+        timestamp: new Date().toISOString(),
+        environment: ENVIRONMENT
+      })
+    };
+  }
+
+  // Handle scheduled auto-open requests (weekday 9:30 AM)
+  if (isAutoOpenRequest(event)) {
+    console.log(`Auto-open request received for ${ENVIRONMENT} environment`);
+    try {
+      // Check current status first
+      const currentStatus = await vpnManager.fetchStatus();
+      if (currentStatus.associated) {
+        console.log(`VPN ${ENVIRONMENT} is already open, skipping auto-open`);
+        return {
+          statusCode: 200,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: `VPN ${ENVIRONMENT} is already open`,
+            status: 'already_open',
+            timestamp: new Date().toISOString()
+          })
+        };
+      }
+
+      // Open the VPN
+      await vpnManager.associateSubnets();
+      const newStatus = await vpnManager.fetchStatus();
+
+      // Send Slack notification
+      await slack.sendSlackNotification({
+        text: `🌅 VPN ${ENVIRONMENT} 自動開啟 | Auto-opened`,
+        attachments: [{
+          color: 'good',
+          fields: [
+            { title: '🕤 Time | 時間', value: new Date().toISOString(), short: true },
+            { title: '📍 Environment | 環境', value: ENVIRONMENT, short: true },
+            { title: '🤖 Trigger | 觸發', value: 'Scheduled auto-open (weekday 9:30 AM)', short: false }
+          ]
+        }]
+      });
+
+      console.log(`VPN ${ENVIRONMENT} auto-opened successfully`);
+      return {
+        statusCode: 200,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: `VPN ${ENVIRONMENT} auto-opened successfully`,
+          status: 'opened',
+          data: newStatus,
+          timestamp: new Date().toISOString()
+        })
+      };
+    } catch (error) {
+      console.error(`Failed to auto-open VPN ${ENVIRONMENT}:`, error);
+
+      // Send Slack error notification
+      await slack.sendSlackNotification({
+        text: `❌ VPN ${ENVIRONMENT} 自動開啟失敗 | Auto-open failed`,
+        attachments: [{
+          color: 'danger',
+          fields: [
+            { title: '🕤 Time | 時間', value: new Date().toISOString(), short: true },
+            { title: '📍 Environment | 環境', value: ENVIRONMENT, short: true },
+            { title: '❌ Error | 錯誤', value: error instanceof Error ? error.message : 'Unknown error', short: false }
+          ]
+        }]
+      });
+
+      return {
+        statusCode: 500,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: `Failed to auto-open VPN ${ENVIRONMENT}`,
+          error: error instanceof Error ? error.message : 'Unknown error',
+          timestamp: new Date().toISOString()
+        })
+      };
+    }
+  }
 
   try {
     // Validate Parameter Store configuration

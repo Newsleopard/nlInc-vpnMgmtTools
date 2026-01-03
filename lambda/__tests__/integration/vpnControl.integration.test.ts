@@ -275,7 +275,7 @@ describe('VPN Control Integration Tests', () => {
       setMockResponse('EC2', 'describeClientVpnTargetNetworks', {
         ClientVpnTargetNetworks: []
       });
-      
+
       setMockResponse('EC2', 'describeClientVpnConnections', {
         Connections: []
       });
@@ -295,6 +295,102 @@ describe('VPN Control Integration Tests', () => {
           ])
         })
       );
+    });
+  });
+
+  describe('Scheduled Events', () => {
+    describe('Warming Request', () => {
+      it('should handle warming request successfully', async () => {
+        const event = vpnControlEvents.vpnWarmingEvent as unknown as APIGatewayProxyEvent;
+
+        const result = await handler(event, mockContext);
+
+        expect(result.statusCode).toBe(200);
+
+        const body = JSON.parse(result.body);
+        expect(body.message).toContain('warmed successfully');
+        expect(body.functionName).toBe('vpn-control-test');
+        expect(body.environment).toBe('staging');
+        expect(body.timestamp).toBeDefined();
+      });
+    });
+
+    describe('Auto-Open Request', () => {
+      it('should auto-open VPN when currently closed', async () => {
+        const event = vpnControlEvents.vpnAutoOpenEvent as unknown as APIGatewayProxyEvent;
+
+        // Mock VPN as currently disassociated (closed)
+        setMockResponse('EC2', 'describeClientVpnTargetNetworks', {
+          ClientVpnTargetNetworks: []
+        });
+
+        setMockResponse('EC2', 'describeClientVpnConnections', {
+          Connections: []
+        });
+
+        const result = await handler(event, mockContext);
+
+        expect(result.statusCode).toBe(200);
+
+        const body = JSON.parse(result.body);
+        expect(body.message).toContain('auto-opened successfully');
+        expect(body.status).toBe('opened');
+        expect(body.data).toBeDefined();
+        expect(body.timestamp).toBeDefined();
+      });
+
+      it('should skip auto-open when VPN is already open', async () => {
+        const event = vpnControlEvents.vpnAutoOpenEvent as unknown as APIGatewayProxyEvent;
+
+        // Mock VPN as already associated (open)
+        setMockResponse('EC2', 'describeClientVpnTargetNetworks', {
+          ClientVpnTargetNetworks: [{
+            TargetNetworkId: 'subnet-test123',
+            Status: { Code: 'associated' }
+          }]
+        });
+
+        setMockResponse('EC2', 'describeClientVpnConnections', {
+          Connections: []
+        });
+
+        const result = await handler(event, mockContext);
+
+        expect(result.statusCode).toBe(200);
+
+        const body = JSON.parse(result.body);
+        expect(body.message).toContain('already open');
+        expect(body.status).toBe('already_open');
+        expect(body.timestamp).toBeDefined();
+      });
+
+      it('should handle auto-open failure with error response', async () => {
+        const event = vpnControlEvents.vpnAutoOpenEvent as unknown as APIGatewayProxyEvent;
+
+        // Mock VPN as disassociated initially
+        setMockResponse('EC2', 'describeClientVpnTargetNetworks', {
+          ClientVpnTargetNetworks: []
+        });
+
+        setMockResponse('EC2', 'describeClientVpnConnections', {
+          Connections: []
+        });
+
+        // Mock association failure
+        const mockEC2Methods = require('../../__mocks__/aws-sdk').mockEC2Methods;
+        mockEC2Methods.associateClientVpnTargetNetwork.mockReturnValue({
+          promise: () => Promise.reject(new Error('Failed to associate subnet'))
+        });
+
+        const result = await handler(event, mockContext);
+
+        expect(result.statusCode).toBe(500);
+
+        const body = JSON.parse(result.body);
+        expect(body.message).toContain('Failed to auto-open');
+        expect(body.error).toBeDefined();
+        expect(body.timestamp).toBeDefined();
+      });
     });
   });
 });
