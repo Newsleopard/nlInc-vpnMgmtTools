@@ -127,7 +127,7 @@ inactive 6000 10000  # 100 minutes, 10KB threshold
 
 1. **Team Member**: `./team_member_setup.sh --init` (generates CSR, uploads to S3)
 2. **S3 Exchange**: Encrypted CSR/certificate exchange via dedicated S3 bucket
-3. **Admin Signs**: `./admin-tools/sign_csr.sh --upload-s3 user.csr` (automated signing)
+3. **Admin Signs**: `./admin-tools/sign_csr.sh --upload-s3 username` (just username, auto-downloads CSR)
 4. **Team Member**: `./team_member_setup.sh --resume` (downloads signed cert, configures VPN)
 
 **Benefits:**
@@ -290,8 +290,8 @@ aws sts get-caller-identity --profile production
 ./admin-tools/manage_vpn_users.sh list --profile staging
 ./admin-tools/manage_vpn_users.sh remove username --profile staging
 
-# Certificate management
-./admin-tools/sign_csr.sh --upload-s3 user.csr --profile staging
+# Certificate management (just username, no .csr needed)
+./admin-tools/sign_csr.sh --upload-s3 username --profile staging
 ./admin-tools/process_csr_batch.sh monitor --environment staging
 
 # VPN administration
@@ -361,8 +361,8 @@ const CONFIG = {
 ### Certificate Management
 
 ```bash
-# Individual certificate signing
-./admin-tools/sign_csr.sh --upload-s3 user.csr --profile staging
+# Individual certificate signing (just username, no .csr needed)
+./admin-tools/sign_csr.sh --upload-s3 username --profile staging
 
 # Batch certificate processing
 ./admin-tools/process_csr_batch.sh download --environment staging
