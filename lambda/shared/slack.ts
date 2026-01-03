@@ -189,7 +189,7 @@ function getHelpMessage(): string {
       {
         color: '#764FA5',
         title: '🤖 Auto-Cost Optimization',
-        text: '• 🌅 Auto-open weekdays 9:30 AM Taiwan time\n• Client auto-disconnects after 100 minutes idle (traffic-based)\n• Business hours protection (9:30 AM - 5:30 PM) - no auto-close\n• After 5:30 PM: auto-close ~154 min after last activity\n• 30-minute cooldown prevents rapid cycling',
+        text: '• 🌅 Auto-open weekdays 10:00 AM Taiwan time\n• Client auto-disconnects after 100 minutes idle (traffic-based)\n• Business hours protection (10:00 AM - 5:00 PM) - no auto-close\n• After 5:00 PM: auto-close ~154 min after last activity\n• 30-minute cooldown prevents rapid cycling',
         footer: 'VPN Automation System'
       }
     ]
@@ -264,7 +264,7 @@ export function getScheduleHelpMessage(): string {
       {
         color: '#764FA5',
         title: '📋 Schedule Configuration | 排程設定',
-        text: '• 🌅 Auto-open: Weekdays 9:30 AM Taiwan time | 自動開啟：週一至週五 台灣時間 9:30\n• 🔒 Auto-close: After 100 minutes idle | 自動關閉：閒置 100 分鐘後\n• 🛡️ Business hours protection: 9:30 AM - 5:30 PM | 上班時間保護：9:30 - 17:30',
+        text: '• 🌅 Auto-open: Weekdays 10:00 AM Taiwan time | 自動開啟：週一至週五 台灣時間 10:00\n• 🔒 Auto-close: After 100 minutes idle | 自動關閉：閒置 100 分鐘後\n• 🛡️ Business hours protection: 10:00 AM - 5:00 PM | 上班時間保護：10:00 - 17:00',
         footer: 'VPN Schedule Management | VPN 排程管理'
       }
     ]

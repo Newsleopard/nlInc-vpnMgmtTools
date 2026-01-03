@@ -923,16 +923,16 @@ The Slack App's Request URL for the `/vpn` command is highly stable due to the s
 
 ### Automated VPN Schedule & Enhanced Idle Detection
 
-**Weekday Auto-Open (9:30 AM Taiwan Time):**
-- VPN endpoint automatically opens at 9:30 AM on weekdays (Mon-Fri)
+**Weekday Auto-Open (10:00 AM Taiwan Time):**
+- VPN endpoint automatically opens at 10:00 AM on weekdays (Mon-Fri)
 - EventBridge scheduled rule triggers vpn-control Lambda
 - Slack notification sent when VPN auto-opens
 - No manual intervention needed for daily VPN startup
 
-**Business Hours Protection (9:30 AM - 5:30 PM):**
+**Business Hours Protection (10:00 AM - 5:00 PM):**
 - Server-side auto-close is disabled during business hours
 - Prevents accidental VPN closure during work time
-- After 5:30 PM, idle detection resumes
+- After 5:00 PM, idle detection resumes
 
 **100-Minute Traffic-Based Client Idle Timeout:**
 - OpenVPN client config uses `inactive 6000 10000` (100 minutes, 10KB threshold)
@@ -941,21 +941,48 @@ The Slack App's Request URL for the `/vpn` command is highly stable due to the s
 
 **Daily Schedule Flow:**
 ```
-09:30 - VPN auto-opens (EventBridge trigger)
-09:30-17:30 - Business hours protection (no auto-close)
-17:30 - Server idle detection starts
-17:30 + 100 min = 19:10 - Client auto-disconnects (if no traffic)
-19:10 + 54 min = 20:04 - Server auto-closes endpoint (if no connections)
+10:00 - VPN auto-opens (EventBridge trigger)
+10:00-17:00 - Business hours protection (no auto-close)
+17:00 - Server idle detection starts
+17:00 + 100 min = 18:40 - Client auto-disconnects (if no traffic)
+18:40 + 54 min = 19:34 - Server auto-closes endpoint (if no connections)
 ```
 
 **Files Updated:**
 - `lambda/vpn-control/index.ts` - Auto-open handler
-- `lambda/vpn-monitor/index.ts` - Business hours 9:30-17:30
+- `lambda/vpn-monitor/index.ts` - Business hours 10:00-17:00
 - `cdklib/lib/vpn-automation-stack.ts` - EventBridge auto-open rule
 - `lambda/shared/slack.ts` - Updated help text
 - `team_member_setup.sh` - Client config (100-min idle)
 - `lib/endpoint_management.sh` - Admin config
 
-**Cost Estimate (4 users, 2 concurrent avg):**
-- Daily: ~$2.07 (endpoint 11hr + connections)
-- Monthly (22 workdays): ~$46 / NT$1,460
+**Cost Structure (AWS Client VPN us-east-1):**
+
+| 計費項目 | 費率 | 說明 |
+|---------|------|------|
+| Endpoint Association | $0.10/hour/subnet | 固定成本，與使用者數無關 |
+| Client Connection | $0.05/hour/connection | 按同時連線數計費 |
+
+**成本計算公式：**
+```
+每日成本 = ($0.10 × 運行小時 × subnet數) + ($0.05 × 運行小時 × 平均同時連線數)
+每月成本 = 每日成本 × 22 工作日
+```
+
+**Quick Cost Reference (10hr/day, 1 subnet):**
+
+| 同時連線數 | 每日成本 | 每月成本 (22天) | 適用情境 |
+|-----------|---------|----------------|---------|
+| 1 | $1.50 | $33 / NT$1,050 | 單人或輪流使用 |
+| 2 | $2.00 | $44 / NT$1,400 | 小團隊 (4人以下) |
+| 3 | $2.50 | $55 / NT$1,750 | 中型團隊 (6人以下) |
+| 4 | $3.00 | $66 / NT$2,100 | 較大團隊 (8人以下) |
+| 5 | $3.50 | $77 / NT$2,450 | 大型團隊 (10人以下) |
+
+**Current Estimate (4 users, 2 concurrent avg):**
+- Daily: ~$2.00 (endpoint 10hr + 2 connections)
+- Monthly (22 workdays): ~$44 / NT$1,400
+
+**Comparison with Pritunl (t3.medium):**
+- Pritunl: ~$20-25/month (固定成本，不隨使用者數增加)
+- AWS VPN 損益平衡點：約 1 位同時連線時成本相近

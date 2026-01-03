@@ -425,10 +425,10 @@ export class VpnAutomationStack extends cdk.Stack {
       });
     });
 
-    // Scheduled VPN Auto-Open Rule (weekdays 9:30 AM Taiwan time = 1:30 AM UTC)
+    // Scheduled VPN Auto-Open Rule (weekdays 10:00 AM Taiwan time = 2:00 AM UTC)
     const autoOpenRule = new events.Rule(this, 'VpnAutoOpenRule', {
-      schedule: events.Schedule.expression('cron(30 1 ? * MON-FRI *)'),
-      description: `Scheduled VPN auto-open for ${environment} environment (weekdays 9:30 AM Taiwan time)`,
+      schedule: events.Schedule.expression('cron(0 2 ? * MON-FRI *)'),
+      description: `Scheduled VPN auto-open for ${environment} environment (weekdays 10:00 AM Taiwan time)`,
       enabled: true
     });
 
@@ -830,12 +830,12 @@ export class VpnAutomationStack extends cdk.Stack {
     });
 
     new cdk.CfnOutput(this, 'AutoOpenSchedule', {
-      value: 'Weekdays 9:30 AM Taiwan time (1:30 AM UTC)',
+      value: 'Weekdays 10:00 AM Taiwan time (2:00 AM UTC)',
       description: 'VPN auto-open schedule for workdays'
     });
 
     new cdk.CfnOutput(this, 'BusinessHoursProtection', {
-      value: 'Weekdays 9:30 AM - 5:30 PM Taiwan time',
+      value: 'Weekdays 10:00 AM - 5:00 PM Taiwan time',
       description: 'No auto-close during business hours'
     });
 

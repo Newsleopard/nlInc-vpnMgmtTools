@@ -280,7 +280,7 @@ export const handler = async (
             },
             {
               title: "📝 Note | 注意",
-              value: `Auto-close at 6 PM or manual: \`/vpn close ${ENVIRONMENT}\` | 6PM自動關閉或手動操作`,
+              value: `Auto-close at 5 PM or manual: \`/vpn close ${ENVIRONMENT}\` | 5PM自動關閉或手動操作`,
               short: false
             }
           ]
@@ -472,14 +472,14 @@ function isBusinessHours(): boolean {
     dayOfWeek = adjustedTime.getUTCDay();
   }
 
-  // Business hours: Monday-Friday, 9:30 AM - 5:30 PM in specified timezone
+  // Business hours: Monday-Friday, 10:00 AM - 5:00 PM in specified timezone
   const isWeekday = dayOfWeek >= 1 && dayOfWeek <= 5;
 
-  // Check if after 9:30 AM: hour > 9 OR (hour == 9 AND minute >= 30)
-  const isAfterStart = hour > 9 || (hour === 9 && minute >= 30);
+  // Check if after 10:00 AM: hour >= 10
+  const isAfterStart = hour >= 10;
 
-  // Check if before 5:30 PM: hour < 17 OR (hour == 17 AND minute < 30)
-  const isBeforeEnd = hour < 17 || (hour === 17 && minute < 30);
+  // Check if before 5:00 PM: hour < 17
+  const isBeforeEnd = hour < 17;
 
   const isBusinessHour = isAfterStart && isBeforeEnd;
 
