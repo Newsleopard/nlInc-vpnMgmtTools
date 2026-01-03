@@ -7,7 +7,7 @@
     "build:shared": "cd shared && npm install && tsc",
     "build:functions": "npm run build:slack-handler && npm run build:vpn-control && npm run build:vpn-monitor",
     "build:slack-handler": "cd slack-handler && npm install && tsc",
-    "build:vpn-control": "cd vpn-control && npm install && tsc", 
+    "build:vpn-control": "cd vpn-control && npm install && tsc",
     "build:vpn-monitor": "cd vpn-monitor && npm install && tsc",
     "clean": "find . -name 'node_modules' -type d -exec rm -rf {} + && find . -name '*.js' -type f -delete",
     "test": "jest",
@@ -19,19 +19,20 @@
   },
   "workspaces": [
     "shared",
-    "slack-handler", 
+    "slack-handler",
     "vpn-control",
     "vpn-monitor"
   ],
   "devDependencies": {
-    "typescript": "~5.0.4",
     "@types/jest": "^29.4.0",
     "@types/node": "^20.10.0",
+    "@typescript-eslint/eslint-plugin": "^5.55.0",
+    "@typescript-eslint/parser": "^5.55.0",
+    "eslint": "^8.36.0",
+    "fast-check": "^4.5.3",
     "jest": "^29.5.0",
     "ts-jest": "^29.0.5",
-    "eslint": "^8.36.0",
-    "@typescript-eslint/eslint-plugin": "^5.55.0",
-    "@typescript-eslint/parser": "^5.55.0"
+    "typescript": "~5.0.4"
   },
   "dependencies": {
     "aws-sdk": "^2.1490.0"

@@ -4,10 +4,11 @@ import { CloudWatchClient, PutMetricDataCommand, StandardUnit } from '@aws-sdk/c
 import * as querystring from 'querystring';
 
 // Import shared utilities from Lambda Layer
-import { SlackCommand, VpnCommandRequest, VpnCommandResponse, CrossAccountRequest } from '/opt/nodejs/types';
+import { SlackCommand, VpnCommandRequest, VpnCommandResponse, CrossAccountRequest, ScheduleStatusData } from '/opt/nodejs/types';
 import * as slack from '/opt/nodejs/slack';
 import * as stateStore from '/opt/nodejs/stateStore';
 import { createLogger, extractLogContext, withPerformanceLogging } from '/opt/nodejs/logger';
+import * as scheduleManager from '/opt/nodejs/scheduleManager';
 
 const lambda = new LambdaClient({});
 const cloudwatch = new CloudWatchClient({});
@@ -85,15 +86,12 @@ export const handler = async (
         logger
       )();
       
-      // Debug: Log what we got from parameter store
-      console.log('DEBUG: Signing secret from parameter store:', {
-        type: typeof signingSecret,
-        length: signingSecret.length,
-        value: signingSecret.substring(0, 10) + '...',
-        isObject: typeof signingSecret === 'object',
-        stringified: JSON.stringify(signingSecret).substring(0, 50) + '...'
+      // Security: Only log metadata, never secret values
+      logger.debug('Slack signing secret loaded', {
+        hasValue: !!signingSecret,
+        lengthValid: signingSecret.length > 0
       });
-      
+
       const isValidSignature = slack.verifySlackSignature(body, signature, timestamp, signingSecret);
       
       if (!isValidSignature) {
@@ -107,30 +105,13 @@ export const handler = async (
           timestampPresent: !!timestamp
         });
         
-        // Debug: Add signature info to response (remove in production)
-        const crypto = require('crypto');
-        const baseString = `v0:${timestamp}:${body}`;
-        const expectedSig = 'v0=' + crypto
-          .createHmac('sha256', signingSecret)
-          .update(baseString)
-          .digest('hex');
-        
-        const debugInfo = {
-          receivedSig: signature.substring(0, 20) + '...',
-          expectedSig: expectedSig.substring(0, 20) + '...',
-          timestamp: timestamp,
-          bodyLength: body.length,
-          bodyStart: body.substring(0, 100) + '...',
-          signingSecretLen: signingSecret.length,
-          match: signature === expectedSig
-        };
-        
+        // Security: Never expose signature details in response
         return {
           statusCode: 200,
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             response_type: 'ephemeral',
-            text: `❌ Invalid Slack signature. Debug: ${JSON.stringify(debugInfo)}`
+            text: '❌ Invalid Slack signature. Please contact your administrator if this persists.'
           })
         };
       }
@@ -260,6 +241,54 @@ export const handler = async (
           response_type: 'ephemeral',
           text: 'Help information not available'
         })
+      };
+    }
+
+    // Handle schedule help command immediately
+    if (vpnCommand.action === 'schedule-help') {
+      logger.info('Returning schedule help message', {
+        user: vpnCommand.user,
+        requestId: vpnCommand.requestId
+      });
+      
+      return {
+        statusCode: 200,
+        headers: { 'Content-Type': 'application/json' },
+        body: vpnCommand.helpMessage || JSON.stringify({
+          response_type: 'ephemeral',
+          text: 'Schedule help information not available'
+        })
+      };
+    }
+
+    // Handle schedule commands synchronously (quick operations)
+    // Requirements: 1.1, 2.1, 3.1, 4.1, 4.2, 4.3, 4.4
+    if (vpnCommand.action.startsWith('schedule-')) {
+      logger.info('Processing schedule command synchronously', {
+        action: vpnCommand.action,
+        environment: vpnCommand.environment,
+        user: vpnCommand.user,
+        duration: vpnCommand.duration
+      });
+      
+      const scheduleResponse = await handleScheduleCommand(vpnCommand, logger);
+      
+      logger.audit('Schedule command completed', 'schedule_command', scheduleResponse.success ? 'success' : 'failure', {
+        command: vpnCommand.action,
+        environment: vpnCommand.environment,
+        user: vpnCommand.user,
+        requestId: vpnCommand.requestId,
+        success: scheduleResponse.success,
+        error: scheduleResponse.error
+      });
+      
+      return {
+        statusCode: 200,
+        headers: { 
+          'Content-Type': 'application/json',
+          'X-Correlation-ID': logger.getCorrelationId()
+        },
+        body: JSON.stringify(scheduleResponse.slackResponse)
       };
     }
 
@@ -937,5 +966,266 @@ async function sendSlackFollowup(responseUrl: string, slackResponse: any, logger
       responseUrl: responseUrl
     });
     throw error;
+  }
+}
+
+/**
+ * Handle schedule commands for auto-schedule management
+ * 
+ * Requirements: 1.1, 2.1, 3.1, 4.1, 4.2, 4.3, 4.4
+ * 
+ * @param command - VPN command request with schedule action
+ * @param logger - Logger instance
+ * @returns Object with success status and formatted Slack response
+ */
+async function handleScheduleCommand(
+  command: VpnCommandRequest,
+  logger: any
+): Promise<{ success: boolean; error?: string; slackResponse: any }> {
+  const childLogger = logger.child({ operation: 'handleScheduleCommand' });
+  
+  try {
+    childLogger.info('Processing schedule command', {
+      action: command.action,
+      environment: command.environment,
+      user: command.user,
+      duration: command.duration
+    });
+
+    let scheduleState: scheduleManager.ScheduleState;
+    let statusData: ScheduleStatusData | undefined;
+    let response: VpnCommandResponse;
+
+    switch (command.action) {
+      case 'schedule-on':
+        // Enable both auto-open and auto-close schedules
+        // Requirements: 1.1, 1.2, 1.3
+        scheduleState = await scheduleManager.enableSchedule(
+          command.environment,
+          'both',
+          command.user
+        );
+        
+        response = {
+          success: true,
+          message: `Auto-scheduling enabled for ${command.environment}`
+        };
+        
+        childLogger.info('Schedule enabled', {
+          environment: command.environment,
+          autoOpenEnabled: scheduleState.autoOpen.enabled,
+          autoCloseEnabled: scheduleState.autoClose.enabled
+        });
+        break;
+
+      case 'schedule-off':
+        // Disable both auto-open and auto-close schedules
+        // Requirements: 2.1, 2.2, 2.3, 2.4, 2.5
+        scheduleState = await scheduleManager.disableSchedule(
+          command.environment,
+          'both',
+          command.user,
+          command.duration
+        );
+        
+        response = {
+          success: true,
+          message: command.duration 
+            ? `Auto-scheduling disabled for ${command.environment} for ${command.duration}`
+            : `Auto-scheduling disabled for ${command.environment} indefinitely`
+        };
+        
+        childLogger.info('Schedule disabled', {
+          environment: command.environment,
+          duration: command.duration,
+          autoOpenEnabled: scheduleState.autoOpen.enabled,
+          autoCloseEnabled: scheduleState.autoClose.enabled,
+          expiresAt: scheduleState.autoOpen.expiresAt
+        });
+        break;
+
+      case 'schedule-check':
+        // Get schedule status
+        // Requirements: 3.1, 3.2, 3.3, 3.4, 3.5
+        statusData = await scheduleManager.getScheduleStatus(command.environment);
+        
+        response = {
+          success: true,
+          message: `Schedule status for ${command.environment}`
+        };
+        
+        childLogger.info('Schedule status retrieved', {
+          environment: command.environment,
+          autoOpenEnabled: statusData.autoOpen.enabled,
+          autoCloseEnabled: statusData.autoClose.enabled
+        });
+        break;
+
+      case 'schedule-open-on':
+        // Enable only auto-open schedule
+        // Requirements: 4.1, 4.5
+        scheduleState = await scheduleManager.enableSchedule(
+          command.environment,
+          'autoOpen',
+          command.user
+        );
+        
+        response = {
+          success: true,
+          message: `Auto-open schedule enabled for ${command.environment}`
+        };
+        
+        childLogger.info('Auto-open schedule enabled', {
+          environment: command.environment,
+          autoOpenEnabled: scheduleState.autoOpen.enabled
+        });
+        break;
+
+      case 'schedule-open-off':
+        // Disable only auto-open schedule
+        // Requirements: 4.2, 4.5
+        scheduleState = await scheduleManager.disableSchedule(
+          command.environment,
+          'autoOpen',
+          command.user,
+          command.duration
+        );
+        
+        response = {
+          success: true,
+          message: command.duration
+            ? `Auto-open schedule disabled for ${command.environment} for ${command.duration}`
+            : `Auto-open schedule disabled for ${command.environment} indefinitely`
+        };
+        
+        childLogger.info('Auto-open schedule disabled', {
+          environment: command.environment,
+          duration: command.duration,
+          autoOpenEnabled: scheduleState.autoOpen.enabled
+        });
+        break;
+
+      case 'schedule-close-on':
+        // Enable only auto-close schedule
+        // Requirements: 4.3, 4.5
+        scheduleState = await scheduleManager.enableSchedule(
+          command.environment,
+          'autoClose',
+          command.user
+        );
+        
+        response = {
+          success: true,
+          message: `Auto-close schedule enabled for ${command.environment}`
+        };
+        
+        childLogger.info('Auto-close schedule enabled', {
+          environment: command.environment,
+          autoCloseEnabled: scheduleState.autoClose.enabled
+        });
+        break;
+
+      case 'schedule-close-off':
+        // Disable only auto-close schedule
+        // Requirements: 4.4, 4.5
+        scheduleState = await scheduleManager.disableSchedule(
+          command.environment,
+          'autoClose',
+          command.user,
+          command.duration
+        );
+        
+        response = {
+          success: true,
+          message: command.duration
+            ? `Auto-close schedule disabled for ${command.environment} for ${command.duration}`
+            : `Auto-close schedule disabled for ${command.environment} indefinitely`
+        };
+        
+        childLogger.info('Auto-close schedule disabled', {
+          environment: command.environment,
+          duration: command.duration,
+          autoCloseEnabled: scheduleState.autoClose.enabled
+        });
+        break;
+
+      default:
+        response = {
+          success: false,
+          message: 'Unknown schedule command',
+          error: `Unknown schedule action: ${command.action}`
+        };
+    }
+
+    // Publish success metric
+    await publishScheduleCommandMetric('ScheduleCommandExecuted', 1, command.environment, {
+      Action: command.action,
+      Success: 'true'
+    });
+
+    // Format the response for Slack
+    const slackResponse = slack.formatScheduleResponse(response, command, statusData);
+
+    return {
+      success: response.success,
+      error: response.error,
+      slackResponse
+    };
+
+  } catch (error: any) {
+    childLogger.error('Schedule command failed', {
+      action: command.action,
+      environment: command.environment,
+      error: error.message
+    });
+
+    // Publish failure metric
+    await publishScheduleCommandMetric('ScheduleCommandExecuted', 1, command.environment, {
+      Action: command.action,
+      Success: 'false'
+    });
+
+    const errorResponse: VpnCommandResponse = {
+      success: false,
+      message: 'Schedule command failed',
+      error: error.message
+    };
+
+    const slackResponse = slack.formatScheduleResponse(errorResponse, command);
+
+    return {
+      success: false,
+      error: error.message,
+      slackResponse
+    };
+  }
+}
+
+/**
+ * Publish schedule command metrics to CloudWatch
+ */
+async function publishScheduleCommandMetric(
+  metricName: string,
+  value: number,
+  environment: string,
+  dimensions: { [key: string]: string }
+): Promise<void> {
+  try {
+    await cloudwatch.send(new PutMetricDataCommand({
+      Namespace: 'VPN/Schedule',
+      MetricData: [{
+        MetricName: metricName,
+        Value: value,
+        Unit: StandardUnit.Count,
+        Dimensions: [
+          { Name: 'Environment', Value: environment },
+          ...Object.entries(dimensions).map(([k, v]) => ({ Name: k, Value: v }))
+        ],
+        Timestamp: new Date()
+      }]
+    }));
+  } catch (error) {
+    // Don't throw - metric failure shouldn't break the main operation
+    console.warn('Failed to publish schedule command metric:', error);
   }
 }

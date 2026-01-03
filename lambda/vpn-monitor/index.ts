@@ -6,6 +6,7 @@ import * as vpnManager from '/opt/nodejs/vpnManager';
 import * as stateStore from '/opt/nodejs/stateStore';
 import * as slack from '/opt/nodejs/slack';
 import { createLogger } from '/opt/nodejs/logger';
+import * as scheduleManager from '/opt/nodejs/scheduleManager';
 
 const cloudwatch = new CloudWatchClient({});
 
@@ -131,6 +132,51 @@ export const handler = async (
       
       // Reset cooldown if VPN is actively being used
       await clearCooldownTimestamp();
+      return;
+    }
+
+    // Check if auto-close schedule is enabled (Requirements: 6.1, 6.2, 6.3)
+    const isAutoCloseScheduleEnabled = await scheduleManager.isAutoCloseEnabled(ENVIRONMENT);
+    if (!isAutoCloseScheduleEnabled) {
+      logger.info('Auto-close schedule is disabled, skipping idle check', {
+        environment: ENVIRONMENT,
+        reason: 'schedule_disabled'
+      });
+      
+      // Send notification about skipped operation
+      const environmentEmoji = ENVIRONMENT === 'production' ? '🚀' : '🔧';
+      const environmentName = ENVIRONMENT === 'production' ? 'Production' : 'Staging';
+      
+      await slack.sendSlackNotification({
+        text: "📅 Auto-Close Schedule Disabled | 自動關閉排程已停用",
+        attachments: [{
+          color: "#ffaa00",
+          fields: [
+            {
+              title: `${environmentEmoji} Environment | 環境`,
+              value: environmentName,
+              short: true
+            },
+            {
+              title: "🔒 Status | 狀態",
+              value: "Auto-close disabled | 自動關閉已停用",
+              short: true
+            },
+            {
+              title: "📝 Note | 注意",
+              value: "Idle monitoring skipped due to schedule settings | 因排程設定跳過閒置監控",
+              short: false
+            },
+            {
+              title: "🔧 Re-enable | 重新啟用",
+              value: `/vpn schedule on ${ENVIRONMENT}`,
+              short: false
+            }
+          ]
+        }]
+      });
+      
+      await publishMetric('ScheduleDisabledSkips', 1);
       return;
     }
 

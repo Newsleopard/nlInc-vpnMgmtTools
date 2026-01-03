@@ -68,6 +68,18 @@
 /vpn savings staging   # 檢視成本節省
 ```
 
+### 排程管理 | Schedule Management
+
+```text
+/vpn schedule on staging       # 啟用自動排程 | Enable auto-schedule
+/vpn schedule off staging      # 停用自動排程 | Disable auto-schedule
+/vpn schedule off staging 2h   # 停用 2 小時 | Disable for 2 hours
+/vpn schedule check staging    # 檢查排程狀態 | Check schedule status
+/vpn schedule open on staging  # 僅啟用自動開啟 | Enable auto-open only
+/vpn schedule close off staging # 停用自動關閉 | Disable auto-close only
+/vpn schedule help             # 排程指令說明 | Schedule command help
+```
+
 ### 安全功能
 
 - 🔐 憑證式身份驗證
@@ -78,7 +90,10 @@
 ### 自動化
 
 - ⚡ Lambda 驅動的無伺服器架構
+- 🌅 平日自動開啟 VPN（週一至週五 09:30 台灣時間）
 - 🔄 閒置 100 分鐘後自動關閉
+- 🛡️ 營業時間保護（09:30-17:30 不自動關閉）
+- ⏰ Slack 排程管理（可動態啟用/停用自動排程）
 - 📊 即時成本追蹤
 - 🚀 < 1 秒 Slack 回應時間
 

@@ -15,6 +15,7 @@
 - [事件響應](#-事件響應)
 - [管理工具參考](#️-管理工具參考)
 - [成本管理](#-成本管理)
+- [排程管理](#-排程管理)
 - [安全最佳實踐](#-安全最佳實踐)
 - [管理程序](#-管理程序)
 - [管理員交接](#-管理員交接)
@@ -497,6 +498,145 @@ aws ssm put-parameter \
 # 比較環境
 /vpn costs cumulative
 ```
+
+## ⏰ 排程管理
+
+VPN 系統具備自動排程功能，管理員可透過 Slack 命令動態控制自動開啟和自動關閉行為。
+
+### 排程功能概覽
+
+| 功能 | 說明 | 預設狀態 |
+|------|------|----------|
+| **自動開啟 (Auto-Open)** | 平日 09:30 台灣時間自動開啟 VPN | 啟用 |
+| **自動關閉 (Auto-Close)** | 閒置 100 分鐘後自動關閉 VPN | 啟用 |
+| **營業時間保護** | 09:30-17:30 期間不自動關閉 | 啟用 |
+
+### Slack 排程命令
+
+#### 基本命令
+
+```text
+/vpn schedule on staging       # 啟用所有自動排程
+/vpn schedule off staging      # 停用所有自動排程（永久）
+/vpn schedule off staging 2h   # 停用 2 小時後自動恢復
+/vpn schedule check staging    # 檢查目前排程狀態
+/vpn schedule help             # 顯示排程命令說明
+```
+
+#### 細粒度控制
+
+```text
+/vpn schedule open on staging   # 僅啟用自動開啟
+/vpn schedule open off staging  # 僅停用自動開啟
+/vpn schedule close on staging  # 僅啟用自動關閉
+/vpn schedule close off staging # 僅停用自動關閉
+```
+
+### 常見使用情境
+
+#### 情境 1：維護期間停用自動排程
+
+進行系統維護時，暫時停用自動排程以避免干擾：
+
+```text
+# 停用 4 小時進行維護
+/vpn schedule off production 4h
+
+# 維護完成後手動恢復（如果需要提前恢復）
+/vpn schedule on production
+```
+
+#### 情境 2：週末或假日停用自動開啟
+
+假日期間不需要自動開啟 VPN：
+
+```text
+# 停用自動開啟 3 天
+/vpn schedule open off staging 3d
+
+# 或永久停用直到手動恢復
+/vpn schedule open off staging
+```
+
+#### 情境 3：長時間作業停用自動關閉
+
+進行長時間資料處理時，防止 VPN 被自動關閉：
+
+```text
+# 停用自動關閉 8 小時
+/vpn schedule close off production 8h
+```
+
+### 持續時間格式
+
+| 格式 | 說明 | 範例 |
+|------|------|------|
+| `Nh` | N 小時 | `2h`, `24h` |
+| `Nd` | N 天 | `1d`, `7d` |
+
+### 排程狀態檢查
+
+執行 `/vpn schedule check staging` 會顯示：
+
+```text
+📅 VPN 排程狀態 | VPN Schedule Status
+環境 | Environment: staging
+
+🌅 自動開啟 | Auto-Open: ✅ 啟用 | Enabled
+   下次排程時間 | Next scheduled: 2026-01-05 09:30 (Mon)
+
+🔄 自動關閉 | Auto-Close: ⏸️ 停用 | Disabled
+   剩餘時間 | Remaining: 1h 30m
+   將於 | Re-enables at: 2026-01-03 15:00
+
+🛡️ 營業時間保護 | Business Hours Protection: ✅ 啟用 | Enabled
+   時段 | Hours: 09:30 - 17:30 (Asia/Taipei)
+
+最後修改 | Last modified: 2026-01-03 13:30 by admin_user
+```
+
+### 排程狀態儲存
+
+排程狀態儲存在 AWS Parameter Store：
+
+```text
+/vpn/automation/schedule/{environment}/state
+```
+
+狀態包含：
+- 自動開啟/關閉的啟用狀態
+- 最後修改時間和修改者
+- 到期時間（如果設定了持續時間）
+
+### 疑難排解
+
+#### 排程命令無回應
+
+1. 確認您有該環境的管理權限
+2. 檢查 Lambda 函數日誌：
+   ```bash
+   aws logs tail /aws/lambda/vpn-slack-handler-staging --follow --profile staging
+   ```
+
+#### 排程狀態不正確
+
+1. 檢查 Parameter Store 中的狀態：
+   ```bash
+   aws ssm get-parameter \
+     --name "/vpn/automation/schedule/staging/state" \
+     --profile staging
+   ```
+
+2. 如需重置，可手動更新 Parameter Store 或執行：
+   ```text
+   /vpn schedule on staging
+   ```
+
+#### 自動排程未按預期執行
+
+1. 確認排程已啟用：`/vpn schedule check staging`
+2. 檢查 VPN Monitor Lambda 日誌
+3. 確認 EventBridge 規則正常運作
 
 ## 🔒 安全最佳實踐
 

@@ -7,6 +7,7 @@ import * as vpnManager from '/opt/nodejs/vpnManager';
 import * as stateStore from '/opt/nodejs/stateStore';
 import * as slack from '/opt/nodejs/slack';
 import { createLogger, extractLogContext, withPerformanceLogging } from '/opt/nodejs/logger';
+import * as scheduleManager from '/opt/nodejs/scheduleManager';
 
 const cloudwatch = new CloudWatchClient({});
 const ENVIRONMENT = process.env.ENVIRONMENT || 'staging';
@@ -48,6 +49,38 @@ export const handler = async (
   if (isAutoOpenRequest(event)) {
     console.log(`Auto-open request received for ${ENVIRONMENT} environment`);
     try {
+      // Check if auto-open schedule is enabled (Requirements: 6.1, 6.4)
+      const isAutoOpenScheduleEnabled = await scheduleManager.isAutoOpenEnabled(ENVIRONMENT);
+      if (!isAutoOpenScheduleEnabled) {
+        console.log(`Auto-open schedule is disabled for ${ENVIRONMENT}, skipping scheduled open`);
+        
+        // Send notification about skipped operation
+        await slack.sendSlackNotification({
+          text: `📅 VPN ${ENVIRONMENT} 自動開啟已跳過 | Auto-open skipped`,
+          attachments: [{
+            color: '#ffaa00',
+            fields: [
+              { title: '🕤 Time | 時間', value: new Date().toISOString(), short: true },
+              { title: '📍 Environment | 環境', value: ENVIRONMENT, short: true },
+              { title: '📅 Reason | 原因', value: 'Auto-open schedule disabled | 自動開啟排程已停用', short: false },
+              { title: '🔧 Re-enable | 重新啟用', value: `/vpn schedule on ${ENVIRONMENT}`, short: false }
+            ]
+          }]
+        });
+        
+        await publishMetric('ScheduleDisabledSkips', 1);
+        
+        return {
+          statusCode: 200,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: `Auto-open skipped for ${ENVIRONMENT} - schedule disabled`,
+            status: 'schedule_disabled',
+            timestamp: new Date().toISOString()
+          })
+        };
+      }
+      
       // Check current status first
       const currentStatus = await vpnManager.fetchStatus();
 

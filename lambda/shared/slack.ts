@@ -1,5 +1,5 @@
 import * as crypto from 'crypto';
-import { SlackCommand, VpnCommandRequest, VpnCommandResponse } from './types';
+import { SlackCommand, VpnCommandRequest, VpnCommandResponse, ScheduleStatusData } from './types';
 import * as stateStore from './stateStore';
 
 // Verify Slack request signature for security
@@ -28,18 +28,7 @@ export function verifySlackSignature(
       .update(baseString)
       .digest('hex');
     
-    // Debug logging (remove in production)
-    console.log('Slack signature verification:', {
-      receivedSignature: signature,
-      expectedSignature: expectedSignature,
-      timestamp: timestamp,
-      bodyLength: body.length,
-      signingSecretLength: signingSecret.length,
-      match: signature === expectedSignature,
-      baseString: baseString.substring(0, 100) + '...',
-      bodyPreview: body.substring(0, 100) + '...'
-    });
-    
+    // Security: Only log verification result, never expose signature values
     // Compare signatures using timing-safe comparison
     return crypto.timingSafeEqual(
       Buffer.from(signature),
@@ -68,6 +57,11 @@ export function parseSlackCommand(slackCommand: SlackCommand): VpnCommandRequest
   }
   
   const parts = text.split(/\s+/);
+  
+  // Handle schedule commands (Requirements: 1.1, 2.1, 2.2, 3.1, 4.1, 4.2, 4.3, 4.4)
+  if (parts[0].toLowerCase() === 'schedule') {
+    return parseScheduleCommand(slackCommand, parts);
+  }
   
   // Handle administrative commands for Epic 3.2
   if (parts[0].toLowerCase() === 'admin' && parts.length >= 3) {
@@ -104,7 +98,7 @@ export function parseSlackCommand(slackCommand: SlackCommand): VpnCommandRequest
   
   // Validate action (expanded for Epic 3.2)
   if (!['open', 'close', 'check', 'admin', 'savings', 'costs', 'help'].includes(action)) {
-    throw new Error(`Invalid action "${parts[0]}". Must be: open, close, check, admin, savings, costs, or help\n\n` + getHelpMessage());
+    throw new Error(`Invalid action "${parts[0]}". Must be: open, close, check, admin, savings, costs, schedule, or help\n\n` + getHelpMessage());
   }
   
   // Validate environment
@@ -144,6 +138,17 @@ function getHelpMessage(): string {
         ]
       },
       {
+        color: '#17a2b8',
+        title: '📅 Schedule Management | 排程管理',
+        fields: [
+          {
+            title: 'Schedule Commands | 排程指令',
+            value: '• `/vpn schedule on <env>` - Enable auto-scheduling | 啟用自動排程\n• `/vpn schedule off <env> [duration]` - Disable scheduling | 停用排程\n• `/vpn schedule check <env>` - Check schedule status | 查看排程狀態\n• `/vpn schedule help` - Detailed schedule help | 詳細排程說明',
+            short: false
+          }
+        ]
+      },
+      {
         color: '#ffaa00',
         title: '💰 Cost Optimization Commands',
         fields: [
@@ -176,7 +181,7 @@ function getHelpMessage(): string {
           },
           {
             title: '📝 Examples',
-            value: '• `/vpn open staging` - Open staging VPN\n• `/vpn savings production` - View production cost savings\n• `/vpn admin noclose staging` - Disable auto-close for 24h\n• `/vpn costs daily` - Daily cost breakdown',
+            value: '• `/vpn open staging` - Open staging VPN\n• `/vpn schedule check production` - Check production schedule\n• `/vpn admin noclose staging` - Disable auto-close for 24h\n• `/vpn costs daily` - Daily cost breakdown',
             short: true
           }
         ]
@@ -193,8 +198,479 @@ function getHelpMessage(): string {
   return JSON.stringify(helpResponse);
 }
 
+/**
+ * Get detailed help message for schedule commands
+ * 
+ * Requirements: 7.2, 7.3, 7.4
+ */
+export function getScheduleHelpMessage(): string {
+  const helpResponse = {
+    response_type: 'ephemeral',
+    text: '📅 VPN Schedule Management Help | VPN 排程管理說明',
+    attachments: [
+      {
+        color: 'good',
+        title: '🔄 Basic Schedule Commands | 基本排程指令',
+        fields: [
+          {
+            title: 'Enable All Schedules | 啟用所有排程',
+            value: '`/vpn schedule on <environment>`\nEnable both auto-open and auto-close | 啟用自動開啟和自動關閉',
+            short: false
+          },
+          {
+            title: 'Disable All Schedules | 停用所有排程',
+            value: '`/vpn schedule off <environment> [duration]`\nDisable both schedules, optionally for a duration | 停用所有排程，可選擇指定時間',
+            short: false
+          },
+          {
+            title: 'Check Schedule Status | 查看排程狀態',
+            value: '`/vpn schedule check <environment>`\nView current schedule configuration | 查看目前排程設定',
+            short: false
+          }
+        ]
+      },
+      {
+        color: '#ffaa00',
+        title: '🎯 Granular Schedule Control | 精細排程控制',
+        fields: [
+          {
+            title: 'Auto-Open Control | 自動開啟控制',
+            value: '`/vpn schedule open on <env>` - Enable auto-open | 啟用自動開啟\n`/vpn schedule open off <env>` - Disable auto-open | 停用自動開啟',
+            short: false
+          },
+          {
+            title: 'Auto-Close Control | 自動關閉控制',
+            value: '`/vpn schedule close on <env>` - Enable auto-close | 啟用自動關閉\n`/vpn schedule close off <env>` - Disable auto-close | 停用自動關閉',
+            short: false
+          }
+        ]
+      },
+      {
+        color: '#36a64f',
+        title: '⏱️ Duration Format | 時間格式',
+        fields: [
+          {
+            title: 'Supported Formats | 支援格式',
+            value: '• `Nm` - Minutes (e.g., 30m) | 分鐘\n• `Nh` - Hours (e.g., 2h, 24h) | 小時\n• `Nd` - Days (e.g., 7d) | 天',
+            short: true
+          },
+          {
+            title: 'Examples | 範例',
+            value: '• `/vpn schedule off staging 2h`\n• `/vpn schedule close off prod 24h`\n• `/vpn schedule off production 7d`',
+            short: true
+          }
+        ]
+      },
+      {
+        color: '#764FA5',
+        title: '📋 Schedule Configuration | 排程設定',
+        text: '• 🌅 Auto-open: Weekdays 9:30 AM Taiwan time | 自動開啟：週一至週五 台灣時間 9:30\n• 🔒 Auto-close: After 100 minutes idle | 自動關閉：閒置 100 分鐘後\n• 🛡️ Business hours protection: 9:30 AM - 5:30 PM | 上班時間保護：9:30 - 17:30',
+        footer: 'VPN Schedule Management | VPN 排程管理'
+      }
+    ]
+  };
+  
+  return JSON.stringify(helpResponse);
+}
+
+/**
+ * Format schedule command response for Slack
+ * 
+ * Requirements: 1.3, 2.5, 3.2, 3.3, 3.4, 3.5, 3.6
+ * 
+ * @param response - VPN command response
+ * @param command - Original VPN command request
+ * @param statusData - Optional schedule status data for check commands
+ * @returns Formatted Slack response object
+ */
+export function formatScheduleResponse(
+  response: VpnCommandResponse,
+  command: VpnCommandRequest,
+  statusData?: ScheduleStatusData
+): any {
+  const environmentEmoji = command.environment === 'production' ? '🚀' : '🔧';
+  const environmentName = command.environment.charAt(0).toUpperCase() + command.environment.slice(1);
+  const environmentNameChinese = command.environment === 'production' ? '正式環境' : '測試環境';
+  
+  // Handle errors
+  if (!response.success) {
+    return {
+      response_type: 'ephemeral',
+      text: `❌ Schedule command failed | 排程指令失敗`,
+      attachments: [{
+        color: 'danger',
+        fields: [
+          {
+            title: 'Error | 錯誤',
+            value: response.error || 'Unknown error occurred | 發生未知錯誤',
+            short: false
+          },
+          {
+            title: 'Usage | 使用方式',
+            value: '`/vpn schedule <on|off|check> <environment>`',
+            short: false
+          }
+        ]
+      }]
+    };
+  }
+  
+  // Handle different schedule command types
+  switch (command.action) {
+    case 'schedule-on':
+      return formatScheduleEnableResponse(command, environmentEmoji, environmentName, environmentNameChinese);
+    
+    case 'schedule-off':
+      return formatScheduleDisableResponse(command, environmentEmoji, environmentName, environmentNameChinese);
+    
+    case 'schedule-check':
+      return formatScheduleStatusResponse(command, statusData, environmentEmoji, environmentName, environmentNameChinese);
+    
+    case 'schedule-open-on':
+    case 'schedule-open-off':
+      return formatGranularScheduleResponse(command, 'auto-open', environmentEmoji, environmentName, environmentNameChinese);
+    
+    case 'schedule-close-on':
+    case 'schedule-close-off':
+      return formatGranularScheduleResponse(command, 'auto-close', environmentEmoji, environmentName, environmentNameChinese);
+    
+    case 'schedule-help':
+      return JSON.parse(getScheduleHelpMessage());
+    
+    default:
+      return {
+        response_type: 'ephemeral',
+        text: `✅ ${response.message}`,
+        attachments: [{
+          color: 'good',
+          fields: [{
+            title: 'Response | 回應',
+            value: response.message,
+            short: false
+          }]
+        }]
+      };
+  }
+}
+
+/**
+ * Format enable schedule response
+ */
+function formatScheduleEnableResponse(
+  command: VpnCommandRequest,
+  environmentEmoji: string,
+  environmentName: string,
+  environmentNameChinese: string
+): any {
+  return {
+    response_type: 'in_channel',
+    text: `✅ Schedule Enabled | 排程已啟用`,
+    attachments: [{
+      color: 'good',
+      fields: [
+        {
+          title: `${environmentEmoji} Environment | 環境`,
+          value: `${environmentName} | ${environmentNameChinese}`,
+          short: true
+        },
+        {
+          title: '📅 Status | 狀態',
+          value: 'All schedules enabled | 所有排程已啟用',
+          short: true
+        },
+        {
+          title: '🔄 Auto-Open | 自動開啟',
+          value: '✅ Enabled | 已啟用',
+          short: true
+        },
+        {
+          title: '🔒 Auto-Close | 自動關閉',
+          value: '✅ Enabled | 已啟用',
+          short: true
+        },
+        {
+          title: '👤 Modified By | 修改者',
+          value: command.user,
+          short: true
+        },
+        {
+          title: '🕐 Time | 時間',
+          value: new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' }),
+          short: true
+        }
+      ],
+      footer: 'VPN Schedule Management | VPN 排程管理'
+    }]
+  };
+}
+
+/**
+ * Format disable schedule response
+ */
+function formatScheduleDisableResponse(
+  command: VpnCommandRequest,
+  environmentEmoji: string,
+  environmentName: string,
+  environmentNameChinese: string
+): any {
+  const fields: any[] = [
+    {
+      title: `${environmentEmoji} Environment | 環境`,
+      value: `${environmentName} | ${environmentNameChinese}`,
+      short: true
+    },
+    {
+      title: '📅 Status | 狀態',
+      value: 'All schedules disabled | 所有排程已停用',
+      short: true
+    },
+    {
+      title: '🔄 Auto-Open | 自動開啟',
+      value: '❌ Disabled | 已停用',
+      short: true
+    },
+    {
+      title: '🔒 Auto-Close | 自動關閉',
+      value: '❌ Disabled | 已停用',
+      short: true
+    }
+  ];
+  
+  // Add duration info if provided
+  if (command.duration) {
+    fields.push({
+      title: '⏱️ Duration | 持續時間',
+      value: command.duration,
+      short: true
+    });
+    fields.push({
+      title: '🔔 Auto Re-enable | 自動重新啟用',
+      value: 'Yes, after duration expires | 是，時間到期後',
+      short: true
+    });
+  } else {
+    fields.push({
+      title: '⏱️ Duration | 持續時間',
+      value: 'Indefinite | 無限期',
+      short: true
+    });
+    fields.push({
+      title: '🔔 Auto Re-enable | 自動重新啟用',
+      value: 'No, manual re-enable required | 否，需手動重新啟用',
+      short: true
+    });
+  }
+  
+  fields.push({
+    title: '👤 Modified By | 修改者',
+    value: command.user,
+    short: true
+  });
+  
+  fields.push({
+    title: '🕐 Time | 時間',
+    value: new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' }),
+    short: true
+  });
+  
+  return {
+    response_type: 'in_channel',
+    text: `⏸️ Schedule Disabled | 排程已停用`,
+    attachments: [{
+      color: 'warning',
+      fields,
+      footer: 'VPN Schedule Management | VPN 排程管理'
+    }]
+  };
+}
+
+/**
+ * Format schedule status check response
+ * 
+ * Requirements: 3.2, 3.3, 3.4, 3.5
+ */
+function formatScheduleStatusResponse(
+  command: VpnCommandRequest,
+  statusData: ScheduleStatusData | undefined,
+  environmentEmoji: string,
+  environmentName: string,
+  environmentNameChinese: string
+): any {
+  if (!statusData) {
+    return {
+      response_type: 'ephemeral',
+      text: `❌ Failed to retrieve schedule status | 無法取得排程狀態`,
+      attachments: [{
+        color: 'danger',
+        fields: [{
+          title: 'Error | 錯誤',
+          value: 'Schedule status data not available | 排程狀態資料不可用',
+          short: false
+        }]
+      }]
+    };
+  }
+  
+  const autoOpenStatus = statusData.autoOpen.enabled ? '✅ Enabled | 已啟用' : '❌ Disabled | 已停用';
+  const autoCloseStatus = statusData.autoClose.enabled ? '✅ Enabled | 已啟用' : '❌ Disabled | 已停用';
+  
+  const fields: any[] = [
+    {
+      title: `${environmentEmoji} Environment | 環境`,
+      value: `${environmentName} | ${environmentNameChinese}`,
+      short: true
+    },
+    {
+      title: '🔄 Auto-Open | 自動開啟',
+      value: autoOpenStatus,
+      short: true
+    }
+  ];
+  
+  // Add next scheduled time if auto-open is enabled
+  if (statusData.autoOpen.enabled && statusData.autoOpen.nextScheduledTime) {
+    const nextTime = new Date(statusData.autoOpen.nextScheduledTime);
+    fields.push({
+      title: '📅 Next Open | 下次開啟',
+      value: nextTime.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' }),
+      short: true
+    });
+  }
+  
+  // Add disabled until time if auto-open is disabled with expiration
+  if (!statusData.autoOpen.enabled && statusData.autoOpen.disabledUntil) {
+    fields.push({
+      title: '⏱️ Auto-Open Re-enables In | 自動開啟將在此時間後重新啟用',
+      value: statusData.autoOpen.disabledUntil,
+      short: true
+    });
+  }
+  
+  fields.push({
+    title: '🔒 Auto-Close | 自動關閉',
+    value: autoCloseStatus,
+    short: true
+  });
+  
+  fields.push({
+    title: '⏰ Idle Timeout | 閒置超時',
+    value: `${statusData.autoClose.idleTimeoutMinutes} minutes | 分鐘`,
+    short: true
+  });
+  
+  // Add disabled until time if auto-close is disabled with expiration
+  if (!statusData.autoClose.enabled && statusData.autoClose.disabledUntil) {
+    fields.push({
+      title: '⏱️ Auto-Close Re-enables In | 自動關閉將在此時間後重新啟用',
+      value: statusData.autoClose.disabledUntil,
+      short: true
+    });
+  }
+  
+  // Business hours protection
+  fields.push({
+    title: '🛡️ Business Hours Protection | 上班時間保護',
+    value: statusData.businessHoursProtection.enabled 
+      ? `✅ ${statusData.businessHoursProtection.start} - ${statusData.businessHoursProtection.end} (${statusData.businessHoursProtection.timezone})`
+      : '❌ Disabled | 已停用',
+    short: false
+  });
+  
+  // Last modified info
+  fields.push({
+    title: '👤 Last Modified By | 最後修改者',
+    value: statusData.modifiedBy,
+    short: true
+  });
+  
+  fields.push({
+    title: '🕐 Last Modified | 最後修改時間',
+    value: new Date(statusData.lastModified).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' }),
+    short: true
+  });
+  
+  return {
+    response_type: 'ephemeral',
+    text: `📊 Schedule Status | 排程狀態`,
+    attachments: [{
+      color: 'good',
+      fields,
+      footer: 'VPN Schedule Management | VPN 排程管理'
+    }]
+  };
+}
+
+/**
+ * Format granular schedule command response (open/close on/off)
+ */
+function formatGranularScheduleResponse(
+  command: VpnCommandRequest,
+  scheduleType: string,
+  environmentEmoji: string,
+  environmentName: string,
+  environmentNameChinese: string
+): any {
+  const isEnable = command.action.endsWith('-on');
+  const scheduleTypeName = scheduleType === 'auto-open' ? 'Auto-Open | 自動開啟' : 'Auto-Close | 自動關閉';
+  const statusEmoji = isEnable ? '✅' : '❌';
+  const statusText = isEnable ? 'Enabled | 已啟用' : 'Disabled | 已停用';
+  
+  const fields: any[] = [
+    {
+      title: `${environmentEmoji} Environment | 環境`,
+      value: `${environmentName} | ${environmentNameChinese}`,
+      short: true
+    },
+    {
+      title: `🎯 Schedule Type | 排程類型`,
+      value: scheduleTypeName,
+      short: true
+    },
+    {
+      title: '📅 Status | 狀態',
+      value: `${statusEmoji} ${statusText}`,
+      short: true
+    }
+  ];
+  
+  // Add duration info if disabling with duration
+  if (!isEnable && command.duration) {
+    fields.push({
+      title: '⏱️ Duration | 持續時間',
+      value: command.duration,
+      short: true
+    });
+  }
+  
+  fields.push({
+    title: '👤 Modified By | 修改者',
+    value: command.user,
+    short: true
+  });
+  
+  fields.push({
+    title: '🕐 Time | 時間',
+    value: new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' }),
+    short: true
+  });
+  
+  const headerText = isEnable 
+    ? `✅ ${scheduleTypeName} Enabled` 
+    : `⏸️ ${scheduleTypeName} Disabled`;
+  
+  return {
+    response_type: 'in_channel',
+    text: headerText,
+    attachments: [{
+      color: isEnable ? 'good' : 'warning',
+      fields,
+      footer: 'VPN Schedule Management | VPN 排程管理'
+    }]
+  };
+}
+
 // Check if user is authorized for production operations
-function isAuthorizedForProduction(username: string): boolean {
+export function isAuthorizedForProduction(username: string): boolean {
   // This could be enhanced to check against Parameter Store or external auth service
   const authorizedUsers = (process.env.PRODUCTION_AUTHORIZED_USERS || '').split(',');
   return authorizedUsers.includes(username) || authorizedUsers.includes('*');
@@ -272,10 +748,303 @@ function parseCostCommand(slackCommand: SlackCommand, parts: string[]): VpnComma
   };
 }
 
+/**
+ * Parse schedule commands for auto-schedule management
+ * 
+ * Supported formats:
+ * - /vpn schedule on <environment>
+ * - /vpn schedule off <environment> [duration]
+ * - /vpn schedule check <environment>
+ * - /vpn schedule open on|off <environment>
+ * - /vpn schedule close on|off <environment>
+ * - /vpn schedule help
+ * 
+ * Requirements: 1.1, 2.1, 2.2, 3.1, 4.1, 4.2, 4.3, 4.4
+ */
+export function parseScheduleCommand(slackCommand: SlackCommand, parts: string[]): VpnCommandRequest {
+  // parts[0] is 'schedule'
+  const subCommand = parts[1]?.toLowerCase();
+  
+  // Handle schedule help
+  if (!subCommand || subCommand === 'help' || subCommand === '--help' || subCommand === '-h') {
+    return {
+      action: 'schedule-help',
+      environment: 'staging',
+      user: slackCommand.user_name,
+      requestId: generateRequestId(),
+      helpMessage: getScheduleHelpMessage()
+    };
+  }
+  
+  // Handle granular schedule commands: /vpn schedule open|close on|off <environment>
+  if (subCommand === 'open' || subCommand === 'close') {
+    return parseGranularScheduleCommand(slackCommand, parts, subCommand);
+  }
+  
+  // Handle basic schedule commands: /vpn schedule on|off|check <environment>
+  if (['on', 'off', 'check'].includes(subCommand)) {
+    return parseBasicScheduleCommand(slackCommand, parts, subCommand);
+  }
+  
+  throw new Error(
+    `Invalid schedule action "${subCommand}". Use: on, off, check, open, close, or help\n\n` +
+    getScheduleHelpMessage()
+  );
+}
+
+/**
+ * Parse basic schedule commands: on, off, check
+ */
+function parseBasicScheduleCommand(
+  slackCommand: SlackCommand, 
+  parts: string[], 
+  subCommand: string
+): VpnCommandRequest {
+  let environment = parts[2]?.toLowerCase();
+  const duration = parts[3]; // Optional duration for 'off' command
+  
+  // Validate environment is provided
+  if (!environment) {
+    throw new Error(
+      `Environment required. Usage: /vpn schedule ${subCommand} <environment>\n\n` +
+      getScheduleHelpMessage()
+    );
+  }
+  
+  // Support environment aliases
+  environment = normalizeEnvironment(environment);
+  
+  // Validate environment
+  if (!['staging', 'production'].includes(environment)) {
+    throw new Error(
+      `Invalid environment "${parts[2]}". Must be: staging or production\n\n` +
+      getScheduleHelpMessage()
+    );
+  }
+  
+  // Check authorization for schedule commands (Requirements: 1.4, 2.6)
+  if (!isAuthorizedForSchedule(slackCommand.user_name, environment)) {
+    throw new Error(
+      `❌ Access denied: User "${slackCommand.user_name}" is not authorized for ${environment} schedule management.\n\n` +
+      `Contact your administrator to request schedule management access.`
+    );
+  }
+  
+  // Validate duration format if provided for 'off' command
+  if (subCommand === 'off' && duration) {
+    if (!isValidDurationFormat(duration)) {
+      throw new Error(
+        `Invalid duration format "${duration}". Use: Nh (hours), Nd (days), Nm (minutes).\n` +
+        `Examples: 2h, 24h, 7d, 30m`
+      );
+    }
+  }
+  
+  // Map to action type
+  const actionMap: { [key: string]: string } = {
+    'on': 'schedule-on',
+    'off': 'schedule-off',
+    'check': 'schedule-check'
+  };
+  
+  return {
+    action: actionMap[subCommand] as any,
+    environment: environment as 'staging' | 'production',
+    user: slackCommand.user_name,
+    requestId: generateRequestId(),
+    duration: subCommand === 'off' ? duration : undefined
+  };
+}
+
+/**
+ * Parse granular schedule commands: open on/off, close on/off
+ */
+function parseGranularScheduleCommand(
+  slackCommand: SlackCommand, 
+  parts: string[], 
+  scheduleType: string
+): VpnCommandRequest {
+  const onOff = parts[2]?.toLowerCase();
+  let environment = parts[3]?.toLowerCase();
+  const duration = parts[4]; // Optional duration for 'off' command
+  
+  // Validate on/off is provided
+  if (!onOff || !['on', 'off'].includes(onOff)) {
+    throw new Error(
+      `Invalid command. Usage: /vpn schedule ${scheduleType} <on|off> <environment>\n\n` +
+      getScheduleHelpMessage()
+    );
+  }
+  
+  // Validate environment is provided
+  if (!environment) {
+    throw new Error(
+      `Environment required. Usage: /vpn schedule ${scheduleType} ${onOff} <environment>\n\n` +
+      getScheduleHelpMessage()
+    );
+  }
+  
+  // Support environment aliases
+  environment = normalizeEnvironment(environment);
+  
+  // Validate environment
+  if (!['staging', 'production'].includes(environment)) {
+    throw new Error(
+      `Invalid environment "${parts[3]}". Must be: staging or production\n\n` +
+      getScheduleHelpMessage()
+    );
+  }
+  
+  // Check authorization for schedule commands (Requirements: 1.4, 2.6)
+  if (!isAuthorizedForSchedule(slackCommand.user_name, environment)) {
+    throw new Error(
+      `❌ Access denied: User "${slackCommand.user_name}" is not authorized for ${environment} schedule management.\n\n` +
+      `Contact your administrator to request schedule management access.`
+    );
+  }
+  
+  // Validate duration format if provided for 'off' command
+  if (onOff === 'off' && duration) {
+    if (!isValidDurationFormat(duration)) {
+      throw new Error(
+        `Invalid duration format "${duration}". Use: Nh (hours), Nd (days), Nm (minutes).\n` +
+        `Examples: 2h, 24h, 7d, 30m`
+      );
+    }
+  }
+  
+  // Map to action type: schedule-open-on, schedule-open-off, schedule-close-on, schedule-close-off
+  const action = `schedule-${scheduleType}-${onOff}`;
+  
+  return {
+    action: action as any,
+    environment: environment as 'staging' | 'production',
+    user: slackCommand.user_name,
+    requestId: generateRequestId(),
+    duration: onOff === 'off' ? duration : undefined
+  };
+}
+
+/**
+ * Normalize environment aliases to standard names
+ */
+function normalizeEnvironment(environment: string): string {
+  if (environment === 'prod' || environment === 'production-env') {
+    return 'production';
+  }
+  if (environment === 'stage' || environment === 'staging-env' || environment === 'dev') {
+    return 'staging';
+  }
+  return environment;
+}
+
+/**
+ * Validate duration format
+ * Valid formats: Nh (hours), Nd (days), Nm (minutes)
+ * Examples: 2h, 24h, 7d, 30m
+ */
+function isValidDurationFormat(duration: string): boolean {
+  if (!duration || typeof duration !== 'string') {
+    return false;
+  }
+  const trimmed = duration.trim().toLowerCase();
+  const match = trimmed.match(/^(\d+)([hdm])$/);
+  if (!match) {
+    return false;
+  }
+  const value = parseInt(match[1], 10);
+  return value > 0 && !isNaN(value);
+}
+
 // Check if user is authorized for administrative commands
 function isAuthorizedForAdmin(username: string): boolean {
   const adminUsers = (process.env.ADMIN_AUTHORIZED_USERS || '').split(',');
   return adminUsers.includes(username) || adminUsers.includes('*') || isAuthorizedForProduction(username);
+}
+
+/**
+ * Check if user is authorized for schedule management commands
+ *
+ * Authorization rules (Requirements: 1.4, 2.6):
+ * - Admin users: Full access to all environments
+ * - Production: Only users explicitly in PRODUCTION_SCHEDULE_USERS or PRODUCTION_AUTHORIZED_USERS
+ * - Staging: Only users explicitly in STAGING_SCHEDULE_USERS or with admin access
+ *
+ * Security: No automatic cross-environment privilege escalation
+ * Security: Wildcard (*) is NOT supported for schedule commands
+ *
+ * @param username - Slack username
+ * @param environment - Target environment
+ * @returns true if authorized
+ */
+export function isAuthorizedForSchedule(username: string, environment: string): boolean {
+  // Validate inputs to prevent injection
+  if (!username || typeof username !== 'string' || username.length > 100) {
+    console.warn('Invalid username provided for schedule authorization check');
+    return false;
+  }
+
+  const sanitizedUsername = username.trim().toLowerCase();
+  const sanitizedEnvironment = environment?.toLowerCase();
+
+  if (!['staging', 'production'].includes(sanitizedEnvironment)) {
+    console.warn('Invalid environment for schedule authorization', { environment });
+    return false;
+  }
+
+  // Admin users have full access to all environments
+  if (isAuthorizedForAdmin(sanitizedUsername)) {
+    console.log('Schedule authorization granted', {
+      username: sanitizedUsername,
+      environment: sanitizedEnvironment,
+      reason: 'admin_user'
+    });
+    return true;
+  }
+
+  // Environment-specific authorization (NO automatic cross-environment access)
+  const envAuthKey = sanitizedEnvironment === 'production'
+    ? 'PRODUCTION_SCHEDULE_USERS'
+    : 'STAGING_SCHEDULE_USERS';
+
+  const authorizedUsers = (process.env[envAuthKey] || '')
+    .split(',')
+    .map(u => u.trim().toLowerCase())
+    .filter(u => u.length > 0 && u !== '*'); // Security: Reject wildcard
+
+  // Check if user is in environment-specific list
+  if (authorizedUsers.includes(sanitizedUsername)) {
+    console.log('Schedule authorization granted', {
+      username: sanitizedUsername,
+      environment: sanitizedEnvironment,
+      reason: 'environment_specific_user_list'
+    });
+    return true;
+  }
+
+  // For production, also check PRODUCTION_AUTHORIZED_USERS (VPN operation users)
+  if (sanitizedEnvironment === 'production') {
+    const prodAuthUsers = (process.env.PRODUCTION_AUTHORIZED_USERS || '')
+      .split(',')
+      .map(u => u.trim().toLowerCase())
+      .filter(u => u.length > 0 && u !== '*'); // Security: Reject wildcard
+
+    if (prodAuthUsers.includes(sanitizedUsername)) {
+      console.log('Schedule authorization granted', {
+        username: sanitizedUsername,
+        environment: sanitizedEnvironment,
+        reason: 'production_authorized_user'
+      });
+      return true;
+    }
+  }
+
+  console.log('Schedule authorization denied', {
+    username: sanitizedUsername,
+    environment: sanitizedEnvironment,
+    reason: 'not_in_authorized_list'
+  });
+  return false;
 }
 
 // Enhanced Slack response formatting for Epic 3.2 commands

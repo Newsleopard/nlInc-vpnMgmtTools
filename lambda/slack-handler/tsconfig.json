@@ -23,7 +23,8 @@
       "/opt/nodejs/types": ["../shared/types"],
       "/opt/nodejs/vpnManager": ["../shared/vpnManager"],
       "/opt/nodejs/configurationValidator": ["../shared/configurationValidator"],
-      "/opt/nodejs/secureParameterManager": ["../shared/secureParameterManager"]
+      "/opt/nodejs/secureParameterManager": ["../shared/secureParameterManager"],
+      "/opt/nodejs/scheduleManager": ["../shared/scheduleManager"]
     }
   },
   "include": [
