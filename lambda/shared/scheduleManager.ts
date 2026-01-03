@@ -119,13 +119,16 @@ const DEFAULT_SCHEDULE_CONFIG: ScheduleConfig = {
 };
 
 /**
- * Default schedule state (both schedules disabled by default)
- * Users must explicitly enable scheduling via `/vpn schedule on <environment>`
+ * Default schedule state template (for reference/documentation)
+ * NOTE: Actual defaults are environment-specific via createDefaultState():
+ *   - Production: autoOpen.enabled = true (VPN opens automatically on weekdays)
+ *   - Staging: autoOpen.enabled = false (must be explicitly enabled)
+ *   - Both environments: autoClose.enabled = false (must be explicitly enabled)
  */
 const DEFAULT_SCHEDULE_STATE: ScheduleState = {
   version: 1,
   autoOpen: {
-    enabled: false,
+    enabled: false,  // Note: Production defaults to true via createDefaultState()
     lastModified: new Date().toISOString(),
     modifiedBy: 'system'
   },
@@ -195,7 +198,7 @@ export async function readScheduleState(environment: string): Promise<ScheduleSt
 
     if (!response.Parameter?.Value) {
       logger.info('Schedule state parameter empty, returning default', { environment });
-      return createDefaultState();
+      return createDefaultState(environment);
     }
 
     // Parse JSON with explicit error handling
@@ -247,7 +250,7 @@ export async function readScheduleState(environment: string): Promise<ScheduleSt
   } catch (error: any) {
     if (error.name === 'ParameterNotFound') {
       logger.info('Schedule state parameter not found, returning default', { environment });
-      return createDefaultState();
+      return createDefaultState(environment);
     }
 
     // Fail fast on infrastructure errors - don't hide these problems
@@ -415,14 +418,20 @@ async function readScheduleStateRaw(environment: string): Promise<ScheduleState 
 
 /**
  * Create a default schedule state with current timestamp
- * Default is disabled - users must explicitly enable scheduling
+ * Auto-open defaults: production=enabled, staging=disabled
+ * Auto-close defaults: disabled (users must explicitly enable)
+ *
+ * @param environment - The environment (production/staging)
+ * @returns Default schedule state with environment-specific auto-open setting
  */
-function createDefaultState(): ScheduleState {
+function createDefaultState(environment: string = 'staging'): ScheduleState {
   const now = new Date().toISOString();
+  const isProduction = environment === 'production';
+
   return {
     version: 1,
     autoOpen: {
-      enabled: false,
+      enabled: isProduction,  // Production: enabled by default, Staging: disabled
       lastModified: now,
       modifiedBy: 'system'
     },

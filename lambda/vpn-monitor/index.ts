@@ -10,7 +10,7 @@ import * as scheduleManager from '/opt/nodejs/scheduleManager';
 
 const cloudwatch = new CloudWatchClient({});
 
-const IDLE_MINUTES = Number(process.env.IDLE_MINUTES || 54);
+const IDLE_MINUTES = Number(process.env.IDLE_MINUTES || 30);
 const ENVIRONMENT = process.env.ENVIRONMENT || 'staging';
 const COOLDOWN_MINUTES = Number(process.env.COOLDOWN_MINUTES || 30);
 const BUSINESS_HOURS_ENABLED = process.env.BUSINESS_HOURS_PROTECTION !== 'false';
@@ -1045,21 +1045,24 @@ async function checkAndHandlePendingClose(): Promise<{ handled: boolean; status:
         JSON.stringify(newPendingClose)
       );
 
-      // Send Slack notification about continued delay
-      await slack.sendSlackNotification({
-        text: `⏳ VPN ${ENVIRONMENT} 關閉再次延遲 | Close delayed again`,
-        attachments: [{
-          color: 'warning',
-          fields: [
-            { title: '👥 連線數 | Connections', value: status.activeConnections.toString(), short: true },
-            { title: '👤 使用者 | Users', value: usernames, short: true },
-            { title: '🔄 重試次數 | Retry Attempt', value: `#${pendingClose.attempts}`, short: true },
-            { title: '⏰ 下次檢查 | Next Check', value: nextRetryTimeStr, short: true },
-            { title: '📅 原因 | Reason', value: pendingClose.reason === 'weekend' ? '週末關閉 | Weekend close' : '排程關閉 | Scheduled close', short: false },
-            { title: '💡 提示 | Note', value: '尊重活躍連線，30 分鐘後再次檢查 | Respecting active connections, will check again in 30 minutes', short: false }
-          ]
-        }]
-      });
+      // Send Slack notification only on odd retry attempts (1, 3, 5...)
+      // to reduce notification noise while still keeping users informed
+      if (pendingClose.attempts % 2 === 1) {
+        await slack.sendSlackNotification({
+          text: `⏳ VPN ${ENVIRONMENT} 關閉再次延遲 | Close delayed again`,
+          attachments: [{
+            color: 'warning',
+            fields: [
+              { title: '👥 連線數 | Connections', value: status.activeConnections.toString(), short: true },
+              { title: '👤 使用者 | Users', value: usernames, short: true },
+              { title: '🔄 重試次數 | Retry Attempt', value: `#${pendingClose.attempts}`, short: true },
+              { title: '⏰ 下次檢查 | Next Check', value: nextRetryTimeStr, short: true },
+              { title: '📅 原因 | Reason', value: pendingClose.reason === 'weekend' ? '週末關閉 | Weekend close' : '排程關閉 | Scheduled close', short: false },
+              { title: '💡 提示 | Note', value: '尊重活躍連線，30 分鐘後再次檢查 | Respecting active connections, will check again in 30 minutes', short: false }
+            ]
+          }]
+        });
+      }
 
       await publishMetric('SoftCloseRetryDelayed', 1);
       return { handled: true, status: 'delayed_again' };

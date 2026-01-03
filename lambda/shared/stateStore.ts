@@ -146,7 +146,7 @@ export async function readCostOptimizationConfig(): Promise<any> {
     console.error('Failed to read cost optimization config:', error);
     // Return default configuration if parameter doesn't exist
     return {
-      idleTimeoutMinutes: 54,
+      idleTimeoutMinutes: 30,
       cooldownMinutes: 30,
       businessHoursProtection: true,
       businessHoursTimezone: 'UTC',

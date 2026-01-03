@@ -284,7 +284,7 @@ export class SecureParameterManagementStack extends cdk.Stack {
     const costOptimizationConfig = new ssm.CfnParameter(this, 'CostOptimizationConfig', {
       name: `/vpn/${environment}/cost/optimization_config`,
       value: JSON.stringify({
-        idleTimeoutMinutes: 54,
+        idleTimeoutMinutes: 30,
         cooldownMinutes: 30,
         businessHoursProtection: true,
         businessHoursTimezone: 'UTC',

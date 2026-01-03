@@ -870,7 +870,7 @@ This serverless application uses a best-practice approach to configuration, sepa
 │   ├── endpoint_id         # Client VPN endpoint ID
 │   └── region              # AWS region
 ├── cost/
-│   └── optimization_config # { "idleTimeoutMinutes": 54 }
+│   └── optimization_config # { "idleTimeoutMinutes": 30 }
 └── cross_account/
     └── production_api_url  # Staging-to-production routing (staging only)
 ```
@@ -891,10 +891,10 @@ The VPN system uses a dual-layer idle detection approach for cost optimization:
 inactive 6000 10000  # 100 minutes, 10KB threshold
 
 # Lambda source code (server-side monitoring)
-const IDLE_MINUTES = Number(process.env.IDLE_MINUTES || 54);
+const IDLE_MINUTES = Number(process.env.IDLE_MINUTES || 30);
 
 // SSM Parameter Store (runtime configuration)
-/vpn/{environment}/cost/optimization_config: { "idleTimeoutMinutes": 54 }
+/vpn/{environment}/cost/optimization_config: { "idleTimeoutMinutes": 30 }
 ```
 
 **Configuration Hierarchy:**
@@ -948,19 +948,23 @@ The Slack App's Request URL for the `/vpn` command is highly stable due to the s
 
 **Daily Schedule Flow (Weekdays):**
 ```
-10:00 - VPN auto-opens (EventBridge trigger)
-10:00-17:00 - Business hours protection (no auto-close)
-17:00 - Server idle detection starts
-17:00 + 100 min = 18:40 - Client auto-disconnects (if no traffic)
-18:40 + 54 min = 19:34 - Server auto-closes endpoint (if no connections)
+09:30 - VPN auto-opens (EventBridge trigger, Production only by default)
+09:30-17:30 - Business hours protection (no auto-close)
+17:30 - Server idle detection starts
+17:30 + 100 min = 19:10 - Client auto-disconnects (if no traffic)
+19:10 + 30 min = 19:40 - Server auto-closes endpoint (if no connections)
 ```
 
 **Weekly Schedule Flow:**
 ```
-Mon-Thu: 10:00 open → idle detection closes (typically ~19:30)
-Friday:  10:00 open → 20:00 soft-close (respects active connections)
+Mon-Thu: 09:30 open → idle detection closes (typically ~19:40)
+Friday:  09:30 open → 20:00 soft-close (respects active connections)
 Sat-Sun: Closed (no auto-open)
 ```
+
+**Environment-Specific Auto-Open Defaults:**
+- **Production**: Auto-open enabled by default (VPN opens at 9:30 on weekdays)
+- **Staging**: Auto-open disabled by default (must enable via `/vpn schedule open on staging`)
 
 **Soft Close Behavior:**
 - When scheduled close triggers and users are connected:
@@ -1010,7 +1014,7 @@ Sat-Sun: Closed (no auto-open)
 
 **Cost Optimization Features:**
 - Weekend soft-close: Saves ~$4.80/weekend (48hr × $0.10), respects active connections
-- Idle detection: Closes VPN when no traffic (client 100min + server 54min)
+- Idle detection: Closes VPN when no traffic (client 100min + server 30min)
 - Soft close: Never interrupts active users, delays until connections end
 - Estimated monthly savings vs 24/7: ~$48 (66% reduction)
 
