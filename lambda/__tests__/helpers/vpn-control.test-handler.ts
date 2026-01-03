@@ -84,6 +84,8 @@ export const handler = async (event: APIGatewayProxyEvent, context: Context): Pr
     try {
       // Check current status first
       const currentStatus = await vpnManager.fetchStatus();
+
+      // Skip if already open
       if (currentStatus.associated) {
         console.log(`VPN ${ENVIRONMENT} is already open, skipping auto-open`);
         return {
@@ -92,6 +94,20 @@ export const handler = async (event: APIGatewayProxyEvent, context: Context): Pr
           body: JSON.stringify({
             message: `VPN ${ENVIRONMENT} is already open`,
             status: 'already_open',
+            timestamp: new Date().toISOString()
+          })
+        };
+      }
+
+      // Skip if currently associating (in-progress)
+      if (currentStatus.associationState === 'associating') {
+        console.log(`VPN ${ENVIRONMENT} is currently associating, skipping auto-open`);
+        return {
+          statusCode: 200,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: `VPN ${ENVIRONMENT} is currently opening`,
+            status: 'in_progress',
             timestamp: new Date().toISOString()
           })
         };
