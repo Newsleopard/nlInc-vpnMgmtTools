@@ -244,3 +244,4 @@ cdklib/cdk.metadata.json
 cdklib/.cdk-hotswap-cache/
 configs/**/vpn_endpoint.conf.bak*
 
+.deploy-config

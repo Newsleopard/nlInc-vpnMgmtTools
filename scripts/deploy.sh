@@ -28,6 +28,7 @@ CDK_DIR="$PROJECT_ROOT/cdklib"
 PRODUCTION_URL=""
 API_KEY_VALUE=""
 DRY_RUN=${DRY_RUN:-false}
+DEPLOY_CONFIG_FILE="$PROJECT_ROOT/.deploy-config"
 
 # Create logs directory if it doesn't exist
 mkdir -p "$PROJECT_ROOT/logs"
