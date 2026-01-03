@@ -934,24 +934,42 @@ The Slack App's Request URL for the `/vpn` command is highly stable due to the s
 - Prevents accidental VPN closure during work time
 - After 5:00 PM, idle detection resumes
 
+**Weekend Auto-Close (Friday 8:00 PM):**
+- VPN automatically closes on Friday evening
+- Prevents weekend charges from forgotten connections
+- Slack notification sent before closing
+
+**Daily Safety Close (10:00 PM):**
+- Failsafe to close VPN if idle detection missed it
+- Ensures no overnight charges
+- Only triggers if VPN is still open
+
 **100-Minute Traffic-Based Client Idle Timeout:**
 - OpenVPN client config uses `inactive 6000 10000` (100 minutes, 10KB threshold)
 - Traffic threshold ensures keepalive packets don't reset the timer
 - Only real usage (SSH, HTTP, database queries) resets the 100-minute timer
 
-**Daily Schedule Flow:**
+**Daily Schedule Flow (Weekdays):**
 ```
 10:00 - VPN auto-opens (EventBridge trigger)
 10:00-17:00 - Business hours protection (no auto-close)
 17:00 - Server idle detection starts
 17:00 + 100 min = 18:40 - Client auto-disconnects (if no traffic)
 18:40 + 54 min = 19:34 - Server auto-closes endpoint (if no connections)
+22:00 - Daily safety close (failsafe, if still open)
+```
+
+**Weekly Schedule Flow:**
+```
+Mon-Thu: 10:00 open → 22:00 safety close (max 12hr/day)
+Friday:  10:00 open → 20:00 weekend close (max 10hr)
+Sat-Sun: Closed (no auto-open)
 ```
 
 **Files Updated:**
-- `lambda/vpn-control/index.ts` - Auto-open handler
+- `lambda/vpn-control/index.ts` - Auto-open and auto-close handlers
 - `lambda/vpn-monitor/index.ts` - Business hours 10:00-17:00
-- `cdklib/lib/vpn-automation-stack.ts` - EventBridge auto-open rule
+- `cdklib/lib/vpn-automation-stack.ts` - EventBridge rules (open, weekend close, daily close)
 - `lambda/shared/slack.ts` - Updated help text
 - `team_member_setup.sh` - Client config (100-min idle)
 - `lib/endpoint_management.sh` - Admin config
@@ -969,7 +987,7 @@ The Slack App's Request URL for the `/vpn` command is highly stable due to the s
 每月成本 = 每日成本 × 22 工作日
 ```
 
-**Quick Cost Reference (10hr/day, 1 subnet):**
+**Quick Cost Reference (typical ~10hr/day, 1 subnet):**
 
 | 同時連線數 | 每日成本 | 每月成本 (22天) | 適用情境 |
 |-----------|---------|----------------|---------|
@@ -980,9 +998,16 @@ The Slack App's Request URL for the `/vpn` command is highly stable due to the s
 | 5 | $3.50 | $77 / NT$2,450 | 大型團隊 (10人以下) |
 
 **Current Estimate (4 users, 2 concurrent avg):**
-- Daily: ~$2.00 (endpoint 10hr + 2 connections)
+- Typical daily: ~$2.00 (endpoint ~10hr + 2 connections)
 - Monthly (22 workdays): ~$44 / NT$1,400
+
+**Cost Optimization Features:**
+- Weekend auto-close: Saves ~$4.80/weekend (48hr × $0.10)
+- Daily safety close: Prevents overnight charges
+- Idle detection: Closes VPN ~2-3hr earlier than scheduled
+- Estimated monthly savings vs 24/7: ~$48 (66% reduction)
 
 **Comparison with Pritunl (t3.medium):**
 - Pritunl: ~$20-25/month (固定成本，不隨使用者數增加)
 - AWS VPN 損益平衡點：約 1 位同時連線時成本相近
+- 混合方案：Staging 用 Pritunl ($15), Production 用 AWS VPN ($44) = $59/month

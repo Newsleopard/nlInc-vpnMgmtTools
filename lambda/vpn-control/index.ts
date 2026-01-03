@@ -26,6 +26,13 @@ const isAutoOpenRequest = (event: any): boolean => {
          event.detail?.autoOpen === true;
 };
 
+// Auto-close detection helper function (for scheduled VPN closing - weekend/daily safety)
+const isAutoCloseRequest = (event: any): boolean => {
+  return event.source === 'aws.events' &&
+         event['detail-type'] === 'Scheduled Event' &&
+         event.detail?.autoClose === true;
+};
+
 export const handler = async (
   event: APIGatewayProxyEvent,
   context: Context
@@ -45,7 +52,132 @@ export const handler = async (
     };
   }
 
-  // Handle scheduled auto-open requests (weekday 9:30 AM)
+  // Handle scheduled auto-close requests (weekend/daily safety)
+  if (isAutoCloseRequest(event)) {
+    const closeReason = (event as any).detail?.reason || 'scheduled';
+    console.log(`Auto-close request received for ${ENVIRONMENT} environment (reason: ${closeReason})`);
+
+    try {
+      // Check current status first
+      const currentStatus = await vpnManager.fetchStatus();
+
+      // Skip if already closed
+      if (!currentStatus.associated) {
+        console.log(`VPN ${ENVIRONMENT} is already closed, skipping auto-close`);
+        return {
+          statusCode: 200,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: `VPN ${ENVIRONMENT} is already closed`,
+            status: 'already_closed',
+            timestamp: new Date().toISOString()
+          })
+        };
+      }
+
+      // Skip if currently disassociating (in-progress)
+      if (currentStatus.associationState === 'disassociating') {
+        console.log(`VPN ${ENVIRONMENT} is currently disassociating, skipping auto-close`);
+        return {
+          statusCode: 200,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: `VPN ${ENVIRONMENT} is currently closing`,
+            status: 'in_progress',
+            timestamp: new Date().toISOString()
+          })
+        };
+      }
+
+      // Check if there are active connections - warn but still close for safety
+      if (currentStatus.activeConnections > 0) {
+        console.log(`VPN ${ENVIRONMENT} has ${currentStatus.activeConnections} active connections, proceeding with scheduled close`);
+
+        // Send warning notification about active connections
+        await slack.sendSlackNotification({
+          text: `⚠️ VPN ${ENVIRONMENT} 排程關閉 (有連線中) | Scheduled close with active connections`,
+          attachments: [{
+            color: 'warning',
+            fields: [
+              { title: '🕤 Time | 時間', value: new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' }), short: true },
+              { title: '📍 Environment | 環境', value: ENVIRONMENT, short: true },
+              { title: '👥 Active Connections | 連線數', value: currentStatus.activeConnections.toString(), short: true },
+              { title: '📅 Reason | 原因', value: closeReason === 'weekend' ? 'Weekend auto-close | 週末自動關閉' : 'Daily safety close | 每日安全關閉', short: true },
+              { title: '💡 Note | 提示', value: 'Connected users will be disconnected | 連線中的使用者將被中斷', short: false }
+            ]
+          }]
+        });
+      }
+
+      // Close the VPN
+      await vpnManager.disassociateSubnets();
+      const newStatus = await vpnManager.fetchStatus();
+
+      // Determine notification message based on reason
+      const reasonText = closeReason === 'weekend'
+        ? 'Weekend auto-close (Friday 8PM) | 週末自動關閉 (週五 8PM)'
+        : 'Daily safety close (10PM) | 每日安全關閉 (10PM)';
+
+      const reasonEmoji = closeReason === 'weekend' ? '🌙' : '🔒';
+
+      // Send Slack notification
+      await slack.sendSlackNotification({
+        text: `${reasonEmoji} VPN ${ENVIRONMENT} 自動關閉 | Auto-closed`,
+        attachments: [{
+          color: '#36a64f',
+          fields: [
+            { title: '🕤 Time | 時間', value: new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' }), short: true },
+            { title: '📍 Environment | 環境', value: ENVIRONMENT, short: true },
+            { title: '🤖 Trigger | 觸發', value: reasonText, short: false },
+            { title: '💰 Cost Saving | 成本節省', value: 'Preventing unnecessary charges | 避免不必要的費用', short: false }
+          ]
+        }]
+      });
+
+      await publishMetric('ScheduledAutoCloseOperations', 1);
+
+      console.log(`VPN ${ENVIRONMENT} auto-closed successfully (reason: ${closeReason})`);
+      return {
+        statusCode: 200,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: `VPN ${ENVIRONMENT} auto-closed successfully`,
+          status: 'closed',
+          reason: closeReason,
+          data: newStatus,
+          timestamp: new Date().toISOString()
+        })
+      };
+    } catch (error) {
+      console.error(`Failed to auto-close VPN ${ENVIRONMENT}:`, error);
+
+      // Send Slack error notification
+      await slack.sendSlackNotification({
+        text: `❌ VPN ${ENVIRONMENT} 自動關閉失敗 | Auto-close failed`,
+        attachments: [{
+          color: 'danger',
+          fields: [
+            { title: '🕤 Time | 時間', value: new Date().toISOString(), short: true },
+            { title: '📍 Environment | 環境', value: ENVIRONMENT, short: true },
+            { title: '📅 Reason | 原因', value: closeReason, short: true },
+            { title: '❌ Error | 錯誤', value: error instanceof Error ? error.message : 'Unknown error', short: false }
+          ]
+        }]
+      });
+
+      return {
+        statusCode: 500,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: `Failed to auto-close VPN ${ENVIRONMENT}`,
+          error: error instanceof Error ? error.message : 'Unknown error',
+          timestamp: new Date().toISOString()
+        })
+      };
+    }
+  }
+
+  // Handle scheduled auto-open requests (weekday 10:00 AM)
   if (isAutoOpenRequest(event)) {
     console.log(`Auto-open request received for ${ENVIRONMENT} environment`);
     try {
@@ -124,7 +256,7 @@ export const handler = async (
           fields: [
             { title: '🕤 Time | 時間', value: new Date().toISOString(), short: true },
             { title: '📍 Environment | 環境', value: ENVIRONMENT, short: true },
-            { title: '🤖 Trigger | 觸發', value: 'Scheduled auto-open (weekday 9:30 AM)', short: false }
+            { title: '🤖 Trigger | 觸發', value: 'Scheduled auto-open (weekday 10:00 AM)', short: false }
           ]
         }]
       });

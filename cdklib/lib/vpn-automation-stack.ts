@@ -454,6 +454,68 @@ export class VpnAutomationStack extends cdk.Stack {
       sourceArn: autoOpenRule.ruleArn
     });
 
+    // Scheduled VPN Auto-Close Rule (Friday 8:00 PM Taiwan time = 12:00 PM UTC)
+    // Ensures VPN is closed for the weekend to save costs
+    const weekendCloseRule = new events.Rule(this, 'VpnWeekendCloseRule', {
+      schedule: events.Schedule.expression('cron(0 12 ? * FRI *)'),
+      description: `Scheduled VPN weekend close for ${environment} environment (Friday 8:00 PM Taiwan time)`,
+      enabled: true
+    });
+
+    // Weekend close event payload
+    const weekendCloseEventPayload = {
+      source: 'aws.events',
+      'detail-type': 'Scheduled Event',
+      detail: {
+        autoClose: true,
+        reason: 'weekend',
+        environment: environment,
+        timestamp: '{{aws.events.scheduled-time}}'
+      }
+    };
+
+    // Add vpn-control as target for weekend close rule
+    weekendCloseRule.addTarget(new targets.LambdaFunction(vpnControl, {
+      event: events.RuleTargetInput.fromObject(weekendCloseEventPayload)
+    }));
+
+    // Grant CloudWatch Events permission to invoke vpn-control for weekend close
+    vpnControl.addPermission('AllowWeekendCloseInvoke', {
+      principal: new iam.ServicePrincipal('events.amazonaws.com'),
+      sourceArn: weekendCloseRule.ruleArn
+    });
+
+    // Scheduled VPN Daily Safety Close Rule (weekdays 10:00 PM Taiwan time = 2:00 PM UTC)
+    // Safety net to ensure VPN is closed even if idle detection fails
+    const dailyCloseRule = new events.Rule(this, 'VpnDailyCloseRule', {
+      schedule: events.Schedule.expression('cron(0 14 ? * MON-FRI *)'),
+      description: `Scheduled VPN daily safety close for ${environment} environment (weekdays 10:00 PM Taiwan time)`,
+      enabled: true
+    });
+
+    // Daily close event payload
+    const dailyCloseEventPayload = {
+      source: 'aws.events',
+      'detail-type': 'Scheduled Event',
+      detail: {
+        autoClose: true,
+        reason: 'daily_safety',
+        environment: environment,
+        timestamp: '{{aws.events.scheduled-time}}'
+      }
+    };
+
+    // Add vpn-control as target for daily close rule
+    dailyCloseRule.addTarget(new targets.LambdaFunction(vpnControl, {
+      event: events.RuleTargetInput.fromObject(dailyCloseEventPayload)
+    }));
+
+    // Grant CloudWatch Events permission to invoke vpn-control for daily close
+    vpnControl.addPermission('AllowDailyCloseInvoke', {
+      principal: new iam.ServicePrincipal('events.amazonaws.com'),
+      sourceArn: dailyCloseRule.ruleArn
+    });
+
     // Epic 4.1: Enhanced CloudWatch log groups with custom retention
     const slackHandlerLogGroup = new logs.LogGroup(this, 'SlackHandlerLogGroup', {
       logGroupName: `/aws/lambda/${slackHandler.functionName}`,
@@ -837,6 +899,16 @@ export class VpnAutomationStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'BusinessHoursProtection', {
       value: 'Weekdays 10:00 AM - 5:00 PM Taiwan time',
       description: 'No auto-close during business hours'
+    });
+
+    new cdk.CfnOutput(this, 'WeekendCloseSchedule', {
+      value: 'Friday 8:00 PM Taiwan time (12:00 PM UTC)',
+      description: 'VPN auto-close for weekend cost savings'
+    });
+
+    new cdk.CfnOutput(this, 'DailySafetyCloseSchedule', {
+      value: 'Weekdays 10:00 PM Taiwan time (2:00 PM UTC)',
+      description: 'Daily safety close to prevent forgotten VPN'
     });
 
     new cdk.CfnOutput(this, 'IdleThreshold', {
