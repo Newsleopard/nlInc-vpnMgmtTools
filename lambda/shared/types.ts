@@ -12,11 +12,20 @@ export interface VpnConfig {
   SUBNET_ID: string;     // e.g., "subnet-02bd062360a525a95"
 }
 
+// VPN connection detail for active connections
+export interface VpnConnectionDetail {
+  connectionId: string;
+  username: string;  // From CommonName (certificate-based auth) or Username (AD auth)
+  clientIp: string;
+  establishedTime: Date;
+}
+
 // Runtime status from EC2 API + Parameter Store
 export interface VpnStatus {
   associated: boolean;
   associationState?: 'associated' | 'associating' | 'disassociating' | 'disassociated' | 'failed';
   activeConnections: number;
+  activeConnectionDetails?: VpnConnectionDetail[];  // Detailed info for each active connection
   lastActivity: Date;
   endpointId: string;
   subnetId: string;

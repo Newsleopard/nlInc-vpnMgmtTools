@@ -33,6 +33,13 @@ export const handler = async (
     return;
   }
 
+  // Check for pending close retry (soft close mechanism)
+  const pendingCloseResult = await checkAndHandlePendingClose();
+  if (pendingCloseResult.handled) {
+    console.log('Pending close handled:', pendingCloseResult.status);
+    return;
+  }
+
   // Initialize structured logger for Epic 4.1
   const logger = createLogger({
     requestId: context.awsRequestId,
@@ -950,7 +957,7 @@ async function calculateAndStoreDailyMaxSavings(dateStr: string): Promise<void> 
     // Get all VPN runtime periods for today from state tracking
     const runtimeKey = `/vpn/runtime_tracking/${ENVIRONMENT}/${dateStr}`;
     let totalRuntimeHours = 0;
-    
+
     try {
       const runtimeData = await stateStore.readParameter(runtimeKey);
       const runtime = JSON.parse(runtimeData);
@@ -961,22 +968,156 @@ async function calculateAndStoreDailyMaxSavings(dateStr: string): Promise<void> 
       console.log('No runtime tracking data found, using estimation');
       return;
     }
-    
+
     // Calculate theoretical maximum daily savings
     const pricing = 0.10; // Default US pricing
     const subnetCount = 1; // Default
-    
+
     const maxDailyCost = 24 * pricing * subnetCount; // 24/7 cost
     const actualDailyCost = Math.ceil(totalRuntimeHours) * pricing * subnetCount; // AWS hourly billing
     const theoreticalMaxSavings = maxDailyCost - actualDailyCost;
-    
+
     // Store theoretical max savings for reporting
     const maxSavingsKey = `/vpn/cost_optimization/daily_max_savings/${ENVIRONMENT}/${dateStr}`;
     await stateStore.writeParameter(maxSavingsKey, theoreticalMaxSavings.toString());
-    
+
     console.log(`Theoretical max daily savings for ${dateStr}: $${theoreticalMaxSavings.toFixed(2)} (24h cost: $${maxDailyCost} - actual: $${actualDailyCost})`);
-    
+
   } catch (error) {
     console.error('Failed to calculate daily max savings:', error);
+  }
+}
+
+// Check for and handle pending close retries (soft close mechanism)
+async function checkAndHandlePendingClose(): Promise<{ handled: boolean; status: string }> {
+  const RETRY_DELAY_MINUTES = 30;
+
+  try {
+    // Check for pending close in SSM
+    const pendingCloseParam = await stateStore.readParameter(`/vpn/automation/pending_close/${ENVIRONMENT}`);
+
+    if (!pendingCloseParam) {
+      return { handled: false, status: 'no_pending_close' };
+    }
+
+    const pendingClose = JSON.parse(pendingCloseParam);
+    const retryTime = new Date(pendingClose.retryTime);
+    const now = new Date();
+
+    // Check if it's time to retry
+    if (now < retryTime) {
+      const remainingMinutes = Math.ceil((retryTime.getTime() - now.getTime()) / (1000 * 60));
+      console.log(`Pending close scheduled for ${pendingClose.retryTime}, ${remainingMinutes} minutes remaining`);
+      return { handled: false, status: `pending_retry_in_${remainingMinutes}_minutes` };
+    }
+
+    console.log(`Processing pending close retry for ${ENVIRONMENT} (attempt #${pendingClose.attempts}, reason: ${pendingClose.reason})`);
+
+    // Fetch current VPN status
+    const status = await vpnManager.fetchStatus();
+
+    // If already closed, clear pending close and return
+    if (!status.associated) {
+      console.log('VPN is already closed, clearing pending close');
+      await stateStore.deleteParameter(`/vpn/automation/pending_close/${ENVIRONMENT}`);
+      return { handled: true, status: 'already_closed' };
+    }
+
+    // Check for active connections
+    if (status.activeConnections > 0) {
+      const connectionDetails = status.activeConnectionDetails || [];
+      const usernames = connectionDetails.map(c => c.username).join(', ') || 'unknown';
+      const nextRetryTime = new Date(now.getTime() + RETRY_DELAY_MINUTES * 60 * 1000);
+      const nextRetryTimeStr = nextRetryTime.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });
+
+      console.log(`VPN still has ${status.activeConnections} active connections (${usernames}), scheduling next retry at ${nextRetryTimeStr}`);
+
+      // Schedule next retry
+      const newPendingClose = {
+        retryTime: nextRetryTime.toISOString(),
+        reason: pendingClose.reason,
+        attempts: pendingClose.attempts + 1,
+        scheduledAt: pendingClose.scheduledAt // Keep original scheduled time
+      };
+
+      await stateStore.writeParameter(
+        `/vpn/automation/pending_close/${ENVIRONMENT}`,
+        JSON.stringify(newPendingClose)
+      );
+
+      // Send Slack notification about continued delay
+      await slack.sendSlackNotification({
+        text: `⏳ VPN ${ENVIRONMENT} 關閉再次延遲 | Close delayed again`,
+        attachments: [{
+          color: 'warning',
+          fields: [
+            { title: '👥 連線數 | Connections', value: status.activeConnections.toString(), short: true },
+            { title: '👤 使用者 | Users', value: usernames, short: true },
+            { title: '🔄 重試次數 | Retry Attempt', value: `#${pendingClose.attempts}`, short: true },
+            { title: '⏰ 下次檢查 | Next Check', value: nextRetryTimeStr, short: true },
+            { title: '📅 原因 | Reason', value: pendingClose.reason === 'weekend' ? '週末關閉 | Weekend close' : '排程關閉 | Scheduled close', short: false },
+            { title: '💡 提示 | Note', value: '尊重活躍連線，30 分鐘後再次檢查 | Respecting active connections, will check again in 30 minutes', short: false }
+          ]
+        }]
+      });
+
+      await publishMetric('SoftCloseRetryDelayed', 1);
+      return { handled: true, status: 'delayed_again' };
+    }
+
+    // No active connections - proceed with close
+    console.log(`No active connections, proceeding with soft close (attempt #${pendingClose.attempts})`);
+
+    try {
+      await vpnManager.disassociateSubnets();
+
+      // Clear pending close
+      await stateStore.deleteParameter(`/vpn/automation/pending_close/${ENVIRONMENT}`);
+
+      // Send success notification
+      const closeTimeStr = new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });
+
+      await slack.sendSlackNotification({
+        text: `🌙 VPN ${ENVIRONMENT} 軟關閉完成 | Soft close completed`,
+        attachments: [{
+          color: '#36a64f',
+          fields: [
+            { title: '🕤 Time | 時間', value: closeTimeStr, short: true },
+            { title: '📍 Environment | 環境', value: ENVIRONMENT, short: true },
+            { title: '🔄 Retry Attempts | 重試次數', value: pendingClose.attempts.toString(), short: true },
+            { title: '📅 Original Reason | 原始原因', value: pendingClose.reason === 'weekend' ? '週末關閉 | Weekend close' : '排程關閉 | Scheduled close', short: true },
+            { title: '💰 Cost Saving | 成本節省', value: 'Preventing unnecessary charges | 避免不必要費用', short: false },
+            { title: '💡 Note | 說明', value: '等待所有連線結束後才關閉 | Closed after all connections ended', short: false }
+          ]
+        }]
+      });
+
+      await publishMetric('SoftCloseCompleted', 1);
+      return { handled: true, status: 'closed_successfully' };
+
+    } catch (closeError) {
+      console.error('Failed to close VPN during soft close retry:', closeError);
+
+      // Send error notification
+      await slack.sendSlackNotification({
+        text: `❌ VPN ${ENVIRONMENT} 軟關閉失敗 | Soft close failed`,
+        attachments: [{
+          color: 'danger',
+          fields: [
+            { title: '🕤 Time | 時間', value: new Date().toISOString(), short: true },
+            { title: '📍 Environment | 環境', value: ENVIRONMENT, short: true },
+            { title: '🔄 Retry Attempt | 重試次數', value: pendingClose.attempts.toString(), short: true },
+            { title: '❌ Error | 錯誤', value: closeError instanceof Error ? closeError.message : 'Unknown error', short: false }
+          ]
+        }]
+      });
+
+      await publishMetric('SoftCloseErrors', 1);
+      return { handled: true, status: 'close_failed' };
+    }
+
+  } catch (error) {
+    console.error('Error checking pending close:', error);
+    return { handled: false, status: 'error' };
   }
 }

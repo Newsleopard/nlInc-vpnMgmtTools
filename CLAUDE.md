@@ -934,15 +934,12 @@ The Slack App's Request URL for the `/vpn` command is highly stable due to the s
 - Prevents accidental VPN closure during work time
 - After 5:00 PM, idle detection resumes
 
-**Weekend Auto-Close (Friday 8:00 PM):**
-- VPN automatically closes on Friday evening
+**Weekend Soft-Close (Friday 8:00 PM):**
+- VPN automatically closes on Friday evening (soft close)
+- Respects active connections - if users are connected, delays 30 minutes and retries
+- Continues retrying every 30 minutes until all connections end
+- Slack notifications include: connection count, usernames, next retry time
 - Prevents weekend charges from forgotten connections
-- Slack notification sent before closing
-
-**Daily Safety Close (10:00 PM):**
-- Failsafe to close VPN if idle detection missed it
-- Ensures no overnight charges
-- Only triggers if VPN is still open
 
 **100-Minute Traffic-Based Client Idle Timeout:**
 - OpenVPN client config uses `inactive 6000 10000` (100 minutes, 10KB threshold)
@@ -956,21 +953,31 @@ The Slack App's Request URL for the `/vpn` command is highly stable due to the s
 17:00 - Server idle detection starts
 17:00 + 100 min = 18:40 - Client auto-disconnects (if no traffic)
 18:40 + 54 min = 19:34 - Server auto-closes endpoint (if no connections)
-22:00 - Daily safety close (failsafe, if still open)
 ```
 
 **Weekly Schedule Flow:**
 ```
-Mon-Thu: 10:00 open → 22:00 safety close (max 12hr/day)
-Friday:  10:00 open → 20:00 weekend close (max 10hr)
+Mon-Thu: 10:00 open → idle detection closes (typically ~19:30)
+Friday:  10:00 open → 20:00 soft-close (respects active connections)
 Sat-Sun: Closed (no auto-open)
 ```
 
+**Soft Close Behavior:**
+- When scheduled close triggers and users are connected:
+  1. Delays 30 minutes, sends Slack notification with usernames
+  2. Retries check every 30 minutes
+  3. Closes only when no active connections remain
+  4. SSM parameter stores pending close state
+  5. vpn-monitor Lambda handles retries (every 5 min check)
+
 **Files Updated:**
-- `lambda/vpn-control/index.ts` - Auto-open and auto-close handlers
-- `lambda/vpn-monitor/index.ts` - Business hours 10:00-17:00
-- `cdklib/lib/vpn-automation-stack.ts` - EventBridge rules (open, weekend close, daily close)
-- `lambda/shared/slack.ts` - Updated help text
+- `lambda/vpn-control/index.ts` - Auto-open and soft-close handlers
+- `lambda/vpn-monitor/index.ts` - Business hours + pending close retry
+- `lambda/shared/vpnManager.ts` - Connection details with usernames
+- `lambda/shared/stateStore.ts` - deleteParameter for pending close
+- `lambda/shared/slack.ts` - Updated help text with soft close info
+- `lambda/shared/types.ts` - VpnConnectionDetail interface
+- `cdklib/lib/vpn-automation-stack.ts` - EventBridge rules (open, weekend soft-close)
 - `team_member_setup.sh` - Client config (100-min idle)
 - `lib/endpoint_management.sh` - Admin config
 
@@ -1002,9 +1009,9 @@ Sat-Sun: Closed (no auto-open)
 - Monthly (22 workdays): ~$44 / NT$1,400
 
 **Cost Optimization Features:**
-- Weekend auto-close: Saves ~$4.80/weekend (48hr × $0.10)
-- Daily safety close: Prevents overnight charges
-- Idle detection: Closes VPN ~2-3hr earlier than scheduled
+- Weekend soft-close: Saves ~$4.80/weekend (48hr × $0.10), respects active connections
+- Idle detection: Closes VPN when no traffic (client 100min + server 54min)
+- Soft close: Never interrupts active users, delays until connections end
 - Estimated monthly savings vs 24/7: ~$48 (66% reduction)
 
 **Comparison with Pritunl (t3.medium):**

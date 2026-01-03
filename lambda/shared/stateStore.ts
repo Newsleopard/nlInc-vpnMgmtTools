@@ -1,4 +1,4 @@
-import { SSMClient, GetParameterCommand, PutParameterCommand } from '@aws-sdk/client-ssm';
+import { SSMClient, GetParameterCommand, PutParameterCommand, DeleteParameterCommand } from '@aws-sdk/client-ssm';
 import { VpnConfig, VpnState } from './types';
 import { SecureParameterManager, readSecureParameter, writeSecureParameter } from './secureParameterManager';
 
@@ -306,6 +306,21 @@ export async function writeParameter(paramName: string, value: string, encrypted
   } catch (error) {
     console.error(`Failed to write parameter ${paramName}:`, error);
     throw new Error(`Unable to write parameter: ${error}`);
+  }
+}
+
+// Generic function to delete any parameter
+export async function deleteParameter(paramName: string): Promise<void> {
+  try {
+    await ssm.send(new DeleteParameterCommand({ Name: paramName }));
+    console.log(`Successfully deleted parameter ${paramName}`);
+  } catch (error: any) {
+    if (error.name === 'ParameterNotFound') {
+      console.log(`Parameter ${paramName} not found, nothing to delete`);
+      return;
+    }
+    console.error(`Failed to delete parameter ${paramName}:`, error);
+    throw new Error(`Unable to delete parameter: ${error}`);
   }
 }
 
