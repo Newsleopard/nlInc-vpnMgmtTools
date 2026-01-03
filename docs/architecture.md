@@ -268,8 +268,20 @@ async function checkIdleStatus(): Promise<boolean> {
   const idleTime = (Date.now() - lastActivity) / 60000;
 
   return idleTime >= IDLE_MINUTES &&
-         !isBusinessHours() &&
+         !isBusinessHours() &&  // 10:00-17:00 Taiwan time
          !hasAdminOverride();
+}
+
+// Soft close: respects active connections
+async function handleSoftClose(): Promise<void> {
+  const status = await getVpnStatus();
+  if (status.activeConnections > 0) {
+    // Delay 30 minutes and retry
+    await schedulePendingClose(30, 'weekend');
+    await notifySlack(`VPN close delayed - ${status.activeConnections} active connections`);
+    return;
+  }
+  await closeVpn();
 }
 ```
 

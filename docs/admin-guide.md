@@ -507,9 +507,10 @@ VPN 系統具備自動排程功能，管理員可透過 Slack 命令動態控制
 
 | 功能 | 說明 | 預設狀態 |
 |------|------|----------|
-| **自動開啟 (Auto-Open)** | 平日 09:30 台灣時間自動開啟 VPN | 啟用 |
+| **自動開啟 (Auto-Open)** | 平日 10:00 台灣時間自動開啟 VPN | 啟用 |
 | **自動關閉 (Auto-Close)** | 閒置 100 分鐘後自動關閉 VPN | 啟用 |
-| **營業時間保護** | 09:30-17:30 期間不自動關閉 | 啟用 |
+| **營業時間保護** | 10:00-17:00 期間不自動關閉 | 啟用 |
+| **週末軟關閉** | 週五 20:00，尊重活躍連線（30 分鐘重試） | 啟用 |
 
 ### Slack 排程命令
 
@@ -583,14 +584,17 @@ VPN 系統具備自動排程功能，管理員可透過 Slack 命令動態控制
 環境 | Environment: staging
 
 🌅 自動開啟 | Auto-Open: ✅ 啟用 | Enabled
-   下次排程時間 | Next scheduled: 2026-01-05 09:30 (Mon)
+   下次排程時間 | Next scheduled: 2026-01-05 10:00 (Mon)
 
 🔄 自動關閉 | Auto-Close: ⏸️ 停用 | Disabled
    剩餘時間 | Remaining: 1h 30m
    將於 | Re-enables at: 2026-01-03 15:00
 
 🛡️ 營業時間保護 | Business Hours Protection: ✅ 啟用 | Enabled
-   時段 | Hours: 09:30 - 17:30 (Asia/Taipei)
+   時段 | Hours: 10:00 - 17:00 (Asia/Taipei)
+
+🌙 週末軟關閉 | Weekend Soft-Close: ✅ 啟用 | Enabled
+   時間 | Time: 週五 20:00 (尊重活躍連線)
 
 最後修改 | Last modified: 2026-01-03 13:30 by admin_user
 ```
