@@ -33,10 +33,24 @@ DEPLOY_CONFIG_FILE="$PROJECT_ROOT/.deploy-config"
 # Create logs directory if it doesn't exist
 mkdir -p "$PROJECT_ROOT/logs"
 
+# Load core functions for logging
+source "$PROJECT_ROOT/lib/core_functions.sh" 2>/dev/null || {
+    echo -e "${RED}Failed to load core functions library${NC}"
+    exit 1
+}
+
 # Load profile selector for AWS profile awareness
 source "$PROJECT_ROOT/lib/profile_selector.sh" 2>/dev/null || {
     print_error "Failed to load profile selector library"
     exit 1
+}
+
+# Logging function - defined early so it can be used throughout
+log_operation() {
+    local level="$1"
+    local message="$2"
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[$timestamp] [$level] $message" >> "$PROJECT_ROOT/logs/deploy.log"
 }
 
 # Configuration management functions
@@ -178,14 +192,6 @@ print_warning() {
 
 print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
-}
-
-# Logging function
-log_operation() {
-    local level="$1"
-    local message="$2"
-    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    echo "[$timestamp] [$level] $message" >> "$PROJECT_ROOT/logs/deploy.log"
 }
 
 # Function to store Slack URL history with secure permissions

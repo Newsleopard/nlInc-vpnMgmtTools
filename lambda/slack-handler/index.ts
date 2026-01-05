@@ -388,16 +388,14 @@ export const handler = async (
         })
       };
       
-      // Process the command asynchronously and send result via response_url
-      processVpnCommandAsync(vpnCommand, slackCommand.response_url, logger).catch(error => {
-        logger.error('Async VPN command processing failed', {
-          error: error.message,
-          command: vpnCommand.action,
-          environment: vpnCommand.environment,
-          requestId: vpnCommand.requestId
-        });
-      });
-      
+      // Process the command and send result via response_url
+      // IMPORTANT: We MUST await this - Lambda execution freezes after returning,
+      // so fire-and-forget async patterns don't work. The result is sent to Slack
+      // via response_url, so even if we exceed the 3s Slack timeout, users will
+      // still see the result in the channel.
+      // Note: processVpnCommandAsync has its own try/catch and sends errors to Slack
+      await processVpnCommandAsync(vpnCommand, slackCommand.response_url, logger);
+
       return immediateResponse;
     }
 
