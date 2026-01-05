@@ -457,17 +457,35 @@ export const handler = async (
           await recordManualActivity(); // Track manual operation for idle detection
           const openStatus = await vpnManager.fetchStatus();
           await publishMetric('VpnOpenOperations', 1);
-          
+
+          // Store pending association for vpn-monitor to detect completion
+          await stateStore.writeParameter(
+            `/vpn/${ENVIRONMENT}/automation/pending_association`,
+            JSON.stringify({
+              startedAt: new Date().toISOString(),
+              startedBy: command.user,
+              initialState: openStatus.associationState
+            })
+          );
+
           response = {
             success: true,
-            message: `VPN ${ENVIRONMENT} environment opened successfully`,
+            message: `VPN ${ENVIRONMENT} association initiated (2-5 min to complete)`,
             data: openStatus
           };
-          
-          // Send success notification
-          await slack.sendSlackNotification(
-            `✅ VPN ${ENVIRONMENT} opened by ${command.user}`
-          );
+
+          // Send immediate notification indicating association started
+          await slack.sendSlackNotification({
+            text: `⏳ VPN ${ENVIRONMENT} association started by ${command.user}`,
+            attachments: [{
+              color: 'warning',
+              fields: [
+                { title: 'Status', value: 'Associating (2-5 min to complete)', short: true },
+                { title: 'User', value: command.user, short: true },
+                { title: 'Note', value: 'You will be notified when VPN is ready for connections', short: false }
+              ]
+            }]
+          });
           break;
 
         case 'close':
@@ -476,17 +494,35 @@ export const handler = async (
           await recordManualActivity(); // Track manual operation for idle detection
           const closeStatus = await vpnManager.fetchStatus();
           await publishMetric('VpnCloseOperations', 1);
-          
+
+          // Store pending disassociation for vpn-monitor to detect completion
+          await stateStore.writeParameter(
+            `/vpn/${ENVIRONMENT}/automation/pending_disassociation`,
+            JSON.stringify({
+              startedAt: new Date().toISOString(),
+              startedBy: command.user,
+              initialState: closeStatus.associationState
+            })
+          );
+
           response = {
             success: true,
-            message: `VPN ${ENVIRONMENT} environment closed successfully`,
+            message: `VPN ${ENVIRONMENT} disassociation initiated (2-5 min to complete)`,
             data: closeStatus
           };
-          
-          // Send success notification
-          await slack.sendSlackNotification(
-            `🔴 VPN ${ENVIRONMENT} closed by ${command.user}`
-          );
+
+          // Send immediate notification indicating disassociation started
+          await slack.sendSlackNotification({
+            text: `⏳ VPN ${ENVIRONMENT} disassociation started by ${command.user}`,
+            attachments: [{
+              color: 'warning',
+              fields: [
+                { title: 'Status', value: 'Disassociating (2-5 min to complete)', short: true },
+                { title: 'User', value: command.user, short: true },
+                { title: 'Note', value: 'You will be notified when VPN is fully closed', short: false }
+              ]
+            }]
+          });
           break;
 
         case 'check':
@@ -648,7 +684,7 @@ async function publishMetric(metricName: string, value: number): Promise<void> {
 async function recordManualActivity(): Promise<void> {
   try {
     const now = new Date().toISOString();
-    await stateStore.writeParameter(`/vpn/automation/manual_activity/${ENVIRONMENT}`, now);
+    await stateStore.writeParameter(`/vpn/${ENVIRONMENT}/automation/manual_activity`, now);
     console.log(`Recorded manual activity timestamp: ${now}`);
   } catch (error) {
     console.error('Failed to record manual activity timestamp:', error);
@@ -669,7 +705,7 @@ async function schedulePendingClose(delayMinutes: number, reason: string): Promi
 
     // Check if there's an existing pending close to increment attempts
     try {
-      const existingParam = await stateStore.readParameter(`/vpn/automation/pending_close/${ENVIRONMENT}`);
+      const existingParam = await stateStore.readParameter(`/vpn/${ENVIRONMENT}/automation/pending_close`);
       if (existingParam) {
         const existing = JSON.parse(existingParam);
         pendingClose.attempts = (existing.attempts || 0) + 1;
@@ -679,7 +715,7 @@ async function schedulePendingClose(delayMinutes: number, reason: string): Promi
     }
 
     await stateStore.writeParameter(
-      `/vpn/automation/pending_close/${ENVIRONMENT}`,
+      `/vpn/${ENVIRONMENT}/automation/pending_close`,
       JSON.stringify(pendingClose)
     );
 
@@ -693,7 +729,7 @@ async function schedulePendingClose(delayMinutes: number, reason: string): Promi
 // Clear pending close - removes the pending close SSM parameter
 async function clearPendingClose(): Promise<void> {
   try {
-    await stateStore.deleteParameter(`/vpn/automation/pending_close/${ENVIRONMENT}`);
+    await stateStore.deleteParameter(`/vpn/${ENVIRONMENT}/automation/pending_close`);
     console.log(`Cleared pending close for ${ENVIRONMENT}`);
   } catch (error) {
     // Parameter might not exist, which is fine
@@ -707,7 +743,7 @@ async function handleAdminNoClose(command: VpnCommandRequest): Promise<VpnComman
     const expiryTime = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
     const overrideValue = `enabled:expires:${expiryTime.toISOString()}`;
     
-    await stateStore.writeParameter(`/vpn/automation/admin_override/${ENVIRONMENT}`, overrideValue);
+    await stateStore.writeParameter(`/vpn/${ENVIRONMENT}/automation/admin_override`, overrideValue);
     await publishMetric('AdminOverrideEnabled', 1);
     
     await slack.sendSlackNotification({
@@ -766,7 +802,7 @@ async function handleAdminNoClose(command: VpnCommandRequest): Promise<VpnComman
 // Epic 3.2: Handle auto-close command (re-enable auto-close)
 async function handleAdminAutoClose(command: VpnCommandRequest): Promise<VpnCommandResponse> {
   try {
-    await stateStore.writeParameter(`/vpn/automation/admin_override/${ENVIRONMENT}`, '');
+    await stateStore.writeParameter(`/vpn/${ENVIRONMENT}/automation/admin_override`, '');
     await publishMetric('AdminOverrideCleared', 1);
     
     await slack.sendSlackNotification({
@@ -815,7 +851,7 @@ async function handleAdminAutoClose(command: VpnCommandRequest): Promise<VpnComm
 // Epic 3.2: Handle cooldown status command
 async function handleCooldownStatus(_command: VpnCommandRequest): Promise<VpnCommandResponse> {
   try {
-    const cooldownParam = await stateStore.readParameter(`/vpn/automation/cooldown/${ENVIRONMENT}`);
+    const cooldownParam = await stateStore.readParameter(`/vpn/${ENVIRONMENT}/automation/cooldown`);
     
     if (!cooldownParam) {
       return {
@@ -859,7 +895,7 @@ async function handleForceClose(command: VpnCommandRequest): Promise<VpnCommandR
     await updateLastActivity();
     
     // Clear cooldown to allow immediate re-association if needed
-    await stateStore.writeParameter(`/vpn/automation/cooldown/${ENVIRONMENT}`, '');
+    await stateStore.writeParameter(`/vpn/${ENVIRONMENT}/automation/cooldown`, '');
     
     const status = await vpnManager.fetchStatus();
     await publishMetric('AdminForceCloseOperations', 1);

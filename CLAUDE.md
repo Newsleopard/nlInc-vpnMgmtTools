@@ -923,56 +923,102 @@ The Slack App's Request URL for the `/vpn` command is highly stable due to the s
 
 ### Automated VPN Schedule & Enhanced Idle Detection
 
-**Weekday Auto-Open (10:00 AM Taiwan Time):**
-- VPN endpoint automatically opens at 10:00 AM on weekdays (Mon-Fri)
-- EventBridge scheduled rule triggers vpn-control Lambda
-- Slack notification sent when VPN auto-opens
-- No manual intervention needed for daily VPN startup
+#### Schedule Overview (Taiwan Time UTC+8)
 
-**Business Hours Protection (10:00 AM - 5:00 PM):**
-- Server-side auto-close is disabled during business hours
-- Prevents accidental VPN closure during work time
-- After 5:00 PM, idle detection resumes
-
-**Weekend Soft-Close (Friday 8:00 PM):**
-- VPN automatically closes on Friday evening (soft close)
-- Respects active connections - if users are connected, delays 30 minutes and retries
-- Continues retrying every 30 minutes until all connections end
-- Slack notifications include: connection count, usernames, next retry time
-- Prevents weekend charges from forgotten connections
-
-**100-Minute Traffic-Based Client Idle Timeout:**
-- OpenVPN client config uses `inactive 6000 10000` (100 minutes, 10KB threshold)
-- Traffic threshold ensures keepalive packets don't reset the timer
-- Only real usage (SSH, HTTP, database queries) resets the 100-minute timer
-
-**Daily Schedule Flow (Weekdays):**
+**Daily Schedule Flow (Weekdays - Production):**
 ```
-09:30 - VPN auto-opens (EventBridge trigger, Production only by default)
-09:30-17:30 - Business hours protection (no auto-close)
-17:30 - Server idle detection starts
-17:30 + 100 min = 19:10 - Client auto-disconnects (if no traffic)
-19:10 + 30 min = 19:40 - Server auto-closes endpoint (if no connections)
+10:00 AM   ⏰ Auto-Open (EventBridge trigger)
+           │  VPN endpoint starts associating (~5-10 min)
+           │
+10:00 AM   🛡️ Business Hours Protection STARTS
+   ↓       │  Auto-close disabled during this period
+           │
+ 5:00 PM   🛡️ Business Hours Protection ENDS
+           │  Idle detection becomes active
+           │
+ 5:00 PM+  ⏱️ Idle Detection Active
+   ↓       │  • Client: 100 min no traffic → auto-disconnect
+           │  • Server: 30 min no connections → auto-close
+           │
+~7:10 PM   🔴 Typical Auto-Close
+              (assuming no usage after 5:00 PM)
 ```
 
-**Weekly Schedule Flow:**
+**Weekly Schedule:**
 ```
-Mon-Thu: 09:30 open → idle detection closes (typically ~19:40)
-Friday:  09:30 open → 20:00 soft-close (respects active connections)
+Mon-Thu: 10:00 AM open → idle detection closes (~7:10 PM typical)
+Friday:  10:00 AM open → 8:00 PM soft-close (respects active connections)
 Sat-Sun: Closed (no auto-open)
 ```
 
-**Environment-Specific Auto-Open Defaults:**
-- **Production**: Auto-open enabled by default (VPN opens at 9:30 on weekdays)
-- **Staging**: Auto-open disabled by default (must enable via `/vpn schedule open on staging`)
+#### Environment Defaults
 
-**Soft Close Behavior:**
-- When scheduled close triggers and users are connected:
-  1. Delays 30 minutes, sends Slack notification with usernames
-  2. Retries check every 30 minutes
-  3. Closes only when no active connections remain
-  4. SSM parameter stores pending close state
-  5. vpn-monitor Lambda handles retries (every 5 min check)
+| Setting | Production | Staging |
+|---------|------------|---------|
+| Auto-Open | ✅ Enabled by default | ❌ Disabled by default |
+| Auto-Close | ❌ Disabled by default | ❌ Disabled by default |
+| Business Hours Protection | ✅ 10:00 AM - 5:00 PM | ✅ 10:00 AM - 5:00 PM |
+| Weekend Soft-Close | ✅ Friday 8:00 PM | ✅ Friday 8:00 PM |
+
+#### Manual Commands vs Automatic Schedule
+
+**15-Minute Grace Period:**
+- Manual `/vpn open` or `/vpn close` commands record a "manual activity" timestamp
+- Auto-close is skipped for 15 minutes after any manual command
+- This prevents immediate auto-close after manual operations
+
+**Example Scenario:**
+```
+10:00 AM   ⏰ Auto-Open (NO manual_activity recorded)
+           │
+11:00 AM   /vpn close prod → records manual_activity = 11:00
+           │  VPN closes
+           │
+11:30 AM   /vpn open prod → records manual_activity = 11:30
+           │  VPN opens
+           │
+11:30-11:45  ⏸️ 15-min Grace Period (auto-close skipped)
+           │
+11:45 AM+  ✅ Normal idle detection resumes
+           │  (still protected by business hours until 5:00 PM)
+           │
+ 5:00 PM+  Full idle detection active
+```
+
+**Key Rules:**
+- Auto-Open does NOT record manual_activity (allows immediate idle detection)
+- Manual commands ALWAYS work (not blocked by any protection)
+- Business hours protection only affects automatic operations
+
+#### Protection Mechanisms
+
+| Mechanism | Affects | Description |
+|-----------|---------|-------------|
+| 🛡️ Business Hours | Auto-close only | 10:00 AM - 5:00 PM: no auto-close |
+| ⏸️ 15-min Grace | Auto-close only | After manual command: 15 min protection |
+| 🌙 Weekend Soft-Close | Friday 8:00 PM | Waits for connections to end |
+| 🔒 Manual Commands | Always work | `/vpn close` ignores all protections |
+
+#### Idle Detection (Dual-Layer)
+
+| Layer | Trigger | Timeout | Behavior |
+|-------|---------|---------|----------|
+| Client-side | 100 min no traffic (10KB threshold) | 100 min | OpenVPN auto-disconnects |
+| Server-side | 30 min no connections | 30 min | Lambda closes VPN endpoint |
+
+**Important:**
+- Client keepalive packets do NOT reset the timer
+- Only actual data (SSH, HTTP, DB queries) resets the timer
+- Server-side check runs every 3 minutes
+
+#### Weekend Soft-Close Behavior
+
+When Friday 8:00 PM soft-close triggers:
+1. If no connections → closes immediately
+2. If users connected → delays 30 minutes, sends Slack notification with usernames
+3. Retries every 30 minutes until all connections end
+4. SSM parameter stores pending close state
+5. vpn-monitor Lambda handles retries (checks every 3 minutes)
 
 **Files Updated:**
 - `lambda/vpn-control/index.ts` - Auto-open and soft-close handlers

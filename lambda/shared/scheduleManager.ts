@@ -102,9 +102,8 @@ const cloudwatch = new CloudWatchClient({
 // Constants
 // ============================================================================
 
-// Support environment variable override for Parameter Store paths
-const SCHEDULE_STATE_PATH_PREFIX = process.env.SCHEDULE_STATE_PATH || '/vpn/automation/schedule';
-const SCHEDULE_CONFIG_PATH_PREFIX = process.env.SCHEDULE_CONFIG_PATH || '/vpn/automation/schedule';
+// Parameter Store path pattern: /vpn/${environment}/automation/schedule/{state|config}
+// This pattern is required to match IAM policy which allows /vpn/${environment}/*
 
 /**
  * Default schedule configuration
@@ -147,14 +146,14 @@ const DEFAULT_SCHEDULE_STATE: ScheduleState = {
  * Get the Parameter Store path for schedule state
  */
 function getScheduleStatePath(environment: string): string {
-  return `${SCHEDULE_STATE_PATH_PREFIX}/${environment}/state`;
+  return `/vpn/${environment}/automation/schedule/state`;
 }
 
 /**
  * Get the Parameter Store path for schedule config
  */
 function getScheduleConfigPath(environment: string): string {
-  return `${SCHEDULE_CONFIG_PATH_PREFIX}/${environment}/config`;
+  return `/vpn/${environment}/automation/schedule/config`;
 }
 
 /**

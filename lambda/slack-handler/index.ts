@@ -292,111 +292,74 @@ export const handler = async (
       };
     }
 
-    // For potentially long-running operations (open/close), check for intermediate states first
+    // For potentially long-running operations (open/close), invoke asynchronously
     const isLongRunningOperation = ['open', 'close', 'start', 'stop', 'enable', 'disable', 'on', 'off'].includes(vpnCommand.action);
-    
+
     if (isLongRunningOperation) {
-      // Quick validation for intermediate states to provide immediate feedback
-      try {
-        logger.info('Pre-validating operation for intermediate states', {
-          action: vpnCommand.action,
-          environment: vpnCommand.environment
-        });
-        
-        // For both local and cross-account commands, do a quick status check first
-        let quickStatusResponse: VpnCommandResponse;
-        
-        if (vpnCommand.environment === ENVIRONMENT) {
-          // Local environment - direct lambda call
-          quickStatusResponse = await withPerformanceLogging(
-            'quickStatusCheck',
-            invokeLocalVpnControl,
-            logger
-          )({ ...vpnCommand, action: 'check' as any }, logger);
-        } else {
-          // Cross-account environment - API Gateway call
-          quickStatusResponse = await withPerformanceLogging(
-            'quickCrossAccountStatusCheck',
-            invokeProductionViaAPIGateway,
-            logger
-          )({ ...vpnCommand, action: 'check' as any }, logger);
-        }
-        
-        // If we can detect intermediate state, handle it immediately
-        if (quickStatusResponse.success && quickStatusResponse.data?.associationState) {
-          const state = quickStatusResponse.data.associationState;
-          
-          if (vpnCommand.action === 'open' && (state === 'associating' || state === 'disassociating')) {
-            // Return intermediate state error immediately
-            const errorResponse = {
-              success: false,
-              message: 'VPN operation temporarily unavailable',
-              error: state === 'associating' ? 
-                'VPN is currently associating subnets. Please wait for the operation to complete before trying again.' :
-                'VPN is currently disassociating subnets. Please wait for the operation to complete before trying to open.'
-            };
-            
-            const slackResponse = slack.formatSlackResponse(errorResponse, vpnCommand);
-            return {
-              statusCode: 200,
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(slackResponse)
-            };
-          }
-          
-          if (vpnCommand.action === 'close' && (state === 'associating' || state === 'disassociating')) {
-            // Return intermediate state error immediately
-            const errorResponse = {
-              success: false,
-              message: 'VPN operation temporarily unavailable',
-              error: state === 'disassociating' ? 
-                'VPN is currently disassociating subnets. Please wait for the operation to complete before trying again.' :
-                'VPN is currently associating subnets. Please wait for the operation to complete before trying to close.'
-            };
-            
-            const slackResponse = slack.formatSlackResponse(errorResponse, vpnCommand);
-            return {
-              statusCode: 200,
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(slackResponse)
-            };
-          }
-        }
-        
-      } catch (preValidationError) {
-        // If pre-validation fails, continue with normal flow
-        logger.warn('Pre-validation failed, continuing with async processing', {
-          error: preValidationError.message,
-          action: vpnCommand.action,
-          environment: vpnCommand.environment
-        });
-      }
-      
+      // NOTE: Pre-validation for intermediate states was removed because it caused
+      // Slack operation_timeout errors. The synchronous status check took too long
+      // (especially for cross-account calls). vpn-control now handles intermediate
+      // state detection and will send appropriate error notifications via Slack.
+
       logger.info('Processing long-running operation asynchronously', {
         action: vpnCommand.action,
-        environment: vpnCommand.environment,
-        responseUrl: slackCommand.response_url
+        environment: vpnCommand.environment
       });
-      
-      // Respond immediately to prevent Slack timeout
-      const immediateResponse = {
+
+      // Invoke vpn-control asynchronously - returns immediately
+      // vpn-control handles all Slack notifications (⏳ started, then vpn-monitor sends ✅ ready)
+      // Using InvocationType: 'Event' for async invocation (NOT in-process fire-and-forget)
+      try {
+        const isLocalCommand = vpnCommand.environment === ENVIRONMENT;
+
+        if (isLocalCommand) {
+          await invokeVpnControlAsync(vpnCommand, logger);
+        } else {
+          // Cross-account: invoke production API Gateway
+          await invokeProductionAsync(vpnCommand, logger);
+        }
+
+        logger.info('Async invocation queued, returning immediate response', {
+          action: vpnCommand.action,
+          environment: vpnCommand.environment,
+          isLocalCommand
+        });
+
+      } catch (invocationError) {
+        logger.error('Failed to queue async invocation', invocationError, {
+          action: vpnCommand.action,
+          environment: vpnCommand.environment
+        });
+
+        // Return error to user if we can't even queue the request
+        return {
+          statusCode: 200,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            response_type: 'ephemeral',
+            text: `❌ Failed to start VPN ${vpnCommand.action} operation`,
+            attachments: [{
+              color: 'danger',
+              fields: [{
+                title: 'Error',
+                value: invocationError.message,
+                short: false
+              }]
+            }]
+          })
+        };
+      }
+
+      // Return immediate acknowledgment to Slack (within 3 seconds)
+      // No duplicate message - vpn-control will send notifications
+      return {
         statusCode: 200,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           response_type: 'in_channel',
-          text: `🔄 Processing VPN ${vpnCommand.action} for ${vpnCommand.environment}... Please wait.`
+          text: `🔄 Processing VPN ${vpnCommand.action} for ${vpnCommand.environment}...`
         })
       };
-      
-      // Process the command and send result via response_url
-      // IMPORTANT: We MUST await this - Lambda execution freezes after returning,
-      // so fire-and-forget async patterns don't work. The result is sent to Slack
-      // via response_url, so even if we exceed the 3s Slack timeout, users will
-      // still see the result in the channel.
-      // Note: processVpnCommandAsync has its own try/catch and sends errors to Slack
-      await processVpnCommandAsync(vpnCommand, slackCommand.response_url, logger);
-
-      return immediateResponse;
     }
 
     // For quick operations (check/status), process synchronously
@@ -601,6 +564,150 @@ async function invokeLocalVpnControl(command: VpnCommandRequest, logger: any): P
       message: 'Local VPN operation failed',
       error: `Local VPN operation failed: ${error.message}`
     };
+  }
+}
+
+/**
+ * Invoke vpn-control Lambda asynchronously (fire-and-forget via Lambda service)
+ * Uses InvocationType: 'Event' which queues the invocation and returns immediately.
+ * This is NOT the same as in-process fire-and-forget (which doesn't work in Lambda).
+ * AWS queues the invocation in a separate execution context.
+ */
+async function invokeVpnControlAsync(command: VpnCommandRequest, logger: any): Promise<void> {
+  const childLogger = logger.child({ operation: 'invokeVpnControlAsync' });
+
+  const vpnControlFunctionName = process.env.VPN_CONTROL_FUNCTION_NAME ||
+    `VpnAutomationStack-${ENVIRONMENT}-VpnControl`;
+
+  childLogger.info('Invoking vpn-control asynchronously', {
+    functionName: vpnControlFunctionName,
+    action: command.action,
+    environment: command.environment,
+    requestId: command.requestId
+  });
+
+  try {
+    await lambda.send(new InvokeCommand({
+      FunctionName: vpnControlFunctionName,
+      InvocationType: 'Event',  // Async - queues invocation, returns immediately
+      Payload: JSON.stringify({
+        httpMethod: 'POST',
+        body: JSON.stringify(command),
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Correlation-ID': logger.getCorrelationId()
+        }
+      })
+    }));
+
+    childLogger.info('Async invocation queued successfully', {
+      functionName: vpnControlFunctionName,
+      action: command.action,
+      environment: command.environment
+    });
+
+  } catch (error) {
+    childLogger.error('Failed to invoke vpn-control asynchronously', error, {
+      functionName: vpnControlFunctionName,
+      action: command.action,
+      environment: command.environment
+    });
+    throw error;
+  }
+}
+
+/**
+ * Invoke production vpn-control via API Gateway asynchronously
+ * For cross-account operations, we need to call the production API Gateway
+ */
+async function invokeProductionAsync(command: VpnCommandRequest, logger: any): Promise<void> {
+  const childLogger = logger.child({ operation: 'invokeProductionAsync' });
+
+  let productionAPIEndpoint = process.env.PRODUCTION_API_ENDPOINT;
+  let apiKey = process.env.PRODUCTION_API_KEY || '';
+
+  // If environment variables are not set, try to read from parameter store
+  if (!productionAPIEndpoint) {
+    try {
+      const crossAccountConfig = await stateStore.readParameter('/vpn/staging/cross_account/config');
+      if (crossAccountConfig) {
+        const config = JSON.parse(crossAccountConfig);
+        productionAPIEndpoint = config.productionApiEndpoint;
+        apiKey = config.productionApiKey || '';
+      }
+    } catch (paramError) {
+      childLogger.warn('Failed to read cross-account configuration', {
+        error: paramError.message
+      });
+    }
+  }
+
+  if (!productionAPIEndpoint) {
+    throw new Error('Production API endpoint not configured');
+  }
+
+  childLogger.info('Invoking production API asynchronously', {
+    endpoint: productionAPIEndpoint?.substring(0, 50) + '...',
+    action: command.action,
+    environment: command.environment
+  });
+
+  const requestBody: CrossAccountRequest = {
+    command: command,
+    requestId: command.requestId,
+    sourceAccount: 'staging',
+    crossAccountMetadata: {
+      requestTimestamp: new Date().toISOString(),
+      sourceEnvironment: ENVIRONMENT,
+      routingAttempt: 1,
+      userAgent: 'VPN-Automation-Slack-Handler/1.0'
+    }
+  };
+
+  // Fire-and-forget: 2 second timeout
+  // We don't need to wait for production to fully process - just confirm the request was received
+  // Slack times out after 3 seconds, so we must return quickly
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 2000);
+
+  try {
+    await fetch(productionAPIEndpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-API-Key': apiKey,
+        'User-Agent': 'VPN-Automation-Slack-Handler/1.0',
+        'X-Correlation-ID': logger.getCorrelationId()
+      },
+      body: JSON.stringify(requestBody),
+      signal: controller.signal
+    });
+
+    clearTimeout(timeoutId);
+    childLogger.info('Cross-account request sent successfully', {
+      action: command.action,
+      environment: command.environment
+    });
+
+  } catch (error: any) {
+    clearTimeout(timeoutId);
+
+    // Timeout is expected and acceptable - request was likely sent
+    // The production Lambda will handle processing and send its own Slack notifications
+    if (error.name === 'AbortError') {
+      childLogger.info('Cross-account request sent (timeout expected, production will process)', {
+        action: command.action,
+        environment: command.environment
+      });
+      return; // Don't throw - this is expected behavior
+    }
+
+    // Only throw for actual errors (network failures, etc.)
+    childLogger.error('Failed to invoke production API asynchronously', error, {
+      action: command.action,
+      environment: command.environment
+    });
+    throw error;
   }
 }
 
@@ -833,137 +940,6 @@ async function publishCrossAccountMetric(
   } catch (error) {
     console.error('Failed to publish cross-account metric:', error);
     // Don't throw as metric failure shouldn't break the main operation
-  }
-}
-
-/**
- * Process VPN command asynchronously and send result via Slack response_url
- */
-async function processVpnCommandAsync(
-  vpnCommand: VpnCommandRequest, 
-  responseUrl: string, 
-  logger: any
-): Promise<void> {
-  try {
-    logger.info('Starting async VPN command processing', {
-      action: vpnCommand.action,
-      environment: vpnCommand.environment,
-      requestId: vpnCommand.requestId
-    });
-
-    // Route command based on environment
-    let response: VpnCommandResponse;
-    
-    // Cost commands always execute locally since they aggregate data from both environments
-    const isCostCommand = vpnCommand.action.startsWith('cost-');
-    const isLocalCommand = vpnCommand.environment === ENVIRONMENT || isCostCommand;
-    
-    if (isLocalCommand) {
-      // Local command - invoke vpn-control Lambda directly
-      logger.info('Processing local async command', {
-        targetEnvironment: isCostCommand ? 'local_aggregated' : ENVIRONMENT,
-        routingType: 'local_lambda',
-        isCostCommand: isCostCommand
-      });
-      
-      response = await withPerformanceLogging(
-        'invokeLocalVpnControl',
-        invokeLocalVpnControl,
-        logger
-      )(vpnCommand, logger);
-      
-    } else {
-      // Cross-account command - call production API Gateway via HTTPS
-      logger.info('Processing cross-account async command', {
-        sourceEnvironment: ENVIRONMENT,
-        targetEnvironment: vpnCommand.environment,
-        routingType: 'cross_account_api'
-      });
-      
-      response = await withPerformanceLogging(
-        'invokeProductionViaAPIGateway',
-        invokeProductionViaAPIGateway,
-        logger
-      )(vpnCommand, logger);
-    }
-
-    // Format response for Slack
-    const slackResponse = slack.formatSlackResponse(response, vpnCommand);
-    
-    logger.audit('Async VPN operation completed', 'vpn_command', response.success ? 'success' : 'failure', {
-      command: vpnCommand.action,
-      environment: vpnCommand.environment,
-      user: vpnCommand.user,
-      requestId: vpnCommand.requestId,
-      success: response.success,
-      error: response.error,
-      responseData: response.data ? {
-        associated: response.data.associated,
-        activeConnections: response.data.activeConnections
-      } : undefined
-    });
-
-    // Send the result back to Slack via response_url
-    await sendSlackFollowup(responseUrl, slackResponse, logger);
-    
-  } catch (error) {
-    logger.error('Async VPN command processing failed', {
-      error: error.message,
-      stack: error.stack,
-      command: vpnCommand.action,
-      environment: vpnCommand.environment,
-      requestId: vpnCommand.requestId
-    });
-
-    // Send error message to Slack
-    const errorResponse = {
-      response_type: 'ephemeral',
-      text: `❌ VPN ${vpnCommand.action} failed for ${vpnCommand.environment}`,
-      attachments: [{
-        color: 'danger',
-        fields: [{
-          title: 'Error',
-          value: error.message,
-          short: false
-        }]
-      }]
-    };
-
-    await sendSlackFollowup(responseUrl, errorResponse, logger);
-  }
-}
-
-/**
- * Send a follow-up message to Slack using response_url
- */
-async function sendSlackFollowup(responseUrl: string, slackResponse: any, logger: any): Promise<void> {
-  try {
-    logger.info('Sending Slack follow-up response', {
-      responseUrl: responseUrl,
-      responseType: slackResponse.response_type,
-      hasAttachments: !!slackResponse.attachments
-    });
-
-    const response = await fetch(responseUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(slackResponse)
-    });
-
-    if (!response.ok) {
-      throw new Error(`Slack response_url request failed: ${response.status} ${response.statusText}`);
-    }
-
-    logger.info('Successfully sent Slack follow-up response');
-    
-  } catch (error) {
-    logger.error('Failed to send Slack follow-up response', {
-      error: error.message,
-      responseUrl: responseUrl
-    });
-    throw error;
   }
 }
 

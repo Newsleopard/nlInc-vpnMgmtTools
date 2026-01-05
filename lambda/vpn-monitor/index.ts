@@ -99,21 +99,40 @@ export const handler = async (
     // Fetch current VPN status
     const status = await vpnManager.fetchStatus();
     const state = await stateStore.readState();
-    
+
     logger.info('Current VPN status', {
       associated: status.associated,
+      associationState: status.associationState,
       activeConnections: status.activeConnections,
       lastActivity: status.lastActivity,
       endpointId: status.endpointId,
       subnetId: status.subnetId
     });
-    
+
     logger.audit('VPN status check', 'vpn_status', 'success', {
       associated: status.associated,
       activeConnections: status.activeConnections,
       lastActivity: status.lastActivity,
       endpointId: status.endpointId
     });
+
+    // Check for pending association completion
+    const associationResult = await checkAndNotifyAssociationCompletion(status);
+    if (associationResult.notified) {
+      logger.info('Association completion notification sent', {
+        startedBy: associationResult.startedBy,
+        duration: associationResult.duration
+      });
+    }
+
+    // Check for pending disassociation completion
+    const disassociationResult = await checkAndNotifyDisassociationCompletion(status);
+    if (disassociationResult.notified) {
+      logger.info('Disassociation completion notification sent', {
+        startedBy: disassociationResult.startedBy,
+        duration: disassociationResult.duration
+      });
+    }
 
     // Publish current status metrics
     await publishStatusMetrics(status);
@@ -149,40 +168,7 @@ export const handler = async (
         environment: ENVIRONMENT,
         reason: 'schedule_disabled'
       });
-      
-      // Send notification about skipped operation
-      const environmentEmoji = ENVIRONMENT === 'production' ? '🚀' : '🔧';
-      const environmentName = ENVIRONMENT === 'production' ? 'Production' : 'Staging';
-      
-      await slack.sendSlackNotification({
-        text: "📅 Auto-Close Schedule Disabled | 自動關閉排程已停用",
-        attachments: [{
-          color: "#ffaa00",
-          fields: [
-            {
-              title: `${environmentEmoji} Environment | 環境`,
-              value: environmentName,
-              short: true
-            },
-            {
-              title: "🔒 Status | 狀態",
-              value: "Auto-close disabled | 自動關閉已停用",
-              short: true
-            },
-            {
-              title: "📝 Note | 注意",
-              value: "Idle monitoring skipped due to schedule settings | 因排程設定跳過閒置監控",
-              short: false
-            },
-            {
-              title: "🔧 Re-enable | 重新啟用",
-              value: `/vpn schedule on ${ENVIRONMENT}`,
-              short: false
-            }
-          ]
-        }]
-      });
-      
+      // No Slack notification - just log and return silently to avoid spam
       await publishMetric('ScheduleDisabledSkips', 1);
       return;
     }
@@ -498,7 +484,7 @@ function isBusinessHours(): boolean {
 // Check if we're in a cooldown period after recent auto-disassociation
 async function isInCooldownPeriod(): Promise<boolean> {
   try {
-    const cooldownParam = await stateStore.readParameter(`/vpn/automation/cooldown/${ENVIRONMENT}`);
+    const cooldownParam = await stateStore.readParameter(`/vpn/${ENVIRONMENT}/automation/cooldown`);
     if (!cooldownParam) {
       return false;
     }
@@ -517,7 +503,7 @@ async function isInCooldownPeriod(): Promise<boolean> {
 // Get remaining cooldown time in minutes
 async function getRemainingCooldownMinutes(): Promise<number> {
   try {
-    const cooldownParam = await stateStore.readParameter(`/vpn/automation/cooldown/${ENVIRONMENT}`);
+    const cooldownParam = await stateStore.readParameter(`/vpn/${ENVIRONMENT}/automation/cooldown`);
     if (!cooldownParam) {
       return 0;
     }
@@ -536,7 +522,7 @@ async function getRemainingCooldownMinutes(): Promise<number> {
 async function recordCooldownTimestamp(): Promise<void> {
   try {
     const now = new Date().toISOString();
-    await stateStore.writeParameter(`/vpn/automation/cooldown/${ENVIRONMENT}`, now);
+    await stateStore.writeParameter(`/vpn/${ENVIRONMENT}/automation/cooldown`, now);
     console.log(`Recorded cooldown timestamp: ${now}`);
   } catch (error) {
     console.error('Failed to record cooldown timestamp:', error);
@@ -547,7 +533,7 @@ async function recordCooldownTimestamp(): Promise<void> {
 // Clear cooldown timestamp when VPN is actively being used
 async function clearCooldownTimestamp(): Promise<void> {
   try {
-    await stateStore.writeParameter(`/vpn/automation/cooldown/${ENVIRONMENT}`, '');
+    await stateStore.writeParameter(`/vpn/${ENVIRONMENT}/automation/cooldown`, '');
     console.log('Cleared cooldown timestamp due to active usage');
   } catch (error) {
     console.error('Failed to clear cooldown timestamp:', error);
@@ -557,7 +543,7 @@ async function clearCooldownTimestamp(): Promise<void> {
 // Check if there has been recent manual activity (Slack commands)
 async function hasRecentManualActivity(): Promise<boolean> {
   try {
-    const manualActivityParam = await stateStore.readParameter(`/vpn/automation/manual_activity/${ENVIRONMENT}`);
+    const manualActivityParam = await stateStore.readParameter(`/vpn/${ENVIRONMENT}/automation/manual_activity`);
     if (!manualActivityParam) {
       return false;
     }
@@ -622,7 +608,7 @@ async function hasRecentManualActivity(): Promise<boolean> {
 // Check for administrative override to disable auto-disassociation
 async function hasAdministrativeOverride(): Promise<boolean> {
   try {
-    const overrideParam = await stateStore.readParameter(`/vpn/automation/admin_override/${ENVIRONMENT}`);
+    const overrideParam = await stateStore.readParameter(`/vpn/${ENVIRONMENT}/automation/admin_override`);
     if (!overrideParam) {
       return false;
     }
@@ -636,7 +622,7 @@ async function hasAdministrativeOverride(): Promise<boolean> {
         
         if (now > expiryTime) {
           console.log('Administrative override has expired, clearing it');
-          await stateStore.writeParameter(`/vpn/automation/admin_override/${ENVIRONMENT}`, '');
+          await stateStore.writeParameter(`/vpn/${ENVIRONMENT}/automation/admin_override`, '');
           return false;
         }
       }
@@ -988,13 +974,243 @@ async function calculateAndStoreDailyMaxSavings(dateStr: string): Promise<void> 
   }
 }
 
+// Check for pending association completion and send notification
+async function checkAndNotifyAssociationCompletion(status: any): Promise<{ notified: boolean; startedBy?: string; duration?: string }> {
+  try {
+    const pendingParam = await stateStore.readParameter(`/vpn/${ENVIRONMENT}/automation/pending_association`);
+
+    if (!pendingParam) {
+      return { notified: false };
+    }
+
+    const pending = JSON.parse(pendingParam);
+    const startedAt = new Date(pending.startedAt);
+    const now = new Date();
+    const durationMs = now.getTime() - startedAt.getTime();
+    const durationMinutes = Math.round(durationMs / (1000 * 60));
+
+    // Check if association is now complete
+    if (status.associationState === 'associated') {
+      // Clear pending association
+      await stateStore.deleteParameter(`/vpn/${ENVIRONMENT}/automation/pending_association`);
+
+      // Send success notification
+      const environmentEmoji = ENVIRONMENT === 'production' ? '🚀' : '🔧';
+
+      await slack.sendSlackNotification({
+        text: `✅ VPN ${ENVIRONMENT} ready for connections`,
+        attachments: [{
+          color: 'good',
+          fields: [
+            { title: `${environmentEmoji} Environment`, value: ENVIRONMENT, short: true },
+            { title: '⏱️ Association Time', value: `${durationMinutes} minute${durationMinutes !== 1 ? 's' : ''}`, short: true },
+            { title: '👤 Started By', value: pending.startedBy || 'unknown', short: true },
+            { title: '✅ Status', value: 'Ready for connections', short: true }
+          ]
+        }]
+      });
+
+      await publishMetric('VpnAssociationCompleted', 1);
+      await publishMetric('VpnAssociationDurationMinutes', durationMinutes);
+
+      return { notified: true, startedBy: pending.startedBy, duration: `${durationMinutes}m` };
+    }
+
+    // Check if association failed
+    if (status.associationState === 'failed' || status.associationState === 'disassociated') {
+      // Clear pending association
+      await stateStore.deleteParameter(`/vpn/${ENVIRONMENT}/automation/pending_association`);
+
+      // Send failure notification
+      await slack.sendSlackNotification({
+        text: `❌ VPN ${ENVIRONMENT} association failed`,
+        attachments: [{
+          color: 'danger',
+          fields: [
+            { title: 'Environment', value: ENVIRONMENT, short: true },
+            { title: 'State', value: status.associationState || 'unknown', short: true },
+            { title: 'Started By', value: pending.startedBy || 'unknown', short: true },
+            { title: 'Recommendation', value: 'Try `/vpn open` again', short: false }
+          ]
+        }]
+      });
+
+      await publishMetric('VpnAssociationFailed', 1);
+
+      return { notified: true, startedBy: pending.startedBy, duration: `${durationMinutes}m` };
+    }
+
+    // Still associating - check for timeout (15 minutes max)
+    if (durationMinutes > 15) {
+      // Clear pending association due to timeout
+      await stateStore.deleteParameter(`/vpn/${ENVIRONMENT}/automation/pending_association`);
+
+      await slack.sendSlackNotification({
+        text: `⚠️ VPN ${ENVIRONMENT} association timed out`,
+        attachments: [{
+          color: 'warning',
+          fields: [
+            { title: 'Environment', value: ENVIRONMENT, short: true },
+            { title: 'Current State', value: status.associationState || 'unknown', short: true },
+            { title: 'Duration', value: `${durationMinutes} minutes`, short: true },
+            { title: '⚠️ Action Required', value: 'Please check status manually with `/vpn check` or AWS Console. No further automatic notifications will be sent.', short: false }
+          ]
+        }]
+      });
+
+      await publishMetric('VpnAssociationTimeout', 1);
+
+      return { notified: true, startedBy: pending.startedBy, duration: `${durationMinutes}m` };
+    }
+
+    // Still in progress, not yet timed out - send progress notification
+    console.log(`VPN association still in progress: ${status.associationState} (${durationMinutes}m elapsed)`);
+
+    const environmentEmoji = ENVIRONMENT === 'production' ? '🚀' : '🔧';
+    await slack.sendSlackNotification({
+      text: `⏳ VPN ${ENVIRONMENT} still associating... (${durationMinutes} minute${durationMinutes !== 1 ? 's' : ''} elapsed)`,
+      attachments: [{
+        color: 'warning',
+        fields: [
+          { title: `${environmentEmoji} Environment`, value: ENVIRONMENT, short: true },
+          { title: '🔄 Status', value: 'Associating...', short: true },
+          { title: '⏱️ Elapsed Time', value: `${durationMinutes} minute${durationMinutes !== 1 ? 's' : ''}`, short: true },
+          { title: '👤 Started By', value: pending.startedBy || 'unknown', short: true }
+        ]
+      }]
+    });
+
+    return { notified: true };
+
+  } catch (error) {
+    // No pending association or error reading parameter
+    console.log('No pending association found or error:', error);
+    return { notified: false };
+  }
+}
+
+// Check for pending disassociation completion and send notification
+async function checkAndNotifyDisassociationCompletion(status: any): Promise<{ notified: boolean; startedBy?: string; duration?: string }> {
+  try {
+    const pendingParam = await stateStore.readParameter(`/vpn/${ENVIRONMENT}/automation/pending_disassociation`);
+
+    if (!pendingParam) {
+      return { notified: false };
+    }
+
+    const pending = JSON.parse(pendingParam);
+    const startedAt = new Date(pending.startedAt);
+    const now = new Date();
+    const durationMs = now.getTime() - startedAt.getTime();
+    const durationMinutes = Math.round(durationMs / (1000 * 60));
+
+    // Check if disassociation is now complete
+    // NOTE: Only check associationState, not status.associated, because associated may
+    // become false before the state transitions to 'disassociated', causing premature detection
+    if (status.associationState === 'disassociated') {
+      // Clear pending disassociation
+      await stateStore.deleteParameter(`/vpn/${ENVIRONMENT}/automation/pending_disassociation`);
+
+      // Send success notification
+      const environmentEmoji = ENVIRONMENT === 'production' ? '🚀' : '🔧';
+
+      await slack.sendSlackNotification({
+        text: `🔴 VPN ${ENVIRONMENT} is now closed`,
+        attachments: [{
+          color: 'danger',
+          fields: [
+            { title: `${environmentEmoji} Environment`, value: ENVIRONMENT, short: true },
+            { title: '⏱️ Disassociation Time', value: `${durationMinutes} minute${durationMinutes !== 1 ? 's' : ''}`, short: true },
+            { title: '👤 Closed By', value: pending.startedBy || 'unknown', short: true },
+            { title: '🔴 Status', value: 'VPN is now closed', short: true }
+          ]
+        }]
+      });
+
+      await publishMetric('VpnDisassociationCompleted', 1);
+      await publishMetric('VpnDisassociationDurationMinutes', durationMinutes);
+
+      return { notified: true, startedBy: pending.startedBy, duration: `${durationMinutes}m` };
+    }
+
+    // Check if disassociation failed (went back to associated somehow)
+    if (status.associationState === 'associated') {
+      // Clear pending disassociation
+      await stateStore.deleteParameter(`/vpn/${ENVIRONMENT}/automation/pending_disassociation`);
+
+      // Send failure notification
+      await slack.sendSlackNotification({
+        text: `⚠️ VPN ${ENVIRONMENT} disassociation cancelled`,
+        attachments: [{
+          color: 'warning',
+          fields: [
+            { title: 'Environment', value: ENVIRONMENT, short: true },
+            { title: 'State', value: 'Still associated', short: true },
+            { title: 'Started By', value: pending.startedBy || 'unknown', short: true },
+            { title: 'Note', value: 'VPN remains open', short: false }
+          ]
+        }]
+      });
+
+      return { notified: true, startedBy: pending.startedBy, duration: `${durationMinutes}m` };
+    }
+
+    // Still disassociating - check for timeout (15 minutes max)
+    if (durationMinutes > 15) {
+      // Clear pending disassociation due to timeout
+      await stateStore.deleteParameter(`/vpn/${ENVIRONMENT}/automation/pending_disassociation`);
+
+      await slack.sendSlackNotification({
+        text: `⚠️ VPN ${ENVIRONMENT} disassociation timed out`,
+        attachments: [{
+          color: 'warning',
+          fields: [
+            { title: 'Environment', value: ENVIRONMENT, short: true },
+            { title: 'Current State', value: status.associationState || 'unknown', short: true },
+            { title: 'Duration', value: `${durationMinutes} minutes`, short: true },
+            { title: '⚠️ Action Required', value: 'Please check status manually with `/vpn check` or AWS Console. No further automatic notifications will be sent.', short: false }
+          ]
+        }]
+      });
+
+      await publishMetric('VpnDisassociationTimeout', 1);
+
+      return { notified: true, startedBy: pending.startedBy, duration: `${durationMinutes}m` };
+    }
+
+    // Still in progress, not yet timed out - send progress notification
+    console.log(`VPN disassociation still in progress: ${status.associationState} (${durationMinutes}m elapsed)`);
+
+    const environmentEmoji = ENVIRONMENT === 'production' ? '🚀' : '🔧';
+    await slack.sendSlackNotification({
+      text: `⏳ VPN ${ENVIRONMENT} still disassociating... (${durationMinutes} minute${durationMinutes !== 1 ? 's' : ''} elapsed)`,
+      attachments: [{
+        color: 'warning',
+        fields: [
+          { title: `${environmentEmoji} Environment`, value: ENVIRONMENT, short: true },
+          { title: '🔄 Status', value: 'Disassociating...', short: true },
+          { title: '⏱️ Elapsed Time', value: `${durationMinutes} minute${durationMinutes !== 1 ? 's' : ''}`, short: true },
+          { title: '👤 Started By', value: pending.startedBy || 'unknown', short: true }
+        ]
+      }]
+    });
+
+    return { notified: true };
+
+  } catch (error) {
+    // No pending disassociation or error reading parameter
+    console.log('No pending disassociation found or error:', error);
+    return { notified: false };
+  }
+}
+
 // Check for and handle pending close retries (soft close mechanism)
 async function checkAndHandlePendingClose(): Promise<{ handled: boolean; status: string }> {
   const RETRY_DELAY_MINUTES = 30;
 
   try {
     // Check for pending close in SSM
-    const pendingCloseParam = await stateStore.readParameter(`/vpn/automation/pending_close/${ENVIRONMENT}`);
+    const pendingCloseParam = await stateStore.readParameter(`/vpn/${ENVIRONMENT}/automation/pending_close`);
 
     if (!pendingCloseParam) {
       return { handled: false, status: 'no_pending_close' };
@@ -1019,7 +1235,7 @@ async function checkAndHandlePendingClose(): Promise<{ handled: boolean; status:
     // If already closed, clear pending close and return
     if (!status.associated) {
       console.log('VPN is already closed, clearing pending close');
-      await stateStore.deleteParameter(`/vpn/automation/pending_close/${ENVIRONMENT}`);
+      await stateStore.deleteParameter(`/vpn/${ENVIRONMENT}/automation/pending_close`);
       return { handled: true, status: 'already_closed' };
     }
 
@@ -1041,7 +1257,7 @@ async function checkAndHandlePendingClose(): Promise<{ handled: boolean; status:
       };
 
       await stateStore.writeParameter(
-        `/vpn/automation/pending_close/${ENVIRONMENT}`,
+        `/vpn/${ENVIRONMENT}/automation/pending_close`,
         JSON.stringify(newPendingClose)
       );
 
@@ -1075,7 +1291,7 @@ async function checkAndHandlePendingClose(): Promise<{ handled: boolean; status:
       await vpnManager.disassociateSubnets();
 
       // Clear pending close
-      await stateStore.deleteParameter(`/vpn/automation/pending_close/${ENVIRONMENT}`);
+      await stateStore.deleteParameter(`/vpn/${ENVIRONMENT}/automation/pending_close`);
 
       // Send success notification
       const closeTimeStr = new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });

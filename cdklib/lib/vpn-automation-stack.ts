@@ -179,7 +179,7 @@ export class VpnAutomationStack extends cdk.Stack {
       
       // Enhanced idle detection configuration
       COOLDOWN_MINUTES: '30',
-      BUSINESS_HOURS_PROTECTION: 'false',
+      BUSINESS_HOURS_PROTECTION: 'true',
       BUSINESS_HOURS_TIMEZONE: 'Asia/Taipei',
       
       // Epic 3.2: Authorization configuration
@@ -341,9 +341,9 @@ export class VpnAutomationStack extends cdk.Stack {
       usagePlan.addApiKey(apiKey);
     }
 
-    // CloudWatch Events rule for scheduled monitoring (every 5 minutes)
+    // CloudWatch Events rule for scheduled monitoring (every 3 minutes for faster association detection)
     const monitoringRule = new events.Rule(this, 'VpnMonitoringRule', {
-      schedule: events.Schedule.rate(cdk.Duration.minutes(5)),
+      schedule: events.Schedule.rate(cdk.Duration.minutes(3)),
       description: `Scheduled VPN monitoring for ${environment} environment`
     });
 
@@ -858,7 +858,7 @@ export class VpnAutomationStack extends cdk.Stack {
     });
 
     new cdk.CfnOutput(this, 'MonitoringSchedule', {
-      value: 'Every 5 minutes',
+      value: 'Every 3 minutes',
       description: 'VPN monitoring schedule (CloudWatch Events)'
     });
 

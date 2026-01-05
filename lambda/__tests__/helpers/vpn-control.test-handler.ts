@@ -117,26 +117,27 @@ export const handler = async (event: APIGatewayProxyEvent, context: Context): Pr
       await vpnManager.associateSubnets();
       const newStatus = await vpnManager.fetchStatus();
 
-      // Send Slack notification
+      // Send Slack notification indicating association started
       await slack.sendSlackNotification({
-        text: `🌅 VPN ${ENVIRONMENT} 自動開啟 | Auto-opened`,
+        text: `⏳ VPN ${ENVIRONMENT} 自動開啟中 | Auto-open started`,
         attachments: [{
-          color: 'good',
+          color: 'warning',
           fields: [
             { title: '🕤 Time | 時間', value: new Date().toISOString(), short: true },
             { title: '📍 Environment | 環境', value: ENVIRONMENT, short: true },
-            { title: '🤖 Trigger | 觸發', value: 'Scheduled auto-open (weekday 9:30 AM)', short: false }
+            { title: '🤖 Trigger | 觸發', value: 'Scheduled auto-open (weekday 9:30 AM)', short: false },
+            { title: '📝 Note | 說明', value: 'VPN monitor will notify when ready | VPN 監控會在就緒時通知', short: false }
           ]
         }]
       });
 
-      console.log(`VPN ${ENVIRONMENT} auto-opened successfully`);
+      console.log(`VPN ${ENVIRONMENT} auto-open initiated`);
       return {
         statusCode: 200,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          message: `VPN ${ENVIRONMENT} auto-opened successfully`,
-          status: 'opened',
+          message: `VPN ${ENVIRONMENT} auto-open initiated (2-5 min to complete)`,
+          status: 'associating',
           data: newStatus,
           timestamp: new Date().toISOString()
         })
@@ -282,10 +283,10 @@ export const handler = async (event: APIGatewayProxyEvent, context: Context): Pr
           await vpnManager.updateLastActivity();
           const openStatus = await vpnManager.fetchStatus();
           await publishMetric('VpnOpenOperations', 1);
-          
+
           response = {
             success: true,
-            message: `VPN ${command.environment} opened successfully`,
+            message: `VPN ${command.environment} association initiated (2-5 min to complete)`,
             data: openStatus
           };
           break;
