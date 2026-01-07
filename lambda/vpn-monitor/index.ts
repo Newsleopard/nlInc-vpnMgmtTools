@@ -234,13 +234,23 @@ export const handler = async (
     // Check business hours constraint (enhanced safety mechanism)
     if (BUSINESS_HOURS_ENABLED && isBusinessHours()) {
       console.log('Skipping auto-disassociation during business hours');
-      
+
+      // Check if we already notified about business hours today (once per day)
+      const today = new Date().toISOString().split('T')[0]; // "2026-01-07"
+      const alreadyNotifiedToday = await hasBusinessHoursNotificationToday(today);
+
+      if (alreadyNotifiedToday) {
+        console.log('Business hours protection active, notification already sent today');
+        await publishMetric('BusinessHoursSkips', 1);
+        return;
+      }
+
       // Enhanced business hours notification with cost impact
       const costProjection = await calculateCostSavings(idleTimeMinutes);
       const environmentEmoji = ENVIRONMENT === 'production' ? '🚀' : '🔧';
       const environmentName = ENVIRONMENT === 'production' ? 'Production' : 'Staging';
-      const currentTime = new Date().toLocaleTimeString();
-      
+      const currentTime = new Date().toLocaleTimeString('zh-TW', { timeZone: BUSINESS_HOURS_TIMEZONE });
+
       await slack.sendSlackNotification({
         text: "⏰ Business Hours Protection | 營業時間保護",
         attachments: [{
@@ -279,7 +289,10 @@ export const handler = async (
           ]
         }]
       });
-      
+
+      // Record that we sent the notification today (once per day deduplication)
+      await recordBusinessHoursNotification(today);
+
       // Publish metric for business hours skips with cost impact
       await publishMetric('BusinessHoursSkips', 1);
       await publishMetric('BusinessHoursSkipCostImpact', parseFloat(costProjection.hourly));
@@ -1338,5 +1351,30 @@ async function checkAndHandlePendingClose(): Promise<{ handled: boolean; status:
   } catch (error) {
     console.error('Error checking pending close:', error);
     return { handled: false, status: 'error' };
+  }
+}
+
+// Check if business hours notification was already sent today (once per day deduplication)
+async function hasBusinessHoursNotificationToday(today: string): Promise<boolean> {
+  try {
+    const lastNotified = await stateStore.readParameter(
+      `/vpn/${ENVIRONMENT}/automation/notification/business_hours_notified`
+    );
+    return lastNotified === today;
+  } catch {
+    return false;
+  }
+}
+
+// Record that business hours notification was sent today
+async function recordBusinessHoursNotification(today: string): Promise<void> {
+  try {
+    await stateStore.writeParameter(
+      `/vpn/${ENVIRONMENT}/automation/notification/business_hours_notified`,
+      today
+    );
+    console.log(`Recorded business hours notification for ${today}`);
+  } catch (error) {
+    console.error('Failed to record business hours notification:', error);
   }
 }

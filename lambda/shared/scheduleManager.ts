@@ -122,7 +122,8 @@ const DEFAULT_SCHEDULE_CONFIG: ScheduleConfig = {
  * NOTE: Actual defaults are environment-specific via createDefaultState():
  *   - Production: autoOpen.enabled = true (VPN opens automatically on weekdays)
  *   - Staging: autoOpen.enabled = false (must be explicitly enabled)
- *   - Both environments: autoClose.enabled = false (must be explicitly enabled)
+ *   - Both environments: autoClose.enabled = true (idle detection active)
+ *   - Business hours protection: Production only (controlled via BUSINESS_HOURS_PROTECTION env var)
  */
 const DEFAULT_SCHEDULE_STATE: ScheduleState = {
   version: 1,
@@ -132,7 +133,7 @@ const DEFAULT_SCHEDULE_STATE: ScheduleState = {
     modifiedBy: 'system'
   },
   autoClose: {
-    enabled: false,
+    enabled: true,   // Both environments default to true for idle detection
     lastModified: new Date().toISOString(),
     modifiedBy: 'system'
   }
@@ -418,10 +419,11 @@ async function readScheduleStateRaw(environment: string): Promise<ScheduleState 
 /**
  * Create a default schedule state with current timestamp
  * Auto-open defaults: production=enabled, staging=disabled
- * Auto-close defaults: disabled (users must explicitly enable)
+ * Auto-close defaults: enabled for both environments (idle detection)
+ * Business hours protection: production only (via BUSINESS_HOURS_PROTECTION env var)
  *
  * @param environment - The environment (production/staging)
- * @returns Default schedule state with environment-specific auto-open setting
+ * @returns Default schedule state with environment-specific settings
  */
 function createDefaultState(environment: string = 'staging'): ScheduleState {
   const now = new Date().toISOString();
@@ -435,7 +437,7 @@ function createDefaultState(environment: string = 'staging'): ScheduleState {
       modifiedBy: 'system'
     },
     autoClose: {
-      enabled: false,
+      enabled: true,  // Both environments: enabled by default for idle detection
       lastModified: now,
       modifiedBy: 'system'
     }

@@ -956,9 +956,23 @@ Sat-Sun: Closed (no auto-open)
 | Setting | Production | Staging |
 |---------|------------|---------|
 | Auto-Open | ✅ Enabled by default | ❌ Disabled by default |
-| Auto-Close | ❌ Disabled by default | ❌ Disabled by default |
-| Business Hours Protection | ✅ 10:00 AM - 5:00 PM | ✅ 10:00 AM - 5:00 PM |
+| Auto-Close (idle detection) | ✅ Enabled by default | ✅ Enabled by default |
+| Business Hours Protection | ✅ 10:00 AM - 5:00 PM | ❌ Disabled |
 | Weekend Soft-Close | ✅ Friday 8:00 PM | ✅ Friday 8:00 PM |
+
+#### Complete Behavior Matrix
+
+| Time Period | Production | Staging |
+|-------------|------------|---------|
+| **Weekday 10:00 AM** | ⏰ Auto-Open | ❌ Manual only |
+| **Weekday 10AM-5PM** | 🛡️ Business hours protection (no auto-close) | ⏱️ Idle detection active immediately |
+| **Weekday 5PM+** | ⏱️ Idle detection active (30 min → close) | ⏱️ Idle detection active (30 min → close) |
+| **Friday 8:00 PM** | 🌙 Soft-close (waits for connections) | 🌙 Soft-close (waits for connections) |
+| **Saturday/Sunday** | ❌ No auto-open, ⏱️ idle detection if manually opened | ❌ No auto-open, ⏱️ idle detection if manually opened |
+
+**Key Differences:**
+- **Production**: Has business hours protection (10AM-5PM) - VPN won't auto-close during work hours even if idle
+- **Staging**: No business hours protection - idle detection works 24/7, closes immediately after 30 min idle
 
 #### Manual Commands vs Automatic Schedule
 
