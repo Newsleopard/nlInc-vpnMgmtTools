@@ -1,3 +1,16 @@
+/**
+ * ⚠️  IMPORTANT: AWS SDK MOCKING WARNING ⚠️
+ * The mock in __mocks__/aws-sdk.ts is for aws-sdk v2, but stateStore.ts uses
+ * @aws-sdk/client-ssm (v3). The mock may NOT intercept real AWS calls!
+ *
+ * This test imports mockSSMethods but the actual stateStore code uses v3 SDK.
+ * Tests may hit real AWS SSM if the mock doesn't intercept properly.
+ *
+ * To properly fix this, either:
+ * 1. Create mocks for @aws-sdk/client-ssm (v3)
+ * 2. Mock the stateStore module directly in integration tests
+ */
+
 import { mockSSMethods, resetAllMocks } from '../../__mocks__/aws-sdk';
 
 // Import after mocks are set up

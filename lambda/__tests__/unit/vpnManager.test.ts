@@ -1,3 +1,17 @@
+/**
+ * ⚠️  IMPORTANT: AWS SDK MOCKING WARNING ⚠️
+ * The mock in __mocks__/aws-sdk.ts is for aws-sdk v2, but vpnManager.ts uses
+ * @aws-sdk/client-ec2 and @aws-sdk/client-ssm (v3). The mock may NOT intercept
+ * real AWS calls!
+ *
+ * This test imports mockEC2Methods/mockSSMethods but the actual vpnManager code
+ * uses v3 SDK. Tests may hit real AWS if the mock doesn't intercept properly.
+ *
+ * To properly fix this, either:
+ * 1. Create mocks for @aws-sdk/client-ec2 and @aws-sdk/client-ssm (v3)
+ * 2. Mock the vpnManager module directly in integration tests
+ */
+
 import { mockEC2Methods, mockSSMethods, resetAllMocks, setMockResponse } from '../../__mocks__/aws-sdk';
 
 // Import after mocks are set up

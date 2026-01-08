@@ -1,4 +1,37 @@
-// Mock AWS SDK for testing
+/**
+ * ⚠️  CRITICAL: AWS SDK VERSION MISMATCH WARNING ⚠️
+ *
+ * This mock file is for AWS SDK v2 (`aws-sdk` package), but ALL production code
+ * in this project uses AWS SDK v3 (`@aws-sdk/client-*` packages).
+ *
+ * SDK v2 pattern (this mock):
+ *   const ssm = new SSM();
+ *   const result = await ssm.getParameter({ Name: '...' }).promise();
+ *
+ * SDK v3 pattern (actual code):
+ *   const client = new SSMClient({});
+ *   const result = await client.send(new GetParameterCommand({ Name: '...' }));
+ *
+ * CONSEQUENCE: Tests importing this mock will NOT intercept real AWS calls!
+ * If AWS credentials are available, tests may read from or WRITE to real AWS.
+ *
+ * AFFECTED FILES:
+ * - lambda/shared/stateStore.ts (uses @aws-sdk/client-ssm)
+ * - lambda/shared/vpnManager.ts (uses @aws-sdk/client-ec2, @aws-sdk/client-ssm)
+ * - lambda/shared/secureParameterManager.ts (uses @aws-sdk/client-ssm, @aws-sdk/client-kms)
+ *
+ * TO FIX PROPERLY:
+ * 1. Create mocks for @aws-sdk/client-ssm, @aws-sdk/client-ec2, @aws-sdk/client-kms
+ *    in __mocks__/@aws-sdk/ directory
+ * 2. OR mock the modules directly in tests (e.g., jest.mock('../../shared/stateStore'))
+ * 3. OR use jest.mock('@aws-sdk/client-ssm') inline in each test file
+ *
+ * SAFETY RULE FOR TESTS:
+ * - NEVER write to production parameter paths (/vpn/endpoint/*, /vpn/slack/*)
+ * - Use /vpn/test/* paths for any writeParameter() calls in tests
+ */
+
+// Mock AWS SDK v2 for testing (⚠️ Does NOT intercept v3 SDK calls!)
 
 export const mockEC2Methods = {
   associateClientVpnTargetNetwork: jest.fn(),

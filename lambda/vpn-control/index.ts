@@ -108,15 +108,15 @@ export const handler = async (
 
         // Send Slack notification about delay
         await slack.sendSlackNotification({
-          text: `⏳ VPN ${ENVIRONMENT} 關閉延遲 | Close delayed (active connections)`,
+          text: `⏳ VPN ${ENVIRONMENT} close delayed (active connections)`,
           attachments: [{
             color: 'warning',
             fields: [
-              { title: '👥 連線數 | Connections', value: currentStatus.activeConnections.toString(), short: true },
-              { title: '👤 使用者 | Users', value: usernames, short: true },
-              { title: '⏰ 下次檢查 | Next Check', value: nextCheckTimeStr, short: true },
-              { title: '📅 原因 | Reason', value: closeReason === 'weekend' ? '週末關閉 | Weekend close' : '排程關閉 | Scheduled close', short: true },
-              { title: '💡 提示 | Note', value: '尊重活躍連線，30 分鐘後再次檢查 | Respecting active connections, will check again in 30 minutes', short: false }
+              { title: '👥 Connections', value: currentStatus.activeConnections.toString(), short: true },
+              { title: '👤 Users', value: usernames, short: true },
+              { title: '⏰ Next Check', value: nextCheckTimeStr, short: true },
+              { title: '📅 Reason', value: closeReason === 'weekend' ? 'Weekend close' : 'Scheduled close', short: true },
+              { title: '💡 Note', value: 'Respecting active connections, will check again in 30 minutes', short: false }
             ]
           }]
         });
@@ -146,14 +146,14 @@ export const handler = async (
 
       // Send Slack notification
       await slack.sendSlackNotification({
-        text: `🌙 VPN ${ENVIRONMENT} 自動關閉 | Auto-closed`,
+        text: `🌙 VPN ${ENVIRONMENT} auto-closed`,
         attachments: [{
           color: '#36a64f',
           fields: [
-            { title: '🕤 Time | 時間', value: new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' }), short: true },
-            { title: '📍 Environment | 環境', value: ENVIRONMENT, short: true },
-            { title: '🤖 Trigger | 觸發', value: 'Weekend auto-close (Friday 8PM) | 週末自動關閉 (週五 8PM)', short: false },
-            { title: '💰 Cost Saving | 成本節省', value: 'Preventing weekend charges | 避免週末費用', short: false }
+            { title: '🕤 Time', value: new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' }), short: true },
+            { title: '📍 Environment', value: ENVIRONMENT, short: true },
+            { title: '🤖 Trigger', value: 'Weekend auto-close (Friday 8PM)', short: false },
+            { title: '💰 Cost Saving', value: 'Preventing weekend charges', short: false }
           ]
         }]
       });
@@ -177,14 +177,14 @@ export const handler = async (
 
       // Send Slack error notification
       await slack.sendSlackNotification({
-        text: `❌ VPN ${ENVIRONMENT} 自動關閉失敗 | Auto-close failed`,
+        text: `❌ VPN ${ENVIRONMENT} auto-close failed`,
         attachments: [{
           color: 'danger',
           fields: [
-            { title: '🕤 Time | 時間', value: new Date().toISOString(), short: true },
-            { title: '📍 Environment | 環境', value: ENVIRONMENT, short: true },
-            { title: '📅 Reason | 原因', value: closeReason, short: true },
-            { title: '❌ Error | 錯誤', value: error instanceof Error ? error.message : 'Unknown error', short: false }
+            { title: '🕤 Time', value: new Date().toISOString(), short: true },
+            { title: '📍 Environment', value: ENVIRONMENT, short: true },
+            { title: '📅 Reason', value: closeReason, short: true },
+            { title: '❌ Error', value: error instanceof Error ? error.message : 'Unknown error', short: false }
           ]
         }]
       });
@@ -212,14 +212,14 @@ export const handler = async (
         
         // Send notification about skipped operation
         await slack.sendSlackNotification({
-          text: `📅 VPN ${ENVIRONMENT} 自動開啟已跳過 | Auto-open skipped`,
+          text: `📅 VPN ${ENVIRONMENT} auto-open skipped`,
           attachments: [{
             color: '#ffaa00',
             fields: [
-              { title: '🕤 Time | 時間', value: new Date().toISOString(), short: true },
-              { title: '📍 Environment | 環境', value: ENVIRONMENT, short: true },
-              { title: '📅 Reason | 原因', value: 'Auto-open schedule disabled | 自動開啟排程已停用', short: false },
-              { title: '🔧 Re-enable | 重新啟用', value: `/vpn schedule on ${ENVIRONMENT}`, short: false }
+              { title: '🕤 Time', value: new Date().toISOString(), short: true },
+              { title: '📍 Environment', value: ENVIRONMENT, short: true },
+              { title: '📅 Reason', value: 'Auto-open schedule disabled', short: false },
+              { title: '🔧 Re-enable', value: `/vpn schedule on ${ENVIRONMENT}`, short: false }
             ]
           }]
         });
@@ -274,13 +274,13 @@ export const handler = async (
 
       // Send Slack notification
       await slack.sendSlackNotification({
-        text: `🌅 VPN ${ENVIRONMENT} 自動開啟 | Auto-opened`,
+        text: `🌅 VPN ${ENVIRONMENT} auto-opened`,
         attachments: [{
           color: 'good',
           fields: [
-            { title: '🕤 Time | 時間', value: new Date().toISOString(), short: true },
-            { title: '📍 Environment | 環境', value: ENVIRONMENT, short: true },
-            { title: '🤖 Trigger | 觸發', value: 'Scheduled auto-open (weekday 10:00 AM)', short: false }
+            { title: '🕤 Time', value: new Date().toISOString(), short: true },
+            { title: '📍 Environment', value: ENVIRONMENT, short: true },
+            { title: '🤖 Trigger', value: 'Scheduled auto-open (weekday 10:00 AM)', short: false }
           ]
         }]
       });
@@ -301,13 +301,13 @@ export const handler = async (
 
       // Send Slack error notification
       await slack.sendSlackNotification({
-        text: `❌ VPN ${ENVIRONMENT} 自動開啟失敗 | Auto-open failed`,
+        text: `❌ VPN ${ENVIRONMENT} auto-open failed`,
         attachments: [{
           color: 'danger',
           fields: [
-            { title: '🕤 Time | 時間', value: new Date().toISOString(), short: true },
-            { title: '📍 Environment | 環境', value: ENVIRONMENT, short: true },
-            { title: '❌ Error | 錯誤', value: error instanceof Error ? error.message : 'Unknown error', short: false }
+            { title: '🕤 Time', value: new Date().toISOString(), short: true },
+            { title: '📍 Environment', value: ENVIRONMENT, short: true },
+            { title: '❌ Error', value: error instanceof Error ? error.message : 'Unknown error', short: false }
           ]
         }]
       });

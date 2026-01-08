@@ -139,11 +139,11 @@ function getHelpMessage(): string {
       },
       {
         color: '#17a2b8',
-        title: '📅 Schedule Management | 排程管理',
+        title: '📅 Schedule Management',
         fields: [
           {
-            title: 'Schedule Commands | 排程指令',
-            value: '• `/vpn schedule on <env>` - Enable auto-scheduling | 啟用自動排程\n• `/vpn schedule off <env> [duration]` - Disable scheduling | 停用排程\n• `/vpn schedule check <env>` - Check schedule status | 查看排程狀態\n• `/vpn schedule help` - Detailed schedule help | 詳細排程說明',
+            title: 'Schedule Commands',
+            value: '• `/vpn schedule on <env>` - Enable auto-scheduling\n• `/vpn schedule off <env> [duration]` - Disable scheduling\n• `/vpn schedule check <env>` - Check schedule status\n• `/vpn schedule help` - Detailed schedule help',
             short: false
           }
         ]
@@ -206,56 +206,56 @@ function getHelpMessage(): string {
 export function getScheduleHelpMessage(): string {
   const helpResponse = {
     response_type: 'ephemeral',
-    text: '📅 VPN Schedule Management Help | VPN 排程管理說明',
+    text: '📅 VPN Schedule Management Help',
     attachments: [
       {
         color: 'good',
-        title: '🔄 Basic Schedule Commands | 基本排程指令',
+        title: '🔄 Basic Schedule Commands',
         fields: [
           {
-            title: 'Enable All Schedules | 啟用所有排程',
-            value: '`/vpn schedule on <environment>`\nEnable both auto-open and auto-close | 啟用自動開啟和自動關閉',
+            title: 'Enable All Schedules',
+            value: '`/vpn schedule on <environment>`\nEnable both auto-open and auto-close',
             short: false
           },
           {
-            title: 'Disable All Schedules | 停用所有排程',
-            value: '`/vpn schedule off <environment> [duration]`\nDisable both schedules, optionally for a duration | 停用所有排程，可選擇指定時間',
+            title: 'Disable All Schedules',
+            value: '`/vpn schedule off <environment> [duration]`\nDisable both schedules, optionally for a duration',
             short: false
           },
           {
-            title: 'Check Schedule Status | 查看排程狀態',
-            value: '`/vpn schedule check <environment>`\nView current schedule configuration | 查看目前排程設定',
+            title: 'Check Schedule Status',
+            value: '`/vpn schedule check <environment>`\nView current schedule configuration',
             short: false
           }
         ]
       },
       {
         color: '#ffaa00',
-        title: '🎯 Granular Schedule Control | 精細排程控制',
+        title: '🎯 Granular Schedule Control',
         fields: [
           {
-            title: 'Auto-Open Control | 自動開啟控制',
-            value: '`/vpn schedule open on <env>` - Enable auto-open | 啟用自動開啟\n`/vpn schedule open off <env>` - Disable auto-open | 停用自動開啟',
+            title: 'Auto-Open Control',
+            value: '`/vpn schedule open on <env>` - Enable auto-open\n`/vpn schedule open off <env>` - Disable auto-open',
             short: false
           },
           {
-            title: 'Auto-Close Control | 自動關閉控制',
-            value: '`/vpn schedule close on <env>` - Enable auto-close | 啟用自動關閉\n`/vpn schedule close off <env>` - Disable auto-close | 停用自動關閉',
+            title: 'Auto-Close Control',
+            value: '`/vpn schedule close on <env>` - Enable auto-close\n`/vpn schedule close off <env>` - Disable auto-close',
             short: false
           }
         ]
       },
       {
         color: '#36a64f',
-        title: '⏱️ Duration Format | 時間格式',
+        title: '⏱️ Duration Format',
         fields: [
           {
-            title: 'Supported Formats | 支援格式',
-            value: '• `Nm` - Minutes (e.g., 30m) | 分鐘\n• `Nh` - Hours (e.g., 2h, 24h) | 小時\n• `Nd` - Days (e.g., 7d) | 天',
+            title: 'Supported Formats',
+            value: '• `Nm` - Minutes (e.g., 30m)\n• `Nh` - Hours (e.g., 2h, 24h)\n• `Nd` - Days (e.g., 7d)',
             short: true
           },
           {
-            title: 'Examples | 範例',
+            title: 'Examples',
             value: '• `/vpn schedule off staging 2h`\n• `/vpn schedule close off prod 24h`\n• `/vpn schedule off production 7d`',
             short: true
           }
@@ -263,9 +263,9 @@ export function getScheduleHelpMessage(): string {
       },
       {
         color: '#764FA5',
-        title: '📋 Schedule Configuration | 排程設定',
-        text: '• 🌅 Auto-open: Weekdays 10:00 AM | 自動開啟：週一至週五 10:00\n• 🌙 Weekend soft-close: Friday 8:00 PM | 週末軟關閉：週五 20:00\n  ↳ Respects active connections | 尊重活躍連線\n  ↳ Retries every 30 min | 每 30 分鐘重試\n• 🛡️ Business hours: 10:00 AM - 5:00 PM | 上班時間：10:00 - 17:00\n• ⏱️ Client idle: 100 minutes | 客戶端閒置：100 分鐘',
-        footer: 'VPN Schedule Management | VPN 排程管理'
+        title: '📋 Schedule Configuration',
+        text: '• 🌅 Auto-open: Weekdays 10:00 AM\n• 🌙 Weekend soft-close: Friday 8:00 PM\n  ↳ Respects active connections\n  ↳ Retries every 30 min\n• 🛡️ Business hours: 10:00 AM - 5:00 PM\n• ⏱️ Client idle: 100 minutes',
+        footer: 'VPN Schedule Management'
       }
     ]
   };
@@ -296,17 +296,17 @@ export function formatScheduleResponse(
   if (!response.success) {
     return {
       response_type: 'ephemeral',
-      text: `❌ Schedule command failed | 排程指令失敗`,
+      text: `❌ Schedule command failed`,
       attachments: [{
         color: 'danger',
         fields: [
           {
-            title: 'Error | 錯誤',
-            value: response.error || 'Unknown error occurred | 發生未知錯誤',
+            title: 'Error',
+            value: response.error || 'Unknown error occurred',
             short: false
           },
           {
-            title: 'Usage | 使用方式',
+            title: 'Usage',
             value: '`/vpn schedule <on|off|check> <environment>`',
             short: false
           }
@@ -344,7 +344,7 @@ export function formatScheduleResponse(
         attachments: [{
           color: 'good',
           fields: [{
-            title: 'Response | 回應',
+            title: 'Response',
             value: response.message,
             short: false
           }]
@@ -364,42 +364,42 @@ function formatScheduleEnableResponse(
 ): any {
   return {
     response_type: 'in_channel',
-    text: `✅ Schedule Enabled | 排程已啟用`,
+    text: `✅ Schedule Enabled`,
     attachments: [{
       color: 'good',
       fields: [
         {
-          title: `${environmentEmoji} Environment | 環境`,
-          value: `${environmentName} | ${environmentNameChinese}`,
+          title: `${environmentEmoji} Environment`,
+          value: environmentName,
           short: true
         },
         {
-          title: '📅 Status | 狀態',
-          value: 'All schedules enabled | 所有排程已啟用',
+          title: '📅 Status',
+          value: 'All schedules enabled',
           short: true
         },
         {
-          title: '🔄 Auto-Open | 自動開啟',
-          value: '✅ Enabled | 已啟用',
+          title: '🔄 Auto-Open',
+          value: '✅ Enabled',
           short: true
         },
         {
-          title: '🔒 Auto-Close | 自動關閉',
-          value: '✅ Enabled | 已啟用',
+          title: '🔒 Auto-Close',
+          value: '✅ Enabled',
           short: true
         },
         {
-          title: '👤 Modified By | 修改者',
+          title: '👤 Modified By',
           value: command.user,
           short: true
         },
         {
-          title: '🕐 Time | 時間',
+          title: '🕐 Time',
           value: new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' }),
           short: true
         }
       ],
-      footer: 'VPN Schedule Management | VPN 排程管理'
+      footer: 'VPN Schedule Management'
     }]
   };
 }
@@ -415,71 +415,71 @@ function formatScheduleDisableResponse(
 ): any {
   const fields: any[] = [
     {
-      title: `${environmentEmoji} Environment | 環境`,
-      value: `${environmentName} | ${environmentNameChinese}`,
+      title: `${environmentEmoji} Environment`,
+      value: environmentName,
       short: true
     },
     {
-      title: '📅 Status | 狀態',
-      value: 'All schedules disabled | 所有排程已停用',
+      title: '📅 Status',
+      value: 'All schedules disabled',
       short: true
     },
     {
-      title: '🔄 Auto-Open | 自動開啟',
-      value: '❌ Disabled | 已停用',
+      title: '🔄 Auto-Open',
+      value: '❌ Disabled',
       short: true
     },
     {
-      title: '🔒 Auto-Close | 自動關閉',
-      value: '❌ Disabled | 已停用',
+      title: '🔒 Auto-Close',
+      value: '❌ Disabled',
       short: true
     }
   ];
-  
+
   // Add duration info if provided
   if (command.duration) {
     fields.push({
-      title: '⏱️ Duration | 持續時間',
+      title: '⏱️ Duration',
       value: command.duration,
       short: true
     });
     fields.push({
-      title: '🔔 Auto Re-enable | 自動重新啟用',
-      value: 'Yes, after duration expires | 是，時間到期後',
+      title: '🔔 Auto Re-enable',
+      value: 'Yes, after duration expires',
       short: true
     });
   } else {
     fields.push({
-      title: '⏱️ Duration | 持續時間',
-      value: 'Indefinite | 無限期',
+      title: '⏱️ Duration',
+      value: 'Indefinite',
       short: true
     });
     fields.push({
-      title: '🔔 Auto Re-enable | 自動重新啟用',
-      value: 'No, manual re-enable required | 否，需手動重新啟用',
+      title: '🔔 Auto Re-enable',
+      value: 'No, manual re-enable required',
       short: true
     });
   }
-  
+
   fields.push({
-    title: '👤 Modified By | 修改者',
+    title: '👤 Modified By',
     value: command.user,
     short: true
   });
-  
+
   fields.push({
-    title: '🕐 Time | 時間',
+    title: '🕐 Time',
     value: new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' }),
     short: true
   });
-  
+
   return {
     response_type: 'in_channel',
-    text: `⏸️ Schedule Disabled | 排程已停用`,
+    text: `⏸️ Schedule Disabled`,
     attachments: [{
       color: 'warning',
       fields,
-      footer: 'VPN Schedule Management | VPN 排程管理'
+      footer: 'VPN Schedule Management'
     }]
   };
 }
@@ -499,103 +499,103 @@ function formatScheduleStatusResponse(
   if (!statusData) {
     return {
       response_type: 'ephemeral',
-      text: `❌ Failed to retrieve schedule status | 無法取得排程狀態`,
+      text: `❌ Failed to retrieve schedule status`,
       attachments: [{
         color: 'danger',
         fields: [{
-          title: 'Error | 錯誤',
-          value: 'Schedule status data not available | 排程狀態資料不可用',
+          title: 'Error',
+          value: 'Schedule status data not available',
           short: false
         }]
       }]
     };
   }
-  
-  const autoOpenStatus = statusData.autoOpen.enabled ? '✅ Enabled | 已啟用' : '❌ Disabled | 已停用';
-  const autoCloseStatus = statusData.autoClose.enabled ? '✅ Enabled | 已啟用' : '❌ Disabled | 已停用';
-  
+
+  const autoOpenStatus = statusData.autoOpen.enabled ? '✅ Enabled' : '❌ Disabled';
+  const autoCloseStatus = statusData.autoClose.enabled ? '✅ Enabled' : '❌ Disabled';
+
   const fields: any[] = [
     {
-      title: `${environmentEmoji} Environment | 環境`,
-      value: `${environmentName} | ${environmentNameChinese}`,
+      title: `${environmentEmoji} Environment`,
+      value: environmentName,
       short: true
     },
     {
-      title: '🔄 Auto-Open | 自動開啟',
+      title: '🔄 Auto-Open',
       value: autoOpenStatus,
       short: true
     }
   ];
-  
+
   // Add next scheduled time if auto-open is enabled
   if (statusData.autoOpen.enabled && statusData.autoOpen.nextScheduledTime) {
     const nextTime = new Date(statusData.autoOpen.nextScheduledTime);
     fields.push({
-      title: '📅 Next Open | 下次開啟',
+      title: '📅 Next Open',
       value: nextTime.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' }),
       short: true
     });
   }
-  
+
   // Add disabled until time if auto-open is disabled with expiration
   if (!statusData.autoOpen.enabled && statusData.autoOpen.disabledUntil) {
     fields.push({
-      title: '⏱️ Auto-Open Re-enables In | 自動開啟將在此時間後重新啟用',
+      title: '⏱️ Auto-Open Re-enables In',
       value: statusData.autoOpen.disabledUntil,
       short: true
     });
   }
-  
+
   fields.push({
-    title: '🔒 Auto-Close | 自動關閉',
+    title: '🔒 Auto-Close',
     value: autoCloseStatus,
     short: true
   });
-  
+
   fields.push({
-    title: '⏰ Idle Timeout | 閒置超時',
-    value: `${statusData.autoClose.idleTimeoutMinutes} minutes | 分鐘`,
+    title: '⏰ Idle Timeout',
+    value: `${statusData.autoClose.idleTimeoutMinutes} minutes`,
     short: true
   });
-  
+
   // Add disabled until time if auto-close is disabled with expiration
   if (!statusData.autoClose.enabled && statusData.autoClose.disabledUntil) {
     fields.push({
-      title: '⏱️ Auto-Close Re-enables In | 自動關閉將在此時間後重新啟用',
+      title: '⏱️ Auto-Close Re-enables In',
       value: statusData.autoClose.disabledUntil,
       short: true
     });
   }
-  
+
   // Business hours protection
   fields.push({
-    title: '🛡️ Business Hours Protection | 上班時間保護',
-    value: statusData.businessHoursProtection.enabled 
+    title: '🛡️ Business Hours Protection',
+    value: statusData.businessHoursProtection.enabled
       ? `✅ ${statusData.businessHoursProtection.start} - ${statusData.businessHoursProtection.end} (${statusData.businessHoursProtection.timezone})`
-      : '❌ Disabled | 已停用',
+      : '❌ Disabled',
     short: false
   });
-  
+
   // Last modified info
   fields.push({
-    title: '👤 Last Modified By | 最後修改者',
+    title: '👤 Last Modified By',
     value: statusData.modifiedBy,
     short: true
   });
-  
+
   fields.push({
-    title: '🕐 Last Modified | 最後修改時間',
+    title: '🕐 Last Modified',
     value: new Date(statusData.lastModified).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' }),
     short: true
   });
-  
+
   return {
     response_type: 'ephemeral',
-    text: `📊 Schedule Status | 排程狀態`,
+    text: `📊 Schedule Status`,
     attachments: [{
       color: 'good',
       fields,
-      footer: 'VPN Schedule Management | VPN 排程管理'
+      footer: 'VPN Schedule Management'
     }]
   };
 }
@@ -611,60 +611,60 @@ function formatGranularScheduleResponse(
   environmentNameChinese: string
 ): any {
   const isEnable = command.action.endsWith('-on');
-  const scheduleTypeName = scheduleType === 'auto-open' ? 'Auto-Open | 自動開啟' : 'Auto-Close | 自動關閉';
+  const scheduleTypeName = scheduleType === 'auto-open' ? 'Auto-Open' : 'Auto-Close';
   const statusEmoji = isEnable ? '✅' : '❌';
-  const statusText = isEnable ? 'Enabled | 已啟用' : 'Disabled | 已停用';
-  
+  const statusText = isEnable ? 'Enabled' : 'Disabled';
+
   const fields: any[] = [
     {
-      title: `${environmentEmoji} Environment | 環境`,
-      value: `${environmentName} | ${environmentNameChinese}`,
+      title: `${environmentEmoji} Environment`,
+      value: environmentName,
       short: true
     },
     {
-      title: `🎯 Schedule Type | 排程類型`,
+      title: `🎯 Schedule Type`,
       value: scheduleTypeName,
       short: true
     },
     {
-      title: '📅 Status | 狀態',
+      title: '📅 Status',
       value: `${statusEmoji} ${statusText}`,
       short: true
     }
   ];
-  
+
   // Add duration info if disabling with duration
   if (!isEnable && command.duration) {
     fields.push({
-      title: '⏱️ Duration | 持續時間',
+      title: '⏱️ Duration',
       value: command.duration,
       short: true
     });
   }
-  
+
   fields.push({
-    title: '👤 Modified By | 修改者',
+    title: '👤 Modified By',
     value: command.user,
     short: true
   });
-  
+
   fields.push({
-    title: '🕐 Time | 時間',
+    title: '🕐 Time',
     value: new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' }),
     short: true
   });
-  
-  const headerText = isEnable 
-    ? `✅ ${scheduleTypeName} Enabled` 
+
+  const headerText = isEnable
+    ? `✅ ${scheduleTypeName} Enabled`
     : `⏸️ ${scheduleTypeName} Disabled`;
-  
+
   return {
     response_type: 'in_channel',
     text: headerText,
     attachments: [{
       color: isEnable ? 'good' : 'warning',
       fields,
-      footer: 'VPN Schedule Management | VPN 排程管理'
+      footer: 'VPN Schedule Management'
     }]
   };
 }
@@ -1249,45 +1249,45 @@ export function formatSlackResponse(
       let instructionText = '';
       
       if (isAssociating) {
-        statusText = 'VPN subnets are currently associating | VPN 子網路正在關聯中';
-        instructionText = actionAttempted === 'open' ? 
-          'Please wait for association to complete | 請等待關聯完成' :
-          'Wait for association to finish, then try closing | 等待關聯完成後再嘗試關閉';
+        statusText = 'VPN subnets are currently associating';
+        instructionText = actionAttempted === 'open' ?
+          'Please wait for association to complete' :
+          'Wait for association to finish, then try closing';
       } else if (isDisassociating) {
-        statusText = 'VPN subnets are currently disassociating | VPN 子網路正在取消關聯中';
-        instructionText = actionAttempted === 'close' ? 
-          'Please wait for disassociation to complete | 請等待取消關聯完成' :
-          'Wait for disassociation to finish, then try opening | 等待取消關聯完成後再嘗試開啟';
+        statusText = 'VPN subnets are currently disassociating';
+        instructionText = actionAttempted === 'close' ?
+          'Please wait for disassociation to complete' :
+          'Wait for disassociation to finish, then try opening';
       }
-      
+
       return {
         response_type: 'ephemeral',
-        text: `🟡 VPN Operation In Progress | VPN 操作進行中`,
+        text: `🟡 VPN Operation In Progress`,
         attachments: [{
           color: 'warning',
           fields: [
             {
-              title: `${environmentEmoji} Environment | 環境`,
+              title: `${environmentEmoji} Environment`,
               value: environmentName,
               short: true
             },
             {
-              title: '📊 Current Status | 目前狀態',
+              title: '📊 Current Status',
               value: statusText,
               short: true
             },
             {
-              title: '⏳ Action Required | 所需動作',
+              title: '⏳ Action Required',
               value: instructionText,
               short: false
             },
             {
-              title: '💡 Tip | 提示',
-              value: `Use \`/vpn check ${command.environment}\` to monitor progress | 使用 \`/vpn check ${command.environment}\` 監控進度`,
+              title: '💡 Tip',
+              value: `Use \`/vpn check ${command.environment}\` to monitor progress`,
               short: false
             }
           ],
-          footer: 'VPN Automation System | VPN 自動化系統'
+          footer: 'VPN Automation System'
         }]
       };
     } else {
@@ -1450,36 +1450,36 @@ export async function sendSlackAlert(
   
   // Make message more user-friendly
   const userFriendlyMessage = makeMessageUserFriendly(message);
-  const environmentName = environment === 'production' ? '正式環境' : '測試環境';
-  const severityName = severity === 'critical' ? '緊急' : '警告';
-  
+  const environmentName = environment === 'production' ? 'Production' : 'Staging';
+  const severityName = severity === 'critical' ? 'Critical' : 'Warning';
+
   await sendSlackNotification({
-    text: `${emoji} VPN 系統警報 ${environmentEmoji}`,
+    text: `${emoji} VPN System Alert ${environmentEmoji}`,
     attachments: [{
       color: severity === 'critical' ? 'danger' : 'warning',
       fields: [
         {
-          title: '環境 Environment',
+          title: 'Environment',
           value: `${environmentName} (${environment})`,
           short: true
         },
         {
-          title: '嚴重程度 Severity',
+          title: 'Severity',
           value: severityName,
           short: true
         },
         {
-          title: '訊息 Message',
+          title: 'Message',
           value: userFriendlyMessage,
           short: false
         },
         {
-          title: '時間 Time',
-          value: `${formattedTime} (台灣時間)`,
+          title: 'Time',
+          value: `${formattedTime} (Asia/Taipei)`,
           short: true
         }
       ],
-      footer: 'VPN System Alert | VPN 系統警報',
+      footer: 'VPN System Alert',
       ts: Math.floor(Date.now() / 1000)
     }]
   });
@@ -1490,32 +1490,32 @@ export async function sendSlackAlert(
  */
 function makeMessageUserFriendly(message: string): string {
   const friendlyMessages: { [key: string]: string } = {
-    'VPN Monitor: Parameter Store validation failed. Please check configuration.': 
-      '🔧 VPN 監控系統偵測到設定參數異常，請檢查系統配置是否正確',
-    
-    'VPN endpoint validation failed': 
-      '🔗 VPN 端點連線驗證失敗，請檢查網路連線狀態',
-    
-    'Failed to send Slack notification': 
-      '📢 Slack 通知發送失敗，請檢查 Slack 整合設定',
-    
-    'Cross-account VPN operation failed': 
-      '🔄 跨帳戶 VPN 操作失敗，請檢查跨帳戶權限設定',
-    
-    'VPN endpoint not configured': 
-      '⚙️ VPN 端點尚未設定，請先完成 VPN 端點配置',
-    
-    'Unauthorized operation': 
-      '🔐 權限不足，請檢查 AWS IAM 權限設定',
-    
-    'Request validation failed': 
-      '📝 請求格式驗證失敗，請檢查輸入參數',
-    
-    'VPN connection timeout': 
-      '⏱️ VPN 連線逾時，請檢查網路狀況或稍後再試',
-    
-    'Certificate validation failed': 
-      '📜 憑證驗證失敗，請檢查 VPN 憑證是否有效'
+    'VPN Monitor: Parameter Store validation failed. Please check configuration.':
+      '🔧 VPN monitoring system detected configuration parameter error. Please check system configuration.',
+
+    'VPN endpoint validation failed':
+      '🔗 VPN endpoint connection verification failed. Please check network status.',
+
+    'Failed to send Slack notification':
+      '📢 Slack notification failed. Please check Slack integration settings.',
+
+    'Cross-account VPN operation failed':
+      '🔄 Cross-account VPN operation failed. Please check cross-account permissions.',
+
+    'VPN endpoint not configured':
+      '⚙️ VPN endpoint not configured. Please complete VPN endpoint setup first.',
+
+    'Unauthorized operation':
+      '🔐 Permission denied. Please check AWS IAM permissions.',
+
+    'Request validation failed':
+      '📝 Request validation failed. Please check input parameters.',
+
+    'VPN connection timeout':
+      '⏱️ VPN connection timeout. Please check network status or try again later.',
+
+    'Certificate validation failed':
+      '📜 Certificate validation failed. Please check if VPN certificate is valid.'
   };
   
   // Check for exact matches first

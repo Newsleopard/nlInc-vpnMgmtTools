@@ -204,22 +204,22 @@ export const handler = async (
       const environmentName = ENVIRONMENT === 'production' ? 'Production' : 'Staging';
       
       await slack.sendSlackNotification({
-        text: "🛑 Administrative Override Active | 管理員覆蓋已啟用",
+        text: "🛑 Administrative Override Active",
         attachments: [{
           color: "warning",
           fields: [
             {
-              title: `${environmentEmoji} Environment | 環境`,
+              title: `${environmentEmoji} Environment`,
               value: environmentName,
               short: true
             },
             {
-              title: "🚫 Status | 狀態",
-              value: "Auto-disassociation disabled | 自動斷開已停用",
+              title: "🚫 Status",
+              value: "Auto-disassociation disabled",
               short: true
             },
             {
-              title: "🔧 To Re-enable | 重新啟用",
+              title: "🔧 To Re-enable",
               value: `/vpn admin clear-override ${ENVIRONMENT}`,
               short: false
             }
@@ -252,38 +252,38 @@ export const handler = async (
       const currentTime = new Date().toLocaleTimeString('zh-TW', { timeZone: BUSINESS_HOURS_TIMEZONE });
 
       await slack.sendSlackNotification({
-        text: "⏰ Business Hours Protection | 營業時間保護",
+        text: "⏰ Business Hours Protection",
         attachments: [{
           color: "good",
           fields: [
             {
-              title: `${environmentEmoji} Environment | 環境`,
+              title: `${environmentEmoji} Environment`,
               value: environmentName,
               short: true
             },
             {
-              title: "🕒 Current Time | 目前時間",
+              title: "🕒 Current Time",
               value: `${currentTime} (${BUSINESS_HOURS_TIMEZONE})`,
               short: true
             },
             {
-              title: "⏱️ Idle Duration | 閒置時間",
-              value: `${idleTimeMinutes} minutes | 分鐘\n_threshold: ${IDLE_MINUTES}min | 閾值: ${IDLE_MINUTES}分鐘_`,
+              title: "⏱️ Idle Duration",
+              value: `${idleTimeMinutes} minutes (threshold: ${IDLE_MINUTES}min)`,
               short: true
             },
             {
-              title: "💰 Waste Being Accumulated | 正在累積浪費",
-              value: `$${costProjection.hourly}/hour | 每小時\n_Would save ~$${costProjection.total} if closed now | 如現在關閉可節省約$${costProjection.total}_`,
+              title: "💰 Waste Being Accumulated",
+              value: `$${costProjection.hourly}/hour\n_Would save ~$${costProjection.total} if closed now_`,
               short: true
             },
             {
-              title: "🛡️ Protection Status | 保護狀態",
-              value: "Auto-close disabled | 自動關閉已停用",
+              title: "🛡️ Protection Status",
+              value: "Auto-close disabled",
               short: true
             },
             {
-              title: "📝 Note | 注意",
-              value: `Auto-close at 5 PM or manual: \`/vpn close ${ENVIRONMENT}\` | 5PM自動關閉或手動操作`,
+              title: "📝 Note",
+              value: `Auto-close at 5 PM or manual: \`/vpn close ${ENVIRONMENT}\``,
               short: false
             }
           ]
@@ -309,33 +309,33 @@ export const handler = async (
       const environmentName = ENVIRONMENT === 'production' ? 'Production' : 'Staging';
       
       await slack.sendSlackNotification({
-        text: "⏳ Cooldown Protection Active | 冷卻保護啟用中",
+        text: "⏳ Cooldown Protection Active",
         attachments: [{
           color: "#ffaa00",
           fields: [
             {
-              title: `${environmentEmoji} Environment | 環境`,
+              title: `${environmentEmoji} Environment`,
               value: environmentName,
               short: true
             },
             {
-              title: "⏱️ Time Remaining | 剩餘時間",
-              value: `${Math.ceil(remainingCooldown)} minutes | 分鐘`,
+              title: "⏱️ Time Remaining",
+              value: `${Math.ceil(remainingCooldown)} minutes`,
               short: true
             },
             {
-              title: "🔄 Purpose | 目的",
-              value: "Prevents rapid cycling | 防止快速循環",
+              title: "🔄 Purpose",
+              value: "Prevents rapid cycling",
               short: true
             },
             {
-              title: "📈 Current Idle | 目前閒置",
-              value: `${idleTimeMinutes} minutes | 分鐘`,
+              title: "📈 Current Idle",
+              value: `${idleTimeMinutes} minutes`,
               short: true
             },
             {
-              title: "💡 Manual Override | 手動覆蓋",
-              value: `/vpn close ${ENVIRONMENT} for immediate shutdown | 立即關閉`,
+              title: "💡 Manual Override",
+              value: `/vpn close ${ENVIRONMENT} for immediate shutdown`,
               short: false
             }
           ]
@@ -376,38 +376,38 @@ export const handler = async (
       
       // Create bilingual message with beautiful formatting using attachments
       await slack.sendSlackNotification({
-        text: "💰 Auto VPN Cost Optimization | 自動 VPN 成本優化",
+        text: "💰 Auto VPN Cost Optimization",
         attachments: [{
           color: "good",
           fields: [
             {
-              title: `${environmentEmoji} Environment | 環境`,
+              title: `${environmentEmoji} Environment`,
               value: environmentName,
               short: true
             },
             {
-              title: "📊 Idle Duration | 閒置時間",
-              value: `${idleTimeMinutes} minutes | 分鐘\n_threshold: ${IDLE_MINUTES}min | 閾值: ${IDLE_MINUTES}分鐘_`,
+              title: "📊 Idle Duration",
+              value: `${idleTimeMinutes} minutes (threshold: ${IDLE_MINUTES}min)`,
               short: true
             },
             {
-              title: "💵 Waste Prevented | 避免浪費",
-              value: `~$${costSavings.total} saved | 節省\n_${costSavings.details.wasteTimePrevented}h of 24/7 waste prevented | 避免${costSavings.details.wasteTimePrevented}小時全天候浪費_`,
+              title: "💵 Waste Prevented",
+              value: `~$${costSavings.total} saved\n_${costSavings.details.wasteTimePrevented}h of 24/7 waste prevented_`,
               short: true
             },
             {
-              title: "🔧 Action Taken | 執行動作",
-              value: "Subnets auto-disassociated | 子網路已自動取消關聯",
+              title: "🔧 Action Taken",
+              value: "Subnets auto-disassociated",
               short: true
             },
             {
-              title: "📱 Re-enable | 重新啟用",
+              title: "📱 Re-enable",
               value: `/vpn open ${ENVIRONMENT}`,
               short: true
             },
             {
-              title: "⏰ Cooldown Period | 冷卻期",
-              value: `${COOLDOWN_MINUTES} minutes | 分鐘\n_prevents rapid cycling | 防止快速循環_`,
+              title: "⏰ Cooldown Period",
+              value: `${COOLDOWN_MINUTES} minutes (prevents rapid cycling)`,
               short: true
             }
           ],
@@ -577,33 +577,33 @@ async function hasRecentManualActivity(): Promise<boolean> {
       const environmentName = ENVIRONMENT === 'production' ? 'Production' : 'Staging';
       
       await slack.sendSlackNotification({
-        text: "👤 Manual Activity Detected | 檢測到手動活動",
+        text: "👤 Manual Activity Detected",
         attachments: [{
           color: "#36a64f",
           fields: [
             {
-              title: `${environmentEmoji} Environment | 環境`,
+              title: `${environmentEmoji} Environment`,
               value: environmentName,
               short: true
             },
             {
-              title: "🕰️ Last Activity | 最後活動",
-              value: `${timeSinceManualActivity.toFixed(1)} minutes ago | 分鐘前`,
+              title: "🕰️ Last Activity",
+              value: `${timeSinceManualActivity.toFixed(1)} minutes ago`,
               short: true
             },
             {
-              title: "⏱️ Grace Period | 寬限期",
-              value: `${manualActivityGracePeriod} minutes | 分鐘`,
+              title: "⏱️ Grace Period",
+              value: `${manualActivityGracePeriod} minutes`,
               short: true
             },
             {
-              title: "🔒 Protection Status | 保護狀態",
-              value: "Auto-close temporarily disabled | 自動關閉暫時停用",
+              title: "🔒 Protection Status",
+              value: "Auto-close temporarily disabled",
               short: true
             },
             {
-              title: "📝 Note | 注意",
-              value: "Auto-monitoring will resume after grace period | 寬限期後將恢復自動監控",
+              title: "📝 Note",
+              value: "Auto-monitoring will resume after grace period",
               short: false
             }
           ]
@@ -1278,16 +1278,16 @@ async function checkAndHandlePendingClose(): Promise<{ handled: boolean; status:
       // to reduce notification noise while still keeping users informed
       if (pendingClose.attempts % 2 === 1) {
         await slack.sendSlackNotification({
-          text: `⏳ VPN ${ENVIRONMENT} 關閉再次延遲 | Close delayed again`,
+          text: `⏳ VPN ${ENVIRONMENT} close delayed again`,
           attachments: [{
             color: 'warning',
             fields: [
-              { title: '👥 連線數 | Connections', value: status.activeConnections.toString(), short: true },
-              { title: '👤 使用者 | Users', value: usernames, short: true },
-              { title: '🔄 重試次數 | Retry Attempt', value: `#${pendingClose.attempts}`, short: true },
-              { title: '⏰ 下次檢查 | Next Check', value: nextRetryTimeStr, short: true },
-              { title: '📅 原因 | Reason', value: pendingClose.reason === 'weekend' ? '週末關閉 | Weekend close' : '排程關閉 | Scheduled close', short: false },
-              { title: '💡 提示 | Note', value: '尊重活躍連線，30 分鐘後再次檢查 | Respecting active connections, will check again in 30 minutes', short: false }
+              { title: '👥 Connections', value: status.activeConnections.toString(), short: true },
+              { title: '👤 Users', value: usernames, short: true },
+              { title: '🔄 Retry Attempt', value: `#${pendingClose.attempts}`, short: true },
+              { title: '⏰ Next Check', value: nextRetryTimeStr, short: true },
+              { title: '📅 Reason', value: pendingClose.reason === 'weekend' ? 'Weekend close' : 'Scheduled close', short: false },
+              { title: '💡 Note', value: 'Respecting active connections, will check again in 30 minutes', short: false }
             ]
           }]
         });
@@ -1310,16 +1310,16 @@ async function checkAndHandlePendingClose(): Promise<{ handled: boolean; status:
       const closeTimeStr = new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });
 
       await slack.sendSlackNotification({
-        text: `🌙 VPN ${ENVIRONMENT} 軟關閉完成 | Soft close completed`,
+        text: `🌙 VPN ${ENVIRONMENT} soft close completed`,
         attachments: [{
           color: '#36a64f',
           fields: [
-            { title: '🕤 Time | 時間', value: closeTimeStr, short: true },
-            { title: '📍 Environment | 環境', value: ENVIRONMENT, short: true },
-            { title: '🔄 Retry Attempts | 重試次數', value: pendingClose.attempts.toString(), short: true },
-            { title: '📅 Original Reason | 原始原因', value: pendingClose.reason === 'weekend' ? '週末關閉 | Weekend close' : '排程關閉 | Scheduled close', short: true },
-            { title: '💰 Cost Saving | 成本節省', value: 'Preventing unnecessary charges | 避免不必要費用', short: false },
-            { title: '💡 Note | 說明', value: '等待所有連線結束後才關閉 | Closed after all connections ended', short: false }
+            { title: '🕤 Time', value: closeTimeStr, short: true },
+            { title: '📍 Environment', value: ENVIRONMENT, short: true },
+            { title: '🔄 Retry Attempts', value: pendingClose.attempts.toString(), short: true },
+            { title: '📅 Original Reason', value: pendingClose.reason === 'weekend' ? 'Weekend close' : 'Scheduled close', short: true },
+            { title: '💰 Cost Saving', value: 'Preventing unnecessary charges', short: false },
+            { title: '💡 Note', value: 'Closed after all connections ended', short: false }
           ]
         }]
       });
@@ -1332,14 +1332,14 @@ async function checkAndHandlePendingClose(): Promise<{ handled: boolean; status:
 
       // Send error notification
       await slack.sendSlackNotification({
-        text: `❌ VPN ${ENVIRONMENT} 軟關閉失敗 | Soft close failed`,
+        text: `❌ VPN ${ENVIRONMENT} soft close failed`,
         attachments: [{
           color: 'danger',
           fields: [
-            { title: '🕤 Time | 時間', value: new Date().toISOString(), short: true },
-            { title: '📍 Environment | 環境', value: ENVIRONMENT, short: true },
-            { title: '🔄 Retry Attempt | 重試次數', value: pendingClose.attempts.toString(), short: true },
-            { title: '❌ Error | 錯誤', value: closeError instanceof Error ? closeError.message : 'Unknown error', short: false }
+            { title: '🕤 Time', value: new Date().toISOString(), short: true },
+            { title: '📍 Environment', value: ENVIRONMENT, short: true },
+            { title: '🔄 Retry Attempt', value: pendingClose.attempts.toString(), short: true },
+            { title: '❌ Error', value: closeError instanceof Error ? closeError.message : 'Unknown error', short: false }
           ]
         }]
       });

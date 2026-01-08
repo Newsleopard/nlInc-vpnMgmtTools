@@ -4,11 +4,22 @@
  * 1. Batch/Parallel Operations (90% time reduction)
  * 2. Schema Caching (O(1) lookups)
  * 3. AWS Client Optimization (singleton pattern)
+ *
+ * ⚠️  IMPORTANT: AWS SDK MOCKING WARNING ⚠️
+ * The mock below is for aws-sdk v2, but the actual SecureParameterManager code
+ * uses @aws-sdk/client-ssm (v3). This mock may NOT intercept real AWS calls!
+ *
+ * This test file only performs READ operations, so the risk is lower than
+ * write operations. However, tests may hit real AWS SSM if credentials are available.
+ *
+ * To properly fix this, either:
+ * 1. Create mocks for @aws-sdk/client-ssm (v3)
+ * 2. Mock the SecureParameterManager module directly
  */
 
 import { SecureParameterManager, batchReadSecureParameters } from '../../shared/secureParameterManager';
 
-// Mock AWS SDK
+// Mock AWS SDK (v2 - may not intercept v3 calls from SecureParameterManager!)
 jest.mock('aws-sdk', () => ({
   SSM: jest.fn().mockImplementation(() => ({
     getParameter: jest.fn().mockImplementation(() => ({

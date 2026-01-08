@@ -3,13 +3,23 @@ import { ConfigurationValidator } from '../shared/configurationValidator';
 
 /**
  * Epic 5.1: Secure Parameter Management - Test Suite
- * 
+ *
  * This test suite validates the Epic 5.1 implementation:
  * - SecureParameterManager functionality
  * - Parameter validation and encryption
  * - Configuration validation
  * - KMS integration
  * - Deployment readiness checks
+ *
+ * ⚠️  IMPORTANT: AWS SDK v3 MOCKING WARNING ⚠️
+ * The mock at the bottom of this file is for aws-sdk v2, but the actual code
+ * uses @aws-sdk/client-ssm (v3). Tests may hit REAL AWS resources if the mock
+ * doesn't match the imports.
+ *
+ * To prevent writing to production SSM parameters:
+ * - All writeParameter() calls MUST use /vpn/test/* paths
+ * - NEVER use /vpn/endpoint/conf, /vpn/slack/*, etc. in tests
+ * - If tests fail with "Parameter not found", it may indicate hitting real AWS
  */
 
 describe('Epic 5.1: Secure Parameter Management', () => {
@@ -63,13 +73,14 @@ describe('Epic 5.1: Secure Parameter Management', () => {
 
       it('should validate parameter format according to schema', async () => {
         // Test invalid endpoint ID format
+        // NOTE: Using /vpn/test/* path to prevent writing to real SSM parameters
         const invalidConfig = {
           ENDPOINT_ID: 'invalid-endpoint-id',
           SUBNET_ID: 'subnet-0123456789abcdef0'
         };
 
-        const result = await paramManager.writeParameter('/vpn/endpoint/conf', invalidConfig, false);
-        
+        const result = await paramManager.writeParameter('/vpn/test/endpoint/conf', invalidConfig, false);
+
         expect(result.isValid).toBe(false);
         expect(result.errors).toContain(expect.stringMatching(/format/i));
       });
@@ -78,12 +89,13 @@ describe('Epic 5.1: Secure Parameter Management', () => {
     describe('Encryption and Security', () => {
       it('should handle encrypted parameters correctly', async () => {
         // Test encrypted parameter handling
+        // NOTE: Using /vpn/test/* path to prevent writing to real SSM parameters
         const sensitiveData = 'https://hooks.slack.com/services/T123/B456/secretkey';
-        
-        const writeResult = await paramManager.writeParameter('/vpn/slack/webhook', sensitiveData, false);
+
+        const writeResult = await paramManager.writeParameter('/vpn/test/slack/webhook', sensitiveData, false);
         expect(writeResult.isValid).toBe(true);
 
-        const readResult = await paramManager.readParameter('/vpn/slack/webhook', false);
+        const readResult = await paramManager.readParameter('/vpn/test/slack/webhook', false);
         expect(readResult.isValid).toBe(true);
         expect(readResult.parameter).toBe(sensitiveData);
       });
@@ -98,10 +110,11 @@ describe('Epic 5.1: Secure Parameter Management', () => {
 
       it('should enforce encryption for sensitive parameters', async () => {
         // Test that sensitive parameters are encrypted
+        // NOTE: Using /vpn/test/* path to prevent writing to real SSM parameters
         const slackSecret = 'a'.repeat(64); // Valid 64-char hex string
-        
-        const result = await paramManager.writeParameter('/vpn/slack/signing_secret', slackSecret, false);
-        
+
+        const result = await paramManager.writeParameter('/vpn/test/slack/signing_secret', slackSecret, false);
+
         // Should automatically encrypt sensitive parameters
         expect(result.isValid).toBe(true);
       });
@@ -311,10 +324,11 @@ describe('Epic 5.1: Secure Parameter Management', () => {
 
     it('should enforce parameter format validation', async () => {
       // Test format validation prevents injection
+      // NOTE: Using /vpn/test/* path to prevent writing to real SSM parameters
       const invalidSlackWebhook = 'javascript:alert("xss")';
-      
-      const result = await paramManager.writeParameter('/vpn/slack/webhook', invalidSlackWebhook, false);
-      
+
+      const result = await paramManager.writeParameter('/vpn/test/slack/webhook', invalidSlackWebhook, false);
+
       expect(result.isValid).toBe(false);
       expect(result.errors).toContain(expect.stringMatching(/format/i));
     });

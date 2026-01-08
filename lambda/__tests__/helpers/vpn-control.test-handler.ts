@@ -119,14 +119,14 @@ export const handler = async (event: APIGatewayProxyEvent, context: Context): Pr
 
       // Send Slack notification indicating association started
       await slack.sendSlackNotification({
-        text: `⏳ VPN ${ENVIRONMENT} 自動開啟中 | Auto-open started`,
+        text: `⏳ VPN ${ENVIRONMENT} auto-open started`,
         attachments: [{
           color: 'warning',
           fields: [
-            { title: '🕤 Time | 時間', value: new Date().toISOString(), short: true },
-            { title: '📍 Environment | 環境', value: ENVIRONMENT, short: true },
-            { title: '🤖 Trigger | 觸發', value: 'Scheduled auto-open (weekday 9:30 AM)', short: false },
-            { title: '📝 Note | 說明', value: 'VPN monitor will notify when ready | VPN 監控會在就緒時通知', short: false }
+            { title: '🕤 Time', value: new Date().toISOString(), short: true },
+            { title: '📍 Environment', value: ENVIRONMENT, short: true },
+            { title: '🤖 Trigger', value: 'Scheduled auto-open (weekday 9:30 AM)', short: false },
+            { title: '📝 Note', value: 'VPN monitor will notify when ready', short: false }
           ]
         }]
       });
@@ -147,13 +147,13 @@ export const handler = async (event: APIGatewayProxyEvent, context: Context): Pr
 
       // Send Slack error notification
       await slack.sendSlackNotification({
-        text: `❌ VPN ${ENVIRONMENT} 自動開啟失敗 | Auto-open failed`,
+        text: `❌ VPN ${ENVIRONMENT} auto-open failed`,
         attachments: [{
           color: 'danger',
           fields: [
-            { title: '🕤 Time | 時間', value: new Date().toISOString(), short: true },
-            { title: '📍 Environment | 環境', value: ENVIRONMENT, short: true },
-            { title: '❌ Error | 錯誤', value: error instanceof Error ? error.message : 'Unknown error', short: false }
+            { title: '🕤 Time', value: new Date().toISOString(), short: true },
+            { title: '📍 Environment', value: ENVIRONMENT, short: true },
+            { title: '❌ Error', value: error instanceof Error ? error.message : 'Unknown error', short: false }
           ]
         }]
       });
