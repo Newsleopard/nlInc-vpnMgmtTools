@@ -136,10 +136,26 @@ lambda/
 | 10:00 AM weekdays | Auto-open |
 | 10AM-5PM | Business hours protection (no auto-close) |
 | After 5PM | Idle detection active (30 min → close) |
-| Friday 8PM | Soft-close (waits for connections) |
+| Friday 8PM | Soft-close (waits for connections, closes idle after 60 min) |
 | Weekends | No auto-open |
 
-**Idle detection:** Client 100-min + Server 30-min dual-layer. Only actual traffic resets timer.
+### Idle Detection (Dual-Layer)
+
+| Layer | Timeout | Trigger |
+|-------|---------|---------|
+| Client-side | 100 min | macOS VPN config idle timeout |
+| Server-side | 30 min | Lambda monitor checks every 5 min |
+| Soft-close idle | 60 min | Closes idle connections during weekend close |
+
+**Traffic-based detection:** Only actual network traffic resets the idle timer. Keep-alive packets don't count.
+
+### Soft-Close Behavior
+
+When Friday 8PM close is triggered with active connections:
+1. System checks if connections have recent traffic
+2. If **active traffic**: delays 30 min and retries (Slack: ⏳ close delayed)
+3. If **idle 60+ minutes**: proceeds with close (Slack: 🌙 soft close completed)
+4. Normal idle close sends: 💰 Auto VPN Cost Optimization
 
 ## Core Libraries (`lib/`)
 

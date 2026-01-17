@@ -329,20 +329,84 @@ export async function validateParameterStore(): Promise<boolean> {
   try {
     const manager = new SecureParameterManager();
     const result = await manager.validateConfiguration();
-    
+
     if (!result.isValid) {
       console.error('Parameter store validation failed:', result.errors);
       return false;
     }
-    
+
     if (result.warnings.length > 0) {
       console.warn('Parameter store validation warnings:', result.warnings);
     }
-    
+
     console.log('Parameter store validation completed successfully');
     return true;
   } catch (error) {
     console.error('Parameter store validation failed:', error);
     return false;
   }
+}
+
+// Check if deployment is in progress (suppress alerts during deployment)
+// Flag format: {timestamp}:{user}:{ttl_minutes}
+export async function isDeploymentInProgress(): Promise<boolean> {
+  const environment = process.env.ENVIRONMENT || 'staging';
+  const paramName = `/vpn/${environment}/deployment/in_progress`;
+  const maxRetries = 2;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const result = await ssm.send(new GetParameterCommand({
+        Name: paramName
+      }));
+
+      if (!result.Parameter?.Value) {
+        return false;
+      }
+
+      // Parse value: timestamp:user:ttl_minutes
+      const parts = result.Parameter.Value.split(':');
+      const timestamp = parseInt(parts[0], 10);
+      const ttlMinutes = parseInt(parts[2] || '10', 10);
+
+      // Validate parsed values
+      if (isNaN(timestamp) || isNaN(ttlMinutes)) {
+        console.warn('Invalid deployment flag format, ignoring');
+        return false;
+      }
+
+      // Check if deployment flag has expired
+      const deployStartTime = timestamp * 1000; // Convert to milliseconds
+      const ttlMs = ttlMinutes * 60 * 1000;
+      const elapsed = Date.now() - deployStartTime;
+
+      if (elapsed > ttlMs) {
+        console.log(`Deployment flag expired (elapsed: ${Math.floor(elapsed / 1000)}s, TTL: ${ttlMinutes}min), ignoring`);
+        return false;
+      }
+
+      console.log(`Deployment in progress (started ${Math.floor(elapsed / 1000)}s ago, TTL: ${ttlMinutes}min), suppressing alerts`);
+      return true;
+    } catch (error: any) {
+      // Parameter doesn't exist = not in deployment mode
+      if (error.name === 'ParameterNotFound') {
+        return false;
+      }
+
+      // Retry on transient errors (throttling, service unavailable)
+      if ((error.name === 'ThrottlingException' || error.name === 'ServiceUnavailableException') && attempt < maxRetries) {
+        const delayMs = Math.pow(2, attempt) * 100; // Exponential backoff: 100ms, 200ms
+        console.warn(`Deployment mode check throttled, retrying in ${delayMs}ms (attempt ${attempt + 1}/${maxRetries})`);
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+        continue;
+      }
+
+      // Log other errors and fail-safe to not in deployment mode
+      console.error('Error checking deployment mode:', error);
+      return false;
+    }
+  }
+
+  // Should not reach here, but fail-safe
+  return false;
 }

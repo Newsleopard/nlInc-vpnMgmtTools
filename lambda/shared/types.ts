@@ -1,9 +1,16 @@
 // Parameter Store Schema Types
 
+// Traffic snapshot for delta calculation
+export interface TrafficSnapshot {
+  timestamp: string;  // ISO 8601 timestamp
+  connections: { [connectionId: string]: { ingress: number; egress: number } };
+}
+
 // Matches /vpn/endpoint/state JSON structure
 export interface VpnState {
   associated: boolean;
   lastActivity: string;  // ISO 8601 timestamp
+  lastTrafficSnapshot?: TrafficSnapshot;  // Previous traffic data for delta calculation
 }
 
 // Matches /vpn/endpoint/conf JSON structure  
@@ -18,6 +25,22 @@ export interface VpnConnectionDetail {
   username: string;  // From CommonName (certificate-based auth) or Username (AD auth)
   clientIp: string;
   establishedTime: Date;
+  // Traffic metrics from AWS API
+  ingressBytes: number;  // Bytes sent by client (client → server)
+  egressBytes: number;   // Bytes received by client (server → client)
+  // Computed fields for display
+  trafficStatus?: 'active' | 'idle';  // Based on traffic delta
+  idleMinutes?: number;  // Minutes since last traffic (if idle)
+}
+
+// Traffic summary for overall VPN status
+export interface TrafficSummary {
+  status: 'active' | 'idle' | 'no_connections';
+  totalIngressBytes: number;
+  totalEgressBytes: number;
+  ingressDelta: number;  // Bytes since last check
+  egressDelta: number;   // Bytes since last check
+  idleMinutes?: number;  // Minutes since last traffic (if idle)
 }
 
 // Runtime status from EC2 API + Parameter Store
@@ -26,6 +49,7 @@ export interface VpnStatus {
   associationState?: 'associated' | 'associating' | 'disassociating' | 'disassociated' | 'failed';
   activeConnections: number;
   activeConnectionDetails?: VpnConnectionDetail[];  // Detailed info for each active connection
+  trafficSummary?: TrafficSummary;  // Overall traffic status
   lastActivity: Date;
   endpointId: string;
   subnetId: string;

@@ -29,6 +29,8 @@ PRODUCTION_URL=""
 API_KEY_VALUE=""
 DRY_RUN=${DRY_RUN:-false}
 DEPLOY_CONFIG_FILE="$PROJECT_ROOT/.deploy-config"
+# Track active deployment modes for cleanup
+ACTIVE_DEPLOYMENT_ENVIRONMENTS=""
 
 # Create logs directory if it doesn't exist
 mkdir -p "$PROJECT_ROOT/logs"
@@ -93,6 +95,61 @@ get_stack_name() {
 get_secure_stack_name() {
     local environment="$1"
     echo "${SECURE_STACK_PREFIX}-${environment}"
+}
+
+# Deployment mode flag management - suppresses validation alerts during deployment
+# Flag format: {timestamp}:{user}:{ttl_minutes}
+set_deployment_mode() {
+    local environment="$1"
+    local ttl_minutes="${2:-10}"
+    local timestamp=$(date -u +%s)
+    local user="${USER:-unknown}"
+    local value="${timestamp}:${user}:${ttl_minutes}"
+    local profile="${AWS_PROFILE:-default}"
+    local region="${CDK_REGION:-us-east-1}"
+
+    log_operation "INFO" "🚧 Setting deployment mode for $environment (TTL: ${ttl_minutes}min)"
+
+    # Track active deployment for cleanup on script exit
+    if [[ ! "$ACTIVE_DEPLOYMENT_ENVIRONMENTS" =~ "$environment" ]]; then
+        ACTIVE_DEPLOYMENT_ENVIRONMENTS="${ACTIVE_DEPLOYMENT_ENVIRONMENTS} ${environment}"
+    fi
+
+    aws ssm put-parameter \
+        --name "/vpn/${environment}/deployment/in_progress" \
+        --value "$value" \
+        --type String \
+        --overwrite \
+        --profile "$profile" \
+        --region "$region" \
+        2>/dev/null || log_operation "WARNING" "Failed to set deployment mode flag (non-critical)"
+}
+
+clear_deployment_mode() {
+    local environment="$1"
+    local profile="${AWS_PROFILE:-default}"
+    local region="${CDK_REGION:-us-east-1}"
+
+    log_operation "INFO" "✅ Clearing deployment mode for $environment"
+
+    # Remove from active deployments tracking
+    ACTIVE_DEPLOYMENT_ENVIRONMENTS="${ACTIVE_DEPLOYMENT_ENVIRONMENTS/ ${environment}/}"
+
+    aws ssm delete-parameter \
+        --name "/vpn/${environment}/deployment/in_progress" \
+        --profile "$profile" \
+        --region "$region" \
+        2>/dev/null || true  # Ignore errors if parameter doesn't exist
+}
+
+# Clear all active deployment modes (called on script exit)
+clear_all_deployment_modes() {
+    if [[ -n "$ACTIVE_DEPLOYMENT_ENVIRONMENTS" ]]; then
+        log_operation "INFO" "Cleaning up active deployment modes: $ACTIVE_DEPLOYMENT_ENVIRONMENTS"
+        for env in $ACTIVE_DEPLOYMENT_ENVIRONMENTS; do
+            clear_deployment_mode "$env"
+        done
+    fi
 }
 
 # Get stack output value
@@ -667,14 +724,26 @@ deploy_production() {
     validate_aws_profile "$profile" "production"
     
     cd "$CDK_DIR"
-    
+
+    # Set deployment mode to suppress validation alerts during deployment
+    set_deployment_mode "production" 10
+
+    local deploy_result=0
     if [ "$use_secure_params" = "true" ]; then
-        deploy_with_secure_parameters "production" "$profile"
+        deploy_with_secure_parameters "production" "$profile" || deploy_result=$?
     else
         print_status "Deploying production stack..."
-        ENVIRONMENT=production AWS_PROFILE="$profile" cdk deploy --all --app "npx ts-node bin/vpn-automation.ts" --require-approval never --context environment="production"
+        ENVIRONMENT=production AWS_PROFILE="$profile" cdk deploy --all --app "npx ts-node bin/vpn-automation.ts" --require-approval never --context environment="production" || deploy_result=$?
     fi
-    
+
+    # Clear deployment mode after deployment (success or failure)
+    clear_deployment_mode "production"
+
+    if [ $deploy_result -ne 0 ]; then
+        print_error "Production deployment failed"
+        return 1
+    fi
+
     print_success "✅ Production deployment completed!"
     
     # Get production API Gateway URL
@@ -788,23 +857,26 @@ get_production_api_details() {
 deploy_staging_cdk() {
     local profile="$1"
     local use_secure_params="$2"
-    
+
     cd "$CDK_DIR" || {
         print_error "Failed to change to CDK directory: $CDK_DIR"
         return 1
     }
-    
+
+    # Set deployment mode to suppress validation alerts during deployment
+    set_deployment_mode "staging" 10
+
     if [ "$use_secure_params" = "true" ]; then
         print_status "🔒 Deploying staging with secure parameter management..."
         deploy_with_secure_parameters "staging" "$profile"
     else
         print_status "🚀 Deploying staging environment..."
-        
+
         # Set up environment variables for staging deployment
         export PRODUCTION_API_ENDPOINT="${PRODUCTION_URL}vpn"
         export ENVIRONMENT=staging
         export AWS_PROFILE="$profile"
-        
+
         # Include API key if available
         if [ -n "$API_KEY_VALUE" ]; then
             export PRODUCTION_API_KEY="$API_KEY_VALUE"
@@ -812,12 +884,17 @@ deploy_staging_cdk() {
         else
             print_status "ℹ️  Deploying without production API key - cross-account calls will use existing configuration"
         fi
-        
+
         if ! safe_aws_call "CDK deploy staging" cdk deploy --all --app "npx ts-node bin/vpn-automation.ts" --require-approval never --context environment="staging"; then
+            # Clear deployment mode even on failure
+            clear_deployment_mode "staging"
             print_error "Failed to deploy staging environment"
             return 1
         fi
     fi
+
+    # Clear deployment mode after successful deployment
+    clear_deployment_mode "staging"
 }
 
 # Configure staging cross-account routing
@@ -1555,6 +1632,11 @@ EOF
 # Cleanup function
 cleanup() {
     local exit_code=$?
+
+    # Always clear deployment modes on exit (success or failure)
+    # This ensures deployment flags don't get stuck if script crashes
+    clear_all_deployment_modes
+
     # Only report error if it's an actual error (not usage display)
     if [ $exit_code -ne 0 ] && [ $exit_code -ne 130 ]; then  # 130 is Ctrl+C
         print_error "Deployment failed with exit code $exit_code"

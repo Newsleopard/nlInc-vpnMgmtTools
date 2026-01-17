@@ -428,9 +428,19 @@ export const handler = async (
     if (command.action !== 'check' && !isCostCommand) {
       const isValid = await vpnManager.validateEndpoint();
       if (!isValid) {
-        const errorMsg = 'VPN endpoint validation failed. Please check configuration.';
-        await slack.sendSlackAlert(errorMsg, ENVIRONMENT, 'critical');
-        
+        // Check if deployment is in progress - suppress alerts during deployment
+        const isDeploying = await stateStore.isDeploymentInProgress();
+
+        if (!isDeploying) {
+          const errorMsg = 'VPN endpoint validation failed. Please check configuration.';
+          await slack.sendSlackAlert(errorMsg, ENVIRONMENT, 'critical');
+        } else {
+          logger.warn('VPN endpoint validation failed during deployment - suppressing alert', {
+            environment: ENVIRONMENT,
+            deploymentMode: true
+          });
+        }
+
         return {
           statusCode: 500,
           headers: {
@@ -440,7 +450,7 @@ export const handler = async (
           body: JSON.stringify({
             success: false,
             message: 'VPN endpoint validation failed',
-            error: errorMsg
+            error: 'VPN endpoint validation failed. Please check configuration.'
           })
         };
       }

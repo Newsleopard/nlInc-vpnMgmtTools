@@ -1,6 +1,44 @@
 import * as crypto from 'crypto';
-import { SlackCommand, VpnCommandRequest, VpnCommandResponse, ScheduleStatusData } from './types';
+import { SlackCommand, VpnCommandRequest, VpnCommandResponse, ScheduleStatusData, VpnConnectionDetail } from './types';
 import * as stateStore from './stateStore';
+
+// Helper function to format bytes into human-readable format
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  const value = bytes / Math.pow(k, i);
+  return `${value.toFixed(value >= 100 ? 0 : value >= 10 ? 1 : 2)} ${sizes[i]}`;
+}
+
+// Helper function to format connection duration
+// Handles both Date objects and ISO string representations
+function formatDuration(establishedTime: Date | string): string {
+  const now = new Date();
+  // Handle both Date objects and ISO strings (from JSON serialization)
+  const established = establishedTime instanceof Date
+    ? establishedTime
+    : new Date(establishedTime);
+
+  // Validate the date is valid
+  if (isNaN(established.getTime())) {
+    return 'unknown';
+  }
+
+  const diffMs = now.getTime() - established.getTime();
+  const diffMinutes = Math.floor(diffMs / (1000 * 60));
+
+  if (diffMinutes < 0) {
+    return '0m'; // Future date protection
+  }
+  if (diffMinutes < 60) {
+    return `${diffMinutes}m`;
+  }
+  const hours = Math.floor(diffMinutes / 60);
+  const minutes = diffMinutes % 60;
+  return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+}
 
 // Verify Slack request signature for security
 export function verifySlackSignature(
@@ -1363,9 +1401,67 @@ export function formatSlackResponse(
       value: response.data.activeConnections.toString(),
       short: true
     });
-    
+
+    // Add traffic status for check command
+    if (command.action === 'check' && response.data.trafficSummary) {
+      const traffic = response.data.trafficSummary;
+      let trafficStatusText = '';
+      let trafficEmoji = '⚪';
+
+      if (traffic.status === 'active') {
+        trafficEmoji = '🟢';
+        const delta = traffic.ingressDelta + traffic.egressDelta;
+        trafficStatusText = delta > 0
+          ? `Active (+${formatBytes(delta)} recent)`
+          : 'Active';
+      } else if (traffic.status === 'idle') {
+        trafficEmoji = '⚠️';
+        trafficStatusText = traffic.idleMinutes
+          ? `Idle (no traffic in ${traffic.idleMinutes}m)`
+          : 'Idle';
+      } else {
+        trafficEmoji = '⚪';
+        trafficStatusText = 'No connections';
+      }
+
+      fields.push({
+        title: 'Traffic Status',
+        value: `${trafficEmoji} ${trafficStatusText}`,
+        short: true
+      });
+
+      // Show total traffic if there are connections
+      if (response.data.activeConnections > 0) {
+        fields.push({
+          title: 'Total Traffic',
+          value: `↓ ${formatBytes(traffic.totalEgressBytes)}  ↑ ${formatBytes(traffic.totalIngressBytes)}`,
+          short: true
+        });
+      }
+    }
+
+    // Add per-user breakdown for check command with active connections
+    if (command.action === 'check' && response.data.activeConnectionDetails && response.data.activeConnectionDetails.length > 0) {
+      const connections = response.data.activeConnectionDetails;
+      const userLines = connections.map((conn: VpnConnectionDetail) => {
+        // formatDuration now handles both Date objects and ISO strings
+        const duration = formatDuration(conn.establishedTime);
+        const traffic = `↓ ${formatBytes(conn.egressBytes)}  ↑ ${formatBytes(conn.ingressBytes)}`;
+        const statusTag = conn.trafficStatus === 'idle'
+          ? `[Idle ${conn.idleMinutes || 0}m]`
+          : '[Active]';
+        return `• ${conn.username} (${conn.clientIp}) - ${duration}\n   ${traffic}  ${statusTag}`;
+      }).join('\n');
+
+      fields.push({
+        title: 'Connected Users',
+        value: userLines,
+        short: false
+      });
+    }
+
     // Add association state details for intermediate states
-    if (response.data.associationState && 
+    if (response.data.associationState &&
         ['associating', 'disassociating', 'failed'].includes(response.data.associationState)) {
       fields.push({
         title: 'Association State',
@@ -1373,12 +1469,12 @@ export function formatSlackResponse(
         short: true
       });
     }
-    
+
     if (response.data.lastActivity) {
       const lastActivity = new Date(response.data.lastActivity);
       const timeDiff = Date.now() - lastActivity.getTime();
       const minutesAgo = Math.floor(timeDiff / (1000 * 60));
-      
+
       fields.push({
         title: 'Last Activity',
         value: minutesAgo < 1 ? 'Just now' : `${minutesAgo} minutes ago`,

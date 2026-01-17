@@ -15,6 +15,8 @@ const ENVIRONMENT = process.env.ENVIRONMENT || 'staging';
 const COOLDOWN_MINUTES = Number(process.env.COOLDOWN_MINUTES || 30);
 const BUSINESS_HOURS_ENABLED = process.env.BUSINESS_HOURS_PROTECTION !== 'false';
 const BUSINESS_HOURS_TIMEZONE = process.env.BUSINESS_HOURS_TIMEZONE || 'UTC';
+// Idle threshold for soft-close: only close if connection has been idle for this many minutes
+const SOFT_CLOSE_IDLE_THRESHOLD_MINUTES = Number(process.env.SOFT_CLOSE_IDLE_THRESHOLD_MINUTES || 60);
 
 // Warming detection helper function
 const isWarmingRequest = (event: any): boolean => {
@@ -60,13 +62,25 @@ export const handler = async (
   try {
     // Validate Parameter Store configuration
     const isValid = await stateStore.validateParameterStore();
-    
+
     if (!isValid) {
+      // Check if deployment is in progress - suppress alerts during deployment
+      const isDeploying = await stateStore.isDeploymentInProgress();
+
+      if (isDeploying) {
+        logger.warn('Parameter Store validation failed during deployment - suppressing alert', {
+          environment: ENVIRONMENT,
+          validationStep: 'parameter_store',
+          deploymentMode: true
+        });
+        return;
+      }
+
       logger.critical('Parameter Store validation failed - some required parameters are missing', null, {
         environment: ENVIRONMENT,
         validationStep: 'parameter_store'
       });
-      
+
       await slack.sendSlackAlert(
         'VPN 監控系統偵測到設定參數異常，請檢查系統配置是否正確',
         ENVIRONMENT,
@@ -74,18 +88,30 @@ export const handler = async (
       );
       return;
     }
-    
+
     logger.debug('Parameter Store validation successful');
 
     // Validate VPN endpoint exists and is accessible
     const endpointValid = await vpnManager.validateEndpoint();
-    
+
     if (!endpointValid) {
+      // Check if deployment is in progress - suppress alerts during deployment
+      const isDeploying = await stateStore.isDeploymentInProgress();
+
+      if (isDeploying) {
+        logger.warn('VPN endpoint validation failed during deployment - suppressing alert', {
+          environment: ENVIRONMENT,
+          validationStep: 'vpn_endpoint',
+          deploymentMode: true
+        });
+        return;
+      }
+
       logger.critical('VPN endpoint validation failed', null, {
         environment: ENVIRONMENT,
         validationStep: 'vpn_endpoint'
       });
-      
+
       await slack.sendSlackAlert(
         'VPN Monitor: VPN endpoint validation failed. Please check endpoint configuration.',
         ENVIRONMENT,
@@ -104,6 +130,10 @@ export const handler = async (
       associated: status.associated,
       associationState: status.associationState,
       activeConnections: status.activeConnections,
+      trafficStatus: status.trafficSummary?.status,
+      trafficIngressDelta: status.trafficSummary?.ingressDelta,
+      trafficEgressDelta: status.trafficSummary?.egressDelta,
+      trafficIdleMinutes: status.trafficSummary?.idleMinutes,
       lastActivity: status.lastActivity,
       endpointId: status.endpointId,
       subnetId: status.subnetId
@@ -112,6 +142,7 @@ export const handler = async (
     logger.audit('VPN status check', 'vpn_status', 'success', {
       associated: status.associated,
       activeConnections: status.activeConnections,
+      trafficStatus: status.trafficSummary?.status,
       lastActivity: status.lastActivity,
       endpointId: status.endpointId
     });
@@ -146,19 +177,54 @@ export const handler = async (
       return;
     }
 
-    // Check if there are active connections
+    // Check if there are active connections with actual traffic
     if (status.activeConnections > 0) {
-      logger.info('VPN has active connections, not idle', {
-        activeConnections: status.activeConnections,
-        action: 'maintaining_activity'
-      });
-      
-      // Update last activity since there are active connections
-      await vpnManager.updateLastActivity();
-      
-      // Reset cooldown if VPN is actively being used
-      await clearCooldownTimestamp();
-      return;
+      // Warn if trafficSummary is missing - indicates a potential issue with traffic monitoring
+      if (!status.trafficSummary) {
+        logger.warn('Missing traffic summary with active connections - treating as unknown', {
+          activeConnections: status.activeConnections,
+          fallbackBehavior: 'treating_as_active'
+        });
+      }
+      const trafficStatus = status.trafficSummary?.status || 'active';
+      const hasActiveTraffic = trafficStatus === 'active';
+
+      if (hasActiveTraffic) {
+        logger.info('VPN has active connections with traffic', {
+          activeConnections: status.activeConnections,
+          trafficStatus,
+          ingressDelta: status.trafficSummary?.ingressDelta || 0,
+          egressDelta: status.trafficSummary?.egressDelta || 0,
+          action: 'maintaining_activity'
+        });
+
+        // Update last activity since there's actual traffic
+        await vpnManager.updateLastActivity();
+
+        // Reset cooldown if VPN is actively being used
+        await clearCooldownTimestamp();
+        return;
+      } else {
+        // Connections exist but no traffic - potential stale connections
+        // Note: idleMinutes represents wall clock time since last traffic was observed
+        // This is calculated from the traffic snapshot timestamp, not accumulated across Lambda invocations
+        const idleMinutes = status.trafficSummary?.idleMinutes || 0;
+        logger.info('VPN has connections but no recent traffic (potential stale)', {
+          activeConnections: status.activeConnections,
+          trafficStatus,
+          trafficIdleMinutes: idleMinutes,
+          softCloseThreshold: SOFT_CLOSE_IDLE_THRESHOLD_MINUTES,
+          willTriggerClose: idleMinutes >= SOFT_CLOSE_IDLE_THRESHOLD_MINUTES,
+          action: 'checking_idle_timeout'
+        });
+
+        // Publish traffic idle metric
+        await publishMetric('VpnTrafficIdleMinutes', idleMinutes);
+
+        // Don't return - continue to idle check below
+        // This allows stale connections to be detected and VPN to auto-close
+        // after SOFT_CLOSE_IDLE_THRESHOLD_MINUTES of inactivity
+      }
     }
 
     // Check if auto-close schedule is enabled (Requirements: 6.1, 6.2, 6.3)
@@ -1252,53 +1318,80 @@ async function checkAndHandlePendingClose(): Promise<{ handled: boolean; status:
       return { handled: true, status: 'already_closed' };
     }
 
-    // Check for active connections
+    // Check for active connections with traffic status
     if (status.activeConnections > 0) {
       const connectionDetails = status.activeConnectionDetails || [];
       const usernames = connectionDetails.map(c => c.username).join(', ') || 'unknown';
-      const nextRetryTime = new Date(now.getTime() + RETRY_DELAY_MINUTES * 60 * 1000);
-      const nextRetryTimeStr = nextRetryTime.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });
 
-      console.log(`VPN still has ${status.activeConnections} active connections (${usernames}), scheduling next retry at ${nextRetryTimeStr}`);
+      // Check traffic status - only delay if connections have actual traffic or haven't been idle long enough
+      const hasActiveTraffic = status.trafficSummary?.status === 'active';
+      const idleMinutes = status.trafficSummary?.idleMinutes || 0;
+      const shouldDelayClose = hasActiveTraffic || idleMinutes < SOFT_CLOSE_IDLE_THRESHOLD_MINUTES;
 
-      // Schedule next retry
-      const newPendingClose = {
-        retryTime: nextRetryTime.toISOString(),
-        reason: pendingClose.reason,
-        attempts: pendingClose.attempts + 1,
-        scheduledAt: pendingClose.scheduledAt // Keep original scheduled time
-      };
+      if (shouldDelayClose) {
+        const nextRetryTime = new Date(now.getTime() + RETRY_DELAY_MINUTES * 60 * 1000);
+        const nextRetryTimeStr = nextRetryTime.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });
+        const trafficStatusStr = hasActiveTraffic ? 'active' : `idle (${idleMinutes}min)`;
 
-      await stateStore.writeParameter(
-        `/vpn/${ENVIRONMENT}/automation/pending_close`,
-        JSON.stringify(newPendingClose)
-      );
+        console.log(`VPN has ${status.activeConnections} connections (${usernames}), traffic: ${trafficStatusStr}, scheduling next retry at ${nextRetryTimeStr}`);
 
-      // Send Slack notification only on odd retry attempts (1, 3, 5...)
-      // to reduce notification noise while still keeping users informed
-      if (pendingClose.attempts % 2 === 1) {
-        await slack.sendSlackNotification({
-          text: `⏳ VPN ${ENVIRONMENT} close delayed again`,
-          attachments: [{
-            color: 'warning',
-            fields: [
-              { title: '👥 Connections', value: status.activeConnections.toString(), short: true },
-              { title: '👤 Users', value: usernames, short: true },
-              { title: '🔄 Retry Attempt', value: `#${pendingClose.attempts}`, short: true },
-              { title: '⏰ Next Check', value: nextRetryTimeStr, short: true },
-              { title: '📅 Reason', value: pendingClose.reason === 'weekend' ? 'Weekend close' : 'Scheduled close', short: false },
-              { title: '💡 Note', value: 'Respecting active connections, will check again in 30 minutes', short: false }
-            ]
-          }]
-        });
+        // Schedule next retry
+        const newPendingClose = {
+          retryTime: nextRetryTime.toISOString(),
+          reason: pendingClose.reason,
+          attempts: pendingClose.attempts + 1,
+          scheduledAt: pendingClose.scheduledAt // Keep original scheduled time
+        };
+
+        await stateStore.writeParameter(
+          `/vpn/${ENVIRONMENT}/automation/pending_close`,
+          JSON.stringify(newPendingClose)
+        );
+
+        // Send Slack notification only on odd retry attempts (1, 3, 5...)
+        // to reduce notification noise while still keeping users informed
+        if (pendingClose.attempts % 2 === 1) {
+          const noteMessage = hasActiveTraffic
+            ? 'Respecting active connections with recent traffic'
+            : `Connections idle for ${idleMinutes}min (will auto-close at ${SOFT_CLOSE_IDLE_THRESHOLD_MINUTES}min of inactivity)`;
+
+          await slack.sendSlackNotification({
+            text: `⏳ VPN ${ENVIRONMENT} close delayed again`,
+            attachments: [{
+              color: 'warning',
+              fields: [
+                { title: '👥 Connections', value: status.activeConnections.toString(), short: true },
+                { title: '👤 Users', value: usernames, short: true },
+                { title: '📊 Traffic Status', value: trafficStatusStr, short: true },
+                { title: '🔄 Retry Attempt', value: `#${pendingClose.attempts}`, short: true },
+                { title: '⏰ Next Check', value: nextRetryTimeStr, short: true },
+                { title: '📅 Reason', value: pendingClose.reason === 'weekend' ? 'Weekend close' : 'Scheduled close', short: true },
+                { title: '💡 Note', value: noteMessage, short: false }
+              ]
+            }]
+          });
+        }
+
+        await publishMetric('SoftCloseRetryDelayed', 1);
+        return { handled: true, status: 'delayed_again' };
+      } else {
+        // Connections exist but have been idle for 60+ minutes - proceed with close
+        console.log(`Connections idle for ${idleMinutes}min (threshold: ${SOFT_CLOSE_IDLE_THRESHOLD_MINUTES}min), proceeding with soft close`);
+        // Fall through to close logic below
       }
-
-      await publishMetric('SoftCloseRetryDelayed', 1);
-      return { handled: true, status: 'delayed_again' };
     }
 
-    // No active connections - proceed with close
-    console.log(`No active connections, proceeding with soft close (attempt #${pendingClose.attempts})`);
+    // Capture info about idle connections before close (if any)
+    const connectionDetails = status.activeConnectionDetails || [];
+    const idleUsernames = connectionDetails.map(c => c.username).join(', ') || '';
+    const idleMinutes = status.trafficSummary?.idleMinutes || 0;
+    const hadIdleConnections = status.activeConnections > 0 && idleMinutes >= SOFT_CLOSE_IDLE_THRESHOLD_MINUTES;
+
+    // Proceed with close
+    const closeReason = hadIdleConnections
+      ? `Closing ${status.activeConnections} idle connection(s) after ${idleMinutes}min of inactivity`
+      : 'No active connections';
+    console.log(`${closeReason}, proceeding with soft close (attempt #${pendingClose.attempts})`);
 
     try {
       await vpnManager.disassociateSubnets();
@@ -1309,23 +1402,42 @@ async function checkAndHandlePendingClose(): Promise<{ handled: boolean; status:
       // Send success notification
       const closeTimeStr = new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });
 
+      // Build notification fields
+      const notificationFields = [
+        { title: '🕤 Time', value: closeTimeStr, short: true },
+        { title: '📍 Environment', value: ENVIRONMENT, short: true },
+        { title: '🔄 Retry Attempts', value: pendingClose.attempts.toString(), short: true },
+        { title: '📅 Original Reason', value: pendingClose.reason === 'weekend' ? 'Weekend close' : 'Scheduled close', short: true }
+      ];
+
+      // Add idle connection info if applicable
+      if (hadIdleConnections) {
+        notificationFields.push(
+          { title: '👤 Users Disconnected', value: idleUsernames, short: true },
+          { title: '⏱️ Idle Duration', value: `${idleMinutes}min (threshold: ${SOFT_CLOSE_IDLE_THRESHOLD_MINUTES}min)`, short: true }
+        );
+      }
+
+      notificationFields.push(
+        { title: '💰 Cost Saving', value: 'Preventing unnecessary charges', short: false },
+        { title: '💡 Note', value: hadIdleConnections
+          ? `Closed idle connections after ${SOFT_CLOSE_IDLE_THRESHOLD_MINUTES}+ minutes of inactivity`
+          : 'Closed after all connections ended', short: false }
+      );
+
       await slack.sendSlackNotification({
         text: `🌙 VPN ${ENVIRONMENT} soft close completed`,
         attachments: [{
           color: '#36a64f',
-          fields: [
-            { title: '🕤 Time', value: closeTimeStr, short: true },
-            { title: '📍 Environment', value: ENVIRONMENT, short: true },
-            { title: '🔄 Retry Attempts', value: pendingClose.attempts.toString(), short: true },
-            { title: '📅 Original Reason', value: pendingClose.reason === 'weekend' ? 'Weekend close' : 'Scheduled close', short: true },
-            { title: '💰 Cost Saving', value: 'Preventing unnecessary charges', short: false },
-            { title: '💡 Note', value: 'Closed after all connections ended', short: false }
-          ]
+          fields: notificationFields
         }]
       });
 
       await publishMetric('SoftCloseCompleted', 1);
-      return { handled: true, status: 'closed_successfully' };
+      if (hadIdleConnections) {
+        await publishMetric('SoftCloseIdleConnectionsClosed', status.activeConnections);
+      }
+      return { handled: true, status: hadIdleConnections ? 'closed_idle_connections' : 'closed_successfully' };
 
     } catch (closeError) {
       console.error('Failed to close VPN during soft close retry:', closeError);

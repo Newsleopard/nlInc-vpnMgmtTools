@@ -6,7 +6,7 @@ import {
   DescribeClientVpnConnectionsCommand,
   DescribeClientVpnEndpointsCommand
 } from '@aws-sdk/client-ec2';
-import { VpnState, VpnStatus, VpnConnectionDetail } from './types';
+import { VpnState, VpnStatus, VpnConnectionDetail, TrafficSnapshot, TrafficSummary } from './types';
 import * as stateStore from './stateStore';
 
 const ec2 = new EC2Client({});
@@ -47,13 +47,15 @@ export async function associateSubnets(): Promise<void> {
     }));
     
     console.log('Successfully associated subnet with VPN endpoint');
-    
-    // Update state in Parameter Store
+
+    // Update state in Parameter Store (preserve existing traffic snapshot)
+    const existingState = await stateStore.readState();
     const newState: VpnState = {
       associated: true,
-      lastActivity: new Date().toISOString()
+      lastActivity: new Date().toISOString(),
+      lastTrafficSnapshot: existingState.lastTrafficSnapshot
     };
-    
+
     await stateStore.writeState(newState);
     console.log('Updated state in Parameter Store');
     
@@ -102,10 +104,12 @@ export async function disassociateSubnets(): Promise<void> {
     
     if (!targetAssociation?.AssociationId) {
       console.log('No active association found for subnet');
-      // Update state to reflect reality
+      // Update state to reflect reality (preserve traffic snapshot)
+      const existingState = await stateStore.readState();
       await stateStore.writeState({
         associated: false,
-        lastActivity: new Date().toISOString()
+        lastActivity: new Date().toISOString(),
+        lastTrafficSnapshot: existingState.lastTrafficSnapshot
       });
       return;
     }
@@ -119,13 +123,14 @@ export async function disassociateSubnets(): Promise<void> {
     }));
     
     console.log('Successfully disassociated subnet from VPN endpoint');
-    
-    // Update state in Parameter Store
+
+    // Update state in Parameter Store (clear traffic snapshot on close)
     const newState: VpnState = {
       associated: false,
       lastActivity: new Date().toISOString()
+      // Intentionally not preserving lastTrafficSnapshot - start fresh on next open
     };
-    
+
     await stateStore.writeState(newState);
     console.log('Updated state in Parameter Store');
     
@@ -134,6 +139,83 @@ export async function disassociateSubnets(): Promise<void> {
     const errorMessage = error instanceof Error ? error.message : String(error);
     throw new Error(`Subnet disassociation failed: ${errorMessage}`);
   }
+}
+
+// Calculate traffic summary with delta from previous snapshot
+function calculateTrafficSummary(
+  connections: VpnConnectionDetail[],
+  previousSnapshot?: TrafficSnapshot
+): TrafficSummary {
+  // Calculate totals
+  const totalIngressBytes = connections.reduce((sum, conn) => sum + conn.ingressBytes, 0);
+  const totalEgressBytes = connections.reduce((sum, conn) => sum + conn.egressBytes, 0);
+
+  // No connections - no traffic
+  if (connections.length === 0) {
+    return {
+      status: 'no_connections',
+      totalIngressBytes: 0,
+      totalEgressBytes: 0,
+      ingressDelta: 0,
+      egressDelta: 0
+    };
+  }
+
+  // No previous snapshot - assume active (first run)
+  if (!previousSnapshot) {
+    return {
+      status: 'active',
+      totalIngressBytes,
+      totalEgressBytes,
+      ingressDelta: 0,
+      egressDelta: 0
+    };
+  }
+
+  // Calculate delta from previous snapshot
+  let ingressDelta = 0;
+  let egressDelta = 0;
+
+  for (const conn of connections) {
+    const prev = previousSnapshot.connections[conn.connectionId];
+    if (prev) {
+      // Detect counter reset (negative diff or huge jump > 2x previous)
+      // If counter appears to have reset, treat all current traffic as delta
+      const ingressDiff = conn.ingressBytes - prev.ingress;
+      const egressDiff = conn.egressBytes - prev.egress;
+
+      if (ingressDiff < 0 || (prev.ingress > 0 && ingressDiff > prev.ingress * 2)) {
+        // Counter reset detected - count all current traffic
+        ingressDelta += conn.ingressBytes;
+      } else {
+        ingressDelta += ingressDiff;
+      }
+
+      if (egressDiff < 0 || (prev.egress > 0 && egressDiff > prev.egress * 2)) {
+        // Counter reset detected - count all current traffic
+        egressDelta += conn.egressBytes;
+      } else {
+        egressDelta += egressDiff;
+      }
+    } else {
+      // New connection - count all its traffic as delta
+      ingressDelta += conn.ingressBytes;
+      egressDelta += conn.egressBytes;
+    }
+  }
+
+  const hasTraffic = ingressDelta > 0 || egressDelta > 0;
+  const snapshotTime = new Date(previousSnapshot.timestamp);
+  const idleMinutes = hasTraffic ? undefined : Math.floor((Date.now() - snapshotTime.getTime()) / (1000 * 60));
+
+  return {
+    status: hasTraffic ? 'active' : 'idle',
+    totalIngressBytes,
+    totalEgressBytes,
+    ingressDelta,
+    egressDelta,
+    idleMinutes
+  };
 }
 
 // Fetch current VPN status from AWS and Parameter Store
@@ -160,17 +242,57 @@ export async function fetchStatus(): Promise<VpnStatus> {
       }))
     ]);
     
-    // Get active connection details including usernames
+    // Helper to safely parse traffic bytes with NaN validation
+    const parseTrafficBytes = (value: string | undefined): number => {
+      const parsed = parseInt(value || '0', 10);
+      return isNaN(parsed) ? 0 : Math.max(0, parsed);
+    };
+
+    // Get active connection details including usernames and traffic metrics
     const activeConnectionDetails: VpnConnectionDetail[] = connections.Connections?.filter(
       conn => conn.Status?.Code === 'active'
     ).map(conn => ({
       connectionId: conn.ConnectionId || '',
       username: conn.CommonName || conn.Username || 'unknown',
       clientIp: conn.ClientIp || '',
-      establishedTime: new Date(conn.ConnectionEstablishedTime || Date.now())
+      establishedTime: new Date(conn.ConnectionEstablishedTime || Date.now()),
+      // Extract traffic metrics from AWS API with NaN validation
+      ingressBytes: parseTrafficBytes(conn.IngressBytes),
+      egressBytes: parseTrafficBytes(conn.EgressBytes)
     })) || [];
 
     const activeConnections = activeConnectionDetails.length;
+
+    // Calculate traffic delta and update snapshot
+    const trafficSummary = calculateTrafficSummary(activeConnectionDetails, state.lastTrafficSnapshot);
+
+    // Build current traffic snapshot for next check
+    const currentSnapshot: TrafficSnapshot = {
+      timestamp: new Date().toISOString(),
+      connections: activeConnectionDetails.reduce((acc, conn) => {
+        acc[conn.connectionId] = { ingress: conn.ingressBytes, egress: conn.egressBytes };
+        return acc;
+      }, {} as { [connectionId: string]: { ingress: number; egress: number } })
+    };
+
+    // Update connection details with traffic status
+    if (state.lastTrafficSnapshot) {
+      for (const conn of activeConnectionDetails) {
+        const prev = state.lastTrafficSnapshot.connections[conn.connectionId];
+        if (prev) {
+          const hasTraffic = conn.ingressBytes > prev.ingress || conn.egressBytes > prev.egress;
+          conn.trafficStatus = hasTraffic ? 'active' : 'idle';
+          if (!hasTraffic) {
+            // Calculate idle time from last traffic snapshot
+            const snapshotTime = new Date(state.lastTrafficSnapshot.timestamp);
+            conn.idleMinutes = Math.floor((Date.now() - snapshotTime.getTime()) / (1000 * 60));
+          }
+        } else {
+          // New connection - consider active
+          conn.trafficStatus = 'active';
+        }
+      }
+    }
     
     // Check actual association status from AWS
     const targetAssociation = associations.ClientVpnTargetNetworks?.find(
@@ -180,26 +302,39 @@ export async function fetchStatus(): Promise<VpnStatus> {
     const associationState = targetAssociation?.Status?.Code || 'disassociated';
     const actuallyAssociated = associationState === 'associated';
     
-    // If state doesn't match reality, update it
-    if (state.associated !== actuallyAssociated) {
-      console.log(`State mismatch detected. Stored: ${state.associated}, Actual: ${actuallyAssociated}`);
-      const correctedState: VpnState = {
+    // Update state with traffic snapshot and correct association if needed
+    // Fix: Only update if association state changed OR traffic snapshot actually changed
+    // This prevents excessive SSM writes and potential race conditions
+    const snapshotChanged = !state.lastTrafficSnapshot ||
+      JSON.stringify(Object.keys(currentSnapshot.connections).sort()) !==
+      JSON.stringify(Object.keys(state.lastTrafficSnapshot.connections || {}).sort());
+    const needsStateUpdate = state.associated !== actuallyAssociated || snapshotChanged;
+    if (needsStateUpdate) {
+      if (state.associated !== actuallyAssociated) {
+        console.log(`State mismatch detected. Stored: ${state.associated}, Actual: ${actuallyAssociated}`);
+      }
+      if (snapshotChanged) {
+        console.log('Traffic snapshot changed, updating state');
+      }
+      const updatedState: VpnState = {
         associated: actuallyAssociated,
-        lastActivity: state.lastActivity // Keep original lastActivity
+        lastActivity: state.lastActivity, // Keep original lastActivity
+        lastTrafficSnapshot: currentSnapshot // Update traffic snapshot
       };
-      await stateStore.writeState(correctedState);
+      await stateStore.writeState(updatedState);
     }
-    
+
     const status: VpnStatus = {
       associated: actuallyAssociated,
       associationState: associationState as 'associated' | 'associating' | 'disassociating' | 'disassociated' | 'failed',
       activeConnections,
       activeConnectionDetails,
+      trafficSummary,
       lastActivity: new Date(state.lastActivity),
       endpointId: config.ENDPOINT_ID,
       subnetId: config.SUBNET_ID
     };
-    
+
     console.log('Current VPN status:', status);
     return status;
     

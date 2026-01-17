@@ -642,6 +642,86 @@ VPN 系統具備自動排程功能，管理員可透過 Slack 命令動態控制
 2. 檢查 VPN Monitor Lambda 日誌
 3. 確認 EventBridge 規則正常運作
 
+## 🕐 閒置偵測與軟關閉
+
+### 閒置偵測運作方式
+
+VPN Monitor Lambda 每 5 分鐘執行一次：
+1. 從 AWS EC2 API 取得活躍連線
+2. 比較目前流量位元組與上次快照
+3. 判斷連線是否有實際流量或處於閒置狀態
+
+### 閾值設定
+
+| 參數 | 預設值 | 說明 |
+|------|--------|------|
+| `IDLE_MINUTES` | 30 | 一般閒置偵測閾值 |
+| `SOFT_CLOSE_IDLE_THRESHOLD_MINUTES` | 60 | 軟關閉閒置閾值 |
+| `COOLDOWN_MINUTES` | 30 | 防止快速開關循環 |
+
+### 軟關閉（週末/排程）
+
+軟關閉由排程事件觸發（如週五 20:00）。與強制關閉不同：
+
+1. **檢查活躍連線** - 關閉前先確認
+2. **有連線則延遲** - 每 30 分鐘重試一次
+3. **監控流量狀態** - 閒置連線（60+ 分鐘）會被關閉
+4. **傳送 Slack 通知** - 奇數次重試時通知（1, 3, 5...）
+
+### Slack 通知類型
+
+**有活躍流量的連線：**
+```
+⏳ VPN production close delayed again
+
+👥 Connections: 1
+👤 Users: username
+📊 Traffic Status: active
+🔄 Retry Attempt: #3
+⏰ Next Check: 2026/1/17 下午8:30:00
+💡 Note: Respecting active connections with recent traffic
+```
+
+**閒置連線被關閉：**
+```
+🌙 VPN production soft close completed
+
+📍 Environment: production
+🕤 Time: 2026/1/17 下午8:30:00
+👤 Users Disconnected: username
+⏱️ Idle Duration: 65min (threshold: 60min)
+💡 Note: Closed idle connections after 60+ minutes of inactivity
+```
+
+**一般閒置偵測關閉：**
+```
+💰 Auto VPN Cost Optimization
+
+🚀 Environment: Production
+📊 Idle Duration: 35 minutes (threshold: 30min)
+💵 Waste Prevented: ~$0.80 saved
+🔧 Action Taken: Subnets auto-disassociated
+📱 Re-enable: /vpn open production
+```
+
+### 手動驗證連線狀態
+
+```bash
+# 檢查實際連線
+aws ec2 describe-client-vpn-connections \
+  --client-vpn-endpoint-id cvpn-endpoint-XXXXX \
+  --filters "Name=status,Values=active" \
+  --profile production \
+  --output table
+
+# 檢查待處理關閉狀態
+aws ssm get-parameter \
+  --name "/vpn/production/automation/pending_close" \
+  --profile production \
+  --query 'Parameter.Value' \
+  --output text
+```
+
 ## 🔒 安全最佳實踐
 
 ### 憑證安全
