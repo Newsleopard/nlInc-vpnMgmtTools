@@ -682,34 +682,38 @@ update_staging_lambda_config() {
             --output json 2>/dev/null)
         
         if [ -n "$current_env" ] && [ "$current_env" != "null" ]; then
-            # Update the production API configuration
-            local updated_env=$(echo "$current_env" | jq \
+            # Update the production API configuration (use -c for compact JSON to avoid shell escaping issues)
+            local updated_env=$(echo "$current_env" | jq -c \
                 --arg endpoint "$production_api_endpoint" \
                 --arg key "$production_api_key" \
                 '.PRODUCTION_API_ENDPOINT = $endpoint | .PRODUCTION_API_KEY = $key')
             
             # Apply the updated environment variables with better error handling
+            # Use proper JSON format for --environment (not shorthand Variables=)
             if aws lambda update-function-configuration \
                 --function-name "$slack_function_name" \
-                --environment "Variables=$updated_env" \
+                --environment '{"Variables": '"$updated_env"'}' \
                 --profile "$staging_profile" \
                 --output json > /dev/null 2>&1; then
                 print_success "✅ Lambda environment variables updated successfully"
                 log_operation "INFO" "Updated Lambda environment variables for $slack_function_name"
+                return 0
             else
                 local error_msg=$(aws lambda update-function-configuration \
                     --function-name "$slack_function_name" \
-                    --environment "Variables=$updated_env" \
+                    --environment '{"Variables": '"$updated_env"'}' \
                     --profile "$staging_profile" 2>&1 || echo "Unknown error")
                 print_warning "⚠️  Failed to update Lambda environment variables: ${error_msg:0:100}"
                 log_operation "ERROR" "Failed to update Lambda environment variables: $error_msg"
-                # Continue anyway as this is not critical for deployment
+                return 1
             fi
         else
             print_warning "⚠️  Could not retrieve current Lambda environment variables"
+            return 1
         fi
     else
         print_warning "⚠️  Could not find staging Slack handler function"
+        return 1
     fi
 }
 
@@ -1018,9 +1022,12 @@ configure_staging_cross_account() {
     
     # Update Lambda environment variables if we have production details
     if [ -n "$final_production_url" ] && [ -n "$final_production_api_key" ]; then
-        update_staging_lambda_config "$profile" "$final_production_url" "$final_production_api_key"
-        print_success "✅ Lambda environment variables updated with production API details"
-        export PRODUCTION_API_KEY="$final_production_api_key"  # Update for the status message below
+        if update_staging_lambda_config "$profile" "$final_production_url" "$final_production_api_key"; then
+            print_success "✅ Lambda environment variables updated with production API details"
+            export PRODUCTION_API_KEY="$final_production_api_key"  # Update for the status message below
+        else
+            print_status "ℹ️  Lambda will use parameter store for cross-account routing (env var update failed)"
+        fi
     else
         print_status "ℹ️  Lambda will use parameter store for cross-account routing (production API not available)"
     fi
@@ -1130,8 +1137,11 @@ deploy_both() {
     
     # Update staging Lambda environment variables if we have the production details
     if [ -n "$production_url" ] && [ -n "$production_api_key" ]; then
-        update_staging_lambda_config "$staging_profile" "$production_url" "$production_api_key"
-        print_success "✅ Cross-account routing configured successfully"
+        if update_staging_lambda_config "$staging_profile" "$production_url" "$production_api_key"; then
+            print_success "✅ Cross-account routing configured successfully"
+        else
+            print_status "ℹ️  Cross-account routing will use parameter store (env var update failed)"
+        fi
     else
         print_warning "⚠️  Could not configure cross-account routing - missing production API details"
     fi
