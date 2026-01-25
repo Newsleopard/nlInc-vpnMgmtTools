@@ -152,6 +152,68 @@ clear_all_deployment_modes() {
     fi
 }
 
+# Track disabled EventBridge environments for cleanup
+DISABLED_EVENTBRIDGE_ENVIRONMENTS=""
+
+# Disable EventBridge rules during deployment to prevent Lambda triggers
+disable_eventbridge_rules() {
+    local environment="$1"
+    local profile="${AWS_PROFILE:-default}"
+    local region="${CDK_REGION:-us-east-1}"
+
+    log_operation "INFO" "⏸️  Disabling EventBridge rules for $environment during deployment"
+
+    # Track for cleanup
+    if [[ ! "$DISABLED_EVENTBRIDGE_ENVIRONMENTS" =~ "$environment" ]]; then
+        DISABLED_EVENTBRIDGE_ENVIRONMENTS="${DISABLED_EVENTBRIDGE_ENVIRONMENTS} ${environment}"
+    fi
+
+    # Get rule names for the environment
+    local rules=$(aws events list-rules \
+        --profile "$profile" \
+        --region "$region" \
+        --query "Rules[?contains(Name, 'VpnAutomation-${environment}')].Name" \
+        --output text 2>/dev/null)
+
+    for rule in $rules; do
+        aws events disable-rule --name "$rule" --profile "$profile" --region "$region" 2>/dev/null || true
+        log_operation "INFO" "  Disabled rule: $rule"
+    done
+}
+
+# Re-enable EventBridge rules after deployment
+enable_eventbridge_rules() {
+    local environment="$1"
+    local profile="${AWS_PROFILE:-default}"
+    local region="${CDK_REGION:-us-east-1}"
+
+    log_operation "INFO" "▶️  Re-enabling EventBridge rules for $environment"
+
+    # Remove from tracking
+    DISABLED_EVENTBRIDGE_ENVIRONMENTS="${DISABLED_EVENTBRIDGE_ENVIRONMENTS/ ${environment}/}"
+
+    local rules=$(aws events list-rules \
+        --profile "$profile" \
+        --region "$region" \
+        --query "Rules[?contains(Name, 'VpnAutomation-${environment}')].Name" \
+        --output text 2>/dev/null)
+
+    for rule in $rules; do
+        aws events enable-rule --name "$rule" --profile "$profile" --region "$region" 2>/dev/null || true
+        log_operation "INFO" "  Enabled rule: $rule"
+    done
+}
+
+# Re-enable all disabled EventBridge rules (called on script exit)
+enable_all_eventbridge_rules() {
+    if [[ -n "$DISABLED_EVENTBRIDGE_ENVIRONMENTS" ]]; then
+        log_operation "INFO" "Re-enabling EventBridge rules: $DISABLED_EVENTBRIDGE_ENVIRONMENTS"
+        for env in $DISABLED_EVENTBRIDGE_ENVIRONMENTS; do
+            enable_eventbridge_rules "$env"
+        done
+    fi
+}
+
 # Get stack output value
 get_stack_output() {
     local stack_name="$1"
@@ -722,11 +784,14 @@ deploy_production() {
     fi
     
     validate_aws_profile "$profile" "production"
-    
+
     cd "$CDK_DIR"
 
-    # Set deployment mode to suppress validation alerts during deployment
-    set_deployment_mode "production" 10
+    # Set deployment mode to suppress validation alerts during deployment (extended to 15 min for CDK deploy time)
+    set_deployment_mode "production" 15
+
+    # Disable EventBridge rules to prevent Lambda triggers during deployment
+    disable_eventbridge_rules "production"
 
     local deploy_result=0
     if [ "$use_secure_params" = "true" ]; then
@@ -735,6 +800,9 @@ deploy_production() {
         print_status "Deploying production stack..."
         ENVIRONMENT=production AWS_PROFILE="$profile" cdk deploy --all --app "npx ts-node bin/vpn-automation.ts" --require-approval never --context environment="production" || deploy_result=$?
     fi
+
+    # Re-enable EventBridge rules after deployment (success or failure)
+    enable_eventbridge_rules "production"
 
     # Clear deployment mode after deployment (success or failure)
     clear_deployment_mode "production"
@@ -863,8 +931,11 @@ deploy_staging_cdk() {
         return 1
     }
 
-    # Set deployment mode to suppress validation alerts during deployment
-    set_deployment_mode "staging" 10
+    # Set deployment mode to suppress validation alerts during deployment (extended to 15 min for CDK deploy time)
+    set_deployment_mode "staging" 15
+
+    # Disable EventBridge rules to prevent Lambda triggers during deployment
+    disable_eventbridge_rules "staging"
 
     if [ "$use_secure_params" = "true" ]; then
         print_status "🔒 Deploying staging with secure parameter management..."
@@ -886,12 +957,16 @@ deploy_staging_cdk() {
         fi
 
         if ! safe_aws_call "CDK deploy staging" cdk deploy --all --app "npx ts-node bin/vpn-automation.ts" --require-approval never --context environment="staging"; then
-            # Clear deployment mode even on failure
+            # Re-enable EventBridge rules and clear deployment mode even on failure
+            enable_eventbridge_rules "staging"
             clear_deployment_mode "staging"
             print_error "Failed to deploy staging environment"
             return 1
         fi
     fi
+
+    # Re-enable EventBridge rules after successful deployment
+    enable_eventbridge_rules "staging"
 
     # Clear deployment mode after successful deployment
     clear_deployment_mode "staging"
@@ -1632,6 +1707,10 @@ EOF
 # Cleanup function
 cleanup() {
     local exit_code=$?
+
+    # Always re-enable EventBridge rules on exit (success or failure)
+    # This ensures rules don't stay disabled if script crashes
+    enable_all_eventbridge_rules
 
     # Always clear deployment modes on exit (success or failure)
     # This ensures deployment flags don't get stuck if script crashes

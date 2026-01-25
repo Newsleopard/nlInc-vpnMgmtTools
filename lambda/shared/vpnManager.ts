@@ -303,11 +303,11 @@ export async function fetchStatus(): Promise<VpnStatus> {
     const actuallyAssociated = associationState === 'associated';
     
     // Update state with traffic snapshot and correct association if needed
-    // Fix: Only update if association state changed OR traffic snapshot actually changed
-    // This prevents excessive SSM writes and potential race conditions
+    // Fix: Update if association state changed OR traffic snapshot changed (including byte values)
+    // This ensures traffic deltas are calculated correctly for idle detection
     const snapshotChanged = !state.lastTrafficSnapshot ||
-      JSON.stringify(Object.keys(currentSnapshot.connections).sort()) !==
-      JSON.stringify(Object.keys(state.lastTrafficSnapshot.connections || {}).sort());
+      JSON.stringify(currentSnapshot.connections) !==
+      JSON.stringify(state.lastTrafficSnapshot.connections || {});
     const needsStateUpdate = state.associated !== actuallyAssociated || snapshotChanged;
     if (needsStateUpdate) {
       if (state.associated !== actuallyAssociated) {
