@@ -43,6 +43,20 @@ export interface TrafficSummary {
   idleMinutes?: number;  // Minutes since last traffic (if idle)
 }
 
+// Weekend notification state for tracking long-running connection alerts
+// Stored as JSON in SSM parameter: /vpn/{environment}/automation/notification/weekend_connection_state
+export interface WeekendNotificationState {
+  connections: {
+    [connectionId: string]: {
+      username: string;
+      firstNotificationTime: string;  // ISO 8601 - when first 3-hour notification was sent
+      lastNotificationTime: string;   // ISO 8601 - when most recent notification was sent
+      notificationCount: number;      // Total notifications sent for this connection
+    };
+  };
+  lastUpdated: string;  // ISO 8601
+}
+
 // Runtime status from EC2 API + Parameter Store
 export interface VpnStatus {
   associated: boolean;

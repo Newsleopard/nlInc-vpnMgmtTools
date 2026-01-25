@@ -7,6 +7,7 @@ import * as stateStore from '/opt/nodejs/stateStore';
 import * as slack from '/opt/nodejs/slack';
 import { createLogger } from '/opt/nodejs/logger';
 import * as scheduleManager from '/opt/nodejs/scheduleManager';
+import { VpnConnectionDetail, WeekendNotificationState } from '/opt/nodejs/types';
 
 const cloudwatch = new CloudWatchClient({});
 
@@ -17,6 +18,69 @@ const BUSINESS_HOURS_ENABLED = process.env.BUSINESS_HOURS_PROTECTION !== 'false'
 const BUSINESS_HOURS_TIMEZONE = process.env.BUSINESS_HOURS_TIMEZONE || 'UTC';
 // Idle threshold for soft-close: only close if connection has been idle for this many minutes
 const SOFT_CLOSE_IDLE_THRESHOLD_MINUTES = Number(process.env.SOFT_CLOSE_IDLE_THRESHOLD_MINUTES || 60);
+
+// Weekend notification constants for long-running connection alerts
+const WEEKEND_NOTIFICATION_FIRST_HOURS = 3;      // First notification after 3 hours
+const WEEKEND_NOTIFICATION_INTERVAL_HOURS = 1;   // Repeat notifications every 1 hour
+const CONNECTION_COST_PER_HOUR = 0.05;           // AWS Client VPN connection cost per hour
+
+// Soft-close notification frequency: notify on every Nth retry attempt (reduces noise)
+const SOFT_CLOSE_NOTIFICATION_FREQUENCY = 2;     // Notify on odd attempts (1, 3, 5...)
+
+// Timezone offset mapping for business hours calculations (UTC offset in hours)
+const TIMEZONE_OFFSETS: { [key: string]: number } = {
+  'EST': -5, 'EDT': -4,    // US Eastern
+  'PST': -8, 'PDT': -7,    // US Pacific
+  'CST': -6, 'CDT': -5,    // US Central
+  'MST': -7, 'MDT': -6,    // US Mountain
+  'GMT': 0, 'UTC': 0,      // GMT/UTC
+  'Asia/Taipei': 8,        // Taiwan Standard Time (UTC+8)
+  'TST': 8, 'Taiwan': 8    // Alternative Taiwan timezone names
+};
+
+/**
+ * Get adjusted time components based on configured timezone
+ * @returns Object with hour, minute, and dayOfWeek in the configured timezone
+ */
+function getAdjustedTimeComponents(): { hour: number; minute: number; dayOfWeek: number } {
+  const now = new Date();
+
+  if (BUSINESS_HOURS_TIMEZONE === 'UTC') {
+    return {
+      hour: now.getUTCHours(),
+      minute: now.getUTCMinutes(),
+      dayOfWeek: now.getUTCDay()
+    };
+  }
+
+  const offset = TIMEZONE_OFFSETS[BUSINESS_HOURS_TIMEZONE] || 0;
+  const adjustedTime = new Date(now.getTime() + (offset * 60 * 60 * 1000));
+
+  return {
+    hour: adjustedTime.getUTCHours(),
+    minute: adjustedTime.getUTCMinutes(),
+    dayOfWeek: adjustedTime.getUTCDay()
+  };
+}
+
+/**
+ * Get environment-specific styling for Slack notifications
+ * Returns consistent formatting: red/uppercase for production, blue/normal for staging
+ */
+function getEnvironmentStyle(): {
+  emoji: string;
+  name: string;
+  color: string;
+  titleSuffix: string;
+} {
+  const isProduction = ENVIRONMENT === 'production';
+  const emoji = isProduction ? '🚀' : '🔧';
+  const name = isProduction ? 'PRODUCTION' : 'Staging';
+  const color = isProduction ? '#d93025' : '#1a73e8';  // Red for production, blue for staging
+  const titleSuffix = `${emoji} ${name}`;
+
+  return { emoji, name, color, titleSuffix };
+}
 
 // Warming detection helper function
 const isWarmingRequest = (event: any): boolean => {
@@ -203,6 +267,18 @@ export const handler = async (
 
         // Reset cooldown if VPN is actively being used
         await clearCooldownTimestamp();
+
+        // Weekend notification check for long-running connections
+        // This runs on weekends to alert about connections active 3+ hours for cost awareness
+        if (status.activeConnectionDetails) {
+          try {
+            await checkAndSendWeekendNotifications(status.activeConnectionDetails);
+          } catch (notificationError) {
+            console.error('Failed to process weekend notifications:', notificationError);
+            // Don't throw - this shouldn't block the main monitoring flow
+          }
+        }
+
         return;
       } else {
         // Connections exist but no traffic - potential stale connections
@@ -224,6 +300,18 @@ export const handler = async (
         // Don't return - continue to idle check below
         // This allows stale connections to be detected and VPN to auto-close
         // after SOFT_CLOSE_IDLE_THRESHOLD_MINUTES of inactivity
+      }
+    }
+
+    // Weekend notification check for long-running connections
+    // This runs on weekends to alert about connections active 3+ hours for cost awareness
+    // Note: This does NOT block auto-close - it's purely informational
+    if (status.associated && status.activeConnections > 0 && status.activeConnectionDetails) {
+      try {
+        await checkAndSendWeekendNotifications(status.activeConnectionDetails);
+      } catch (notificationError) {
+        console.error('Failed to process weekend notifications:', notificationError);
+        // Don't throw - this shouldn't block the main monitoring flow
       }
     }
 
@@ -266,17 +354,16 @@ export const handler = async (
     // Check for administrative override
     if (await hasAdministrativeOverride()) {
       console.log('Skipping auto-disassociation due to administrative override');
-      const environmentEmoji = ENVIRONMENT === 'production' ? '🚀' : '🔧';
-      const environmentName = ENVIRONMENT === 'production' ? 'Production' : 'Staging';
-      
+      const envStyle = getEnvironmentStyle();
+
       await slack.sendSlackNotification({
-        text: "🛑 Administrative Override Active",
+        text: `🛑 Administrative Override Active - ${envStyle.titleSuffix}`,
         attachments: [{
-          color: "warning",
+          color: envStyle.color,
           fields: [
             {
-              title: `${environmentEmoji} Environment`,
-              value: environmentName,
+              title: `${envStyle.emoji} Environment`,
+              value: envStyle.name,
               short: true
             },
             {
@@ -292,7 +379,7 @@ export const handler = async (
           ]
         }]
       });
-      
+
       await publishMetric('AdministrativeOverrideSkips', 1);
       return;
     }
@@ -313,18 +400,17 @@ export const handler = async (
 
       // Enhanced business hours notification with cost impact
       const costProjection = await calculateCostSavings(idleTimeMinutes);
-      const environmentEmoji = ENVIRONMENT === 'production' ? '🚀' : '🔧';
-      const environmentName = ENVIRONMENT === 'production' ? 'Production' : 'Staging';
+      const envStyle = getEnvironmentStyle();
       const currentTime = new Date().toLocaleTimeString('zh-TW', { timeZone: BUSINESS_HOURS_TIMEZONE });
 
       await slack.sendSlackNotification({
-        text: "⏰ Business Hours Protection",
+        text: `⏰ Business Hours Protection - ${envStyle.titleSuffix}`,
         attachments: [{
-          color: "good",
+          color: envStyle.color,
           fields: [
             {
-              title: `${environmentEmoji} Environment`,
-              value: environmentName,
+              title: `${envStyle.emoji} Environment`,
+              value: envStyle.name,
               short: true
             },
             {
@@ -369,19 +455,18 @@ export const handler = async (
     if (await isInCooldownPeriod()) {
       const remainingCooldown = await getRemainingCooldownMinutes();
       console.log(`Skipping auto-disassociation - still in cooldown period (${remainingCooldown} minutes remaining)`);
-      
+
       // Enhanced cooldown notification with context
-      const environmentEmoji = ENVIRONMENT === 'production' ? '🚀' : '🔧';
-      const environmentName = ENVIRONMENT === 'production' ? 'Production' : 'Staging';
-      
+      const envStyle = getEnvironmentStyle();
+
       await slack.sendSlackNotification({
-        text: "⏳ Cooldown Protection Active",
+        text: `⏳ Cooldown Protection Active - ${envStyle.titleSuffix}`,
         attachments: [{
-          color: "#ffaa00",
+          color: envStyle.color,
           fields: [
             {
-              title: `${environmentEmoji} Environment`,
-              value: environmentName,
+              title: `${envStyle.emoji} Environment`,
+              value: envStyle.name,
               short: true
             },
             {
@@ -407,7 +492,7 @@ export const handler = async (
           ]
         }]
       });
-      
+
       await publishMetric('CooldownSkips', 1);
       await publishMetric('CooldownRemainingMinutes', remainingCooldown);
       return;
@@ -437,18 +522,17 @@ export const handler = async (
       await publishCostSavingsMetrics(costSavings, idleTimeMinutes);
       
       // Send enhanced bilingual Slack notification about automatic action
-      const environmentEmoji = ENVIRONMENT === 'production' ? '🚀' : '🔧';
-      const environmentName = ENVIRONMENT === 'production' ? 'Production' : 'Staging';
-      
+      const envStyle = getEnvironmentStyle();
+
       // Create bilingual message with beautiful formatting using attachments
       await slack.sendSlackNotification({
-        text: "💰 Auto VPN Cost Optimization",
+        text: `💰 Auto VPN Cost Optimization - ${envStyle.titleSuffix}`,
         attachments: [{
-          color: "good",
+          color: envStyle.color,
           fields: [
             {
-              title: `${environmentEmoji} Environment`,
-              value: environmentName,
+              title: `${envStyle.emoji} Environment`,
+              value: envStyle.name,
               short: true
             },
             {
@@ -514,35 +598,7 @@ export const handler = async (
 
 // Helper function to check if current time is during business hours
 function isBusinessHours(): boolean {
-  const now = new Date();
-
-  // If timezone is specified and not UTC, adjust for it
-  let hour: number;
-  let minute: number;
-  let dayOfWeek: number;
-
-  if (BUSINESS_HOURS_TIMEZONE === 'UTC') {
-    hour = now.getUTCHours();
-    minute = now.getUTCMinutes();
-    dayOfWeek = now.getUTCDay();
-  } else {
-    // For simplicity, support common timezones with offset
-    const timezoneOffsets: { [key: string]: number } = {
-      'EST': -5, 'EDT': -4,  // US Eastern
-      'PST': -8, 'PDT': -7,  // US Pacific
-      'CST': -6, 'CDT': -5,  // US Central
-      'MST': -7, 'MDT': -6,  // US Mountain
-      'GMT': 0, 'UTC': 0,    // GMT/UTC
-      'Asia/Taipei': 8,      // Taiwan Standard Time (UTC+8)
-      'TST': 8, 'Taiwan': 8  // Alternative Taiwan timezone names
-    };
-
-    const offset = timezoneOffsets[BUSINESS_HOURS_TIMEZONE] || 0;
-    const adjustedTime = new Date(now.getTime() + (offset * 60 * 60 * 1000));
-    hour = adjustedTime.getUTCHours();
-    minute = adjustedTime.getUTCMinutes();
-    dayOfWeek = adjustedTime.getUTCDay();
-  }
+  const { hour, minute, dayOfWeek } = getAdjustedTimeComponents();
 
   // Business hours: Monday-Friday, 10:00 AM - 5:00 PM in specified timezone
   const isWeekday = dayOfWeek >= 1 && dayOfWeek <= 5;
@@ -558,6 +614,39 @@ function isBusinessHours(): boolean {
   console.log(`Business hours check: ${BUSINESS_HOURS_TIMEZONE} time, hour=${hour}, minute=${minute}, day=${dayOfWeek}, weekday=${isWeekday}, business_hour=${isBusinessHour}`);
 
   return isWeekday && isBusinessHour;
+}
+
+/**
+ * Check if current time is during the weekend (Saturday or Sunday)
+ * Uses shared timezone handling via getAdjustedTimeComponents()
+ */
+function isWeekend(): boolean {
+  const { dayOfWeek } = getAdjustedTimeComponents();
+
+  // 0 = Sunday, 6 = Saturday
+  const isWeekendDay = dayOfWeek === 0 || dayOfWeek === 6;
+  console.log(`Weekend check: ${BUSINESS_HOURS_TIMEZONE} time, day=${dayOfWeek}, isWeekend=${isWeekendDay}`);
+
+  return isWeekendDay;
+}
+
+/**
+ * Calculate connection duration in hours
+ * @param establishedTime - When the connection was established
+ * @returns Duration in hours (floating point)
+ */
+function getConnectionDurationHours(establishedTime: Date | string): number {
+  const established = establishedTime instanceof Date
+    ? establishedTime
+    : new Date(establishedTime);
+
+  if (isNaN(established.getTime())) {
+    return 0;
+  }
+
+  const now = new Date();
+  const durationMs = now.getTime() - established.getTime();
+  return durationMs / (1000 * 60 * 60); // Convert to hours
 }
 
 // Check if we're in a cooldown period after recent auto-disassociation
@@ -637,19 +726,18 @@ async function hasRecentManualActivity(): Promise<boolean> {
     
     if (isRecent) {
       console.log(`Recent manual activity detected: ${timeSinceManualActivity.toFixed(1)} minutes ago`);
-      
+
       // Enhanced manual activity notification
-      const environmentEmoji = ENVIRONMENT === 'production' ? '🚀' : '🔧';
-      const environmentName = ENVIRONMENT === 'production' ? 'Production' : 'Staging';
-      
+      const envStyle = getEnvironmentStyle();
+
       await slack.sendSlackNotification({
-        text: "👤 Manual Activity Detected",
+        text: `👤 Manual Activity Detected - ${envStyle.titleSuffix}`,
         attachments: [{
-          color: "#36a64f",
+          color: envStyle.color,
           fields: [
             {
-              title: `${environmentEmoji} Environment`,
-              value: environmentName,
+              title: `${envStyle.emoji} Environment`,
+              value: envStyle.name,
               short: true
             },
             {
@@ -1074,14 +1162,14 @@ async function checkAndNotifyAssociationCompletion(status: any): Promise<{ notif
       await stateStore.deleteParameter(`/vpn/${ENVIRONMENT}/automation/pending_association`);
 
       // Send success notification
-      const environmentEmoji = ENVIRONMENT === 'production' ? '🚀' : '🔧';
+      const envStyle = getEnvironmentStyle();
 
       await slack.sendSlackNotification({
-        text: `✅ VPN ${ENVIRONMENT} ready for connections`,
+        text: `✅ VPN Ready for Connections - ${envStyle.titleSuffix}`,
         attachments: [{
-          color: 'good',
+          color: envStyle.color,
           fields: [
-            { title: `${environmentEmoji} Environment`, value: ENVIRONMENT, short: true },
+            { title: `${envStyle.emoji} Environment`, value: envStyle.name, short: true },
             { title: '⏱️ Association Time', value: `${durationMinutes} minute${durationMinutes !== 1 ? 's' : ''}`, short: true },
             { title: '👤 Started By', value: pending.startedBy || 'unknown', short: true },
             { title: '✅ Status', value: 'Ready for connections', short: true }
@@ -1101,12 +1189,14 @@ async function checkAndNotifyAssociationCompletion(status: any): Promise<{ notif
       await stateStore.deleteParameter(`/vpn/${ENVIRONMENT}/automation/pending_association`);
 
       // Send failure notification
+      const envStyle = getEnvironmentStyle();
+
       await slack.sendSlackNotification({
-        text: `❌ VPN ${ENVIRONMENT} association failed`,
+        text: `❌ VPN Association Failed - ${envStyle.titleSuffix}`,
         attachments: [{
-          color: 'danger',
+          color: envStyle.color,
           fields: [
-            { title: 'Environment', value: ENVIRONMENT, short: true },
+            { title: `${envStyle.emoji} Environment`, value: envStyle.name, short: true },
             { title: 'State', value: status.associationState || 'unknown', short: true },
             { title: 'Started By', value: pending.startedBy || 'unknown', short: true },
             { title: 'Recommendation', value: 'Try `/vpn open` again', short: false }
@@ -1124,12 +1214,14 @@ async function checkAndNotifyAssociationCompletion(status: any): Promise<{ notif
       // Clear pending association due to timeout
       await stateStore.deleteParameter(`/vpn/${ENVIRONMENT}/automation/pending_association`);
 
+      const envStyle = getEnvironmentStyle();
+
       await slack.sendSlackNotification({
-        text: `⚠️ VPN ${ENVIRONMENT} association timed out`,
+        text: `⚠️ VPN Association Timed Out - ${envStyle.titleSuffix}`,
         attachments: [{
-          color: 'warning',
+          color: envStyle.color,
           fields: [
-            { title: 'Environment', value: ENVIRONMENT, short: true },
+            { title: `${envStyle.emoji} Environment`, value: envStyle.name, short: true },
             { title: 'Current State', value: status.associationState || 'unknown', short: true },
             { title: 'Duration', value: `${durationMinutes} minutes`, short: true },
             { title: '⚠️ Action Required', value: 'Please check status manually with `/vpn check` or AWS Console. No further automatic notifications will be sent.', short: false }
@@ -1145,13 +1237,13 @@ async function checkAndNotifyAssociationCompletion(status: any): Promise<{ notif
     // Still in progress, not yet timed out - send progress notification
     console.log(`VPN association still in progress: ${status.associationState} (${durationMinutes}m elapsed)`);
 
-    const environmentEmoji = ENVIRONMENT === 'production' ? '🚀' : '🔧';
+    const envStyle = getEnvironmentStyle();
     await slack.sendSlackNotification({
-      text: `⏳ VPN ${ENVIRONMENT} still associating... (${durationMinutes} minute${durationMinutes !== 1 ? 's' : ''} elapsed)`,
+      text: `⏳ VPN Still Associating - ${envStyle.titleSuffix}`,
       attachments: [{
-        color: 'warning',
+        color: envStyle.color,
         fields: [
-          { title: `${environmentEmoji} Environment`, value: ENVIRONMENT, short: true },
+          { title: `${envStyle.emoji} Environment`, value: envStyle.name, short: true },
           { title: '🔄 Status', value: 'Associating...', short: true },
           { title: '⏱️ Elapsed Time', value: `${durationMinutes} minute${durationMinutes !== 1 ? 's' : ''}`, short: true },
           { title: '👤 Started By', value: pending.startedBy || 'unknown', short: true }
@@ -1191,14 +1283,14 @@ async function checkAndNotifyDisassociationCompletion(status: any): Promise<{ no
       await stateStore.deleteParameter(`/vpn/${ENVIRONMENT}/automation/pending_disassociation`);
 
       // Send success notification
-      const environmentEmoji = ENVIRONMENT === 'production' ? '🚀' : '🔧';
+      const envStyle = getEnvironmentStyle();
 
       await slack.sendSlackNotification({
-        text: `🔴 VPN ${ENVIRONMENT} is now closed`,
+        text: `🔴 VPN Is Now Closed - ${envStyle.titleSuffix}`,
         attachments: [{
-          color: 'danger',
+          color: envStyle.color,
           fields: [
-            { title: `${environmentEmoji} Environment`, value: ENVIRONMENT, short: true },
+            { title: `${envStyle.emoji} Environment`, value: envStyle.name, short: true },
             { title: '⏱️ Disassociation Time', value: `${durationMinutes} minute${durationMinutes !== 1 ? 's' : ''}`, short: true },
             { title: '👤 Closed By', value: pending.startedBy || 'unknown', short: true },
             { title: '🔴 Status', value: 'VPN is now closed', short: true }
@@ -1218,12 +1310,14 @@ async function checkAndNotifyDisassociationCompletion(status: any): Promise<{ no
       await stateStore.deleteParameter(`/vpn/${ENVIRONMENT}/automation/pending_disassociation`);
 
       // Send failure notification
+      const envStyle = getEnvironmentStyle();
+
       await slack.sendSlackNotification({
-        text: `⚠️ VPN ${ENVIRONMENT} disassociation cancelled`,
+        text: `⚠️ VPN Disassociation Cancelled - ${envStyle.titleSuffix}`,
         attachments: [{
-          color: 'warning',
+          color: envStyle.color,
           fields: [
-            { title: 'Environment', value: ENVIRONMENT, short: true },
+            { title: `${envStyle.emoji} Environment`, value: envStyle.name, short: true },
             { title: 'State', value: 'Still associated', short: true },
             { title: 'Started By', value: pending.startedBy || 'unknown', short: true },
             { title: 'Note', value: 'VPN remains open', short: false }
@@ -1239,12 +1333,14 @@ async function checkAndNotifyDisassociationCompletion(status: any): Promise<{ no
       // Clear pending disassociation due to timeout
       await stateStore.deleteParameter(`/vpn/${ENVIRONMENT}/automation/pending_disassociation`);
 
+      const envStyle = getEnvironmentStyle();
+
       await slack.sendSlackNotification({
-        text: `⚠️ VPN ${ENVIRONMENT} disassociation timed out`,
+        text: `⚠️ VPN Disassociation Timed Out - ${envStyle.titleSuffix}`,
         attachments: [{
-          color: 'warning',
+          color: envStyle.color,
           fields: [
-            { title: 'Environment', value: ENVIRONMENT, short: true },
+            { title: `${envStyle.emoji} Environment`, value: envStyle.name, short: true },
             { title: 'Current State', value: status.associationState || 'unknown', short: true },
             { title: 'Duration', value: `${durationMinutes} minutes`, short: true },
             { title: '⚠️ Action Required', value: 'Please check status manually with `/vpn check` or AWS Console. No further automatic notifications will be sent.', short: false }
@@ -1260,13 +1356,13 @@ async function checkAndNotifyDisassociationCompletion(status: any): Promise<{ no
     // Still in progress, not yet timed out - send progress notification
     console.log(`VPN disassociation still in progress: ${status.associationState} (${durationMinutes}m elapsed)`);
 
-    const environmentEmoji = ENVIRONMENT === 'production' ? '🚀' : '🔧';
+    const envStyle = getEnvironmentStyle();
     await slack.sendSlackNotification({
-      text: `⏳ VPN ${ENVIRONMENT} still disassociating... (${durationMinutes} minute${durationMinutes !== 1 ? 's' : ''} elapsed)`,
+      text: `⏳ VPN Still Disassociating - ${envStyle.titleSuffix}`,
       attachments: [{
-        color: 'warning',
+        color: envStyle.color,
         fields: [
-          { title: `${environmentEmoji} Environment`, value: ENVIRONMENT, short: true },
+          { title: `${envStyle.emoji} Environment`, value: envStyle.name, short: true },
           { title: '🔄 Status', value: 'Disassociating...', short: true },
           { title: '⏱️ Elapsed Time', value: `${durationMinutes} minute${durationMinutes !== 1 ? 's' : ''}`, short: true },
           { title: '👤 Started By', value: pending.startedBy || 'unknown', short: true }
@@ -1350,16 +1446,19 @@ async function checkAndHandlePendingClose(): Promise<{ handled: boolean; status:
 
         // Send Slack notification only on odd retry attempts (1, 3, 5...)
         // to reduce notification noise while still keeping users informed
-        if (pendingClose.attempts % 2 === 1) {
+        if (pendingClose.attempts % SOFT_CLOSE_NOTIFICATION_FREQUENCY === 1) {
           const noteMessage = hasActiveTraffic
             ? 'Respecting active connections with recent traffic'
             : `Connections idle for ${idleMinutes}min (will auto-close at ${SOFT_CLOSE_IDLE_THRESHOLD_MINUTES}min of inactivity)`;
 
+          const envStyle = getEnvironmentStyle();
+
           await slack.sendSlackNotification({
-            text: `⏳ VPN ${ENVIRONMENT} close delayed again`,
+            text: `⏳ VPN Close Delayed - ${envStyle.titleSuffix}`,
             attachments: [{
-              color: 'warning',
+              color: envStyle.color,
               fields: [
+                { title: `${envStyle.emoji} Environment`, value: envStyle.name, short: true },
                 { title: '👥 Connections', value: status.activeConnections.toString(), short: true },
                 { title: '👤 Users', value: usernames, short: true },
                 { title: '📊 Traffic Status', value: trafficStatusStr, short: true },
@@ -1401,11 +1500,12 @@ async function checkAndHandlePendingClose(): Promise<{ handled: boolean; status:
 
       // Send success notification
       const closeTimeStr = new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });
+      const envStyle = getEnvironmentStyle();
 
       // Build notification fields
       const notificationFields = [
+        { title: `${envStyle.emoji} Environment`, value: envStyle.name, short: true },
         { title: '🕤 Time', value: closeTimeStr, short: true },
-        { title: '📍 Environment', value: ENVIRONMENT, short: true },
         { title: '🔄 Retry Attempts', value: pendingClose.attempts.toString(), short: true },
         { title: '📅 Original Reason', value: pendingClose.reason === 'weekend' ? 'Weekend close' : 'Scheduled close', short: true }
       ];
@@ -1426,9 +1526,9 @@ async function checkAndHandlePendingClose(): Promise<{ handled: boolean; status:
       );
 
       await slack.sendSlackNotification({
-        text: `🌙 VPN ${ENVIRONMENT} soft close completed`,
+        text: `🌙 VPN Soft Close Completed - ${envStyle.titleSuffix}`,
         attachments: [{
-          color: '#36a64f',
+          color: envStyle.color,
           fields: notificationFields
         }]
       });
@@ -1443,13 +1543,15 @@ async function checkAndHandlePendingClose(): Promise<{ handled: boolean; status:
       console.error('Failed to close VPN during soft close retry:', closeError);
 
       // Send error notification
+      const envStyle = getEnvironmentStyle();
+
       await slack.sendSlackNotification({
-        text: `❌ VPN ${ENVIRONMENT} soft close failed`,
+        text: `❌ VPN Soft Close Failed - ${envStyle.titleSuffix}`,
         attachments: [{
-          color: 'danger',
+          color: envStyle.color,
           fields: [
+            { title: `${envStyle.emoji} Environment`, value: envStyle.name, short: true },
             { title: '🕤 Time', value: new Date().toISOString(), short: true },
-            { title: '📍 Environment', value: ENVIRONMENT, short: true },
             { title: '🔄 Retry Attempt', value: pendingClose.attempts.toString(), short: true },
             { title: '❌ Error', value: closeError instanceof Error ? closeError.message : 'Unknown error', short: false }
           ]
@@ -1488,5 +1590,235 @@ async function recordBusinessHoursNotification(today: string): Promise<void> {
     console.log(`Recorded business hours notification for ${today}`);
   } catch (error) {
     console.error('Failed to record business hours notification:', error);
+  }
+}
+
+// ============================================================================
+// Weekend Active Connection Notification Functions
+// ============================================================================
+
+/**
+ * Read weekend notification state from SSM
+ */
+async function readWeekendNotificationState(): Promise<WeekendNotificationState> {
+  try {
+    const stateJson = await stateStore.readParameter(
+      `/vpn/${ENVIRONMENT}/automation/notification/weekend_connection_state`
+    );
+
+    if (stateJson) {
+      try {
+        return JSON.parse(stateJson);
+      } catch (parseError) {
+        console.error('Failed to parse weekend notification state, resetting:', parseError);
+        await publishMetric('WeekendStateParseErrors', 1);
+        // Fall through to return default state
+      }
+    }
+  } catch (error) {
+    console.log('No existing weekend notification state found, creating new');
+  }
+
+  return {
+    connections: {},
+    lastUpdated: new Date().toISOString()
+  };
+}
+
+/**
+ * Write weekend notification state to SSM
+ */
+async function writeWeekendNotificationState(state: WeekendNotificationState): Promise<void> {
+  try {
+    state.lastUpdated = new Date().toISOString();
+    await stateStore.writeParameter(
+      `/vpn/${ENVIRONMENT}/automation/notification/weekend_connection_state`,
+      JSON.stringify(state)
+    );
+    console.log('Updated weekend notification state');
+  } catch (error) {
+    console.error('Failed to write weekend notification state:', error);
+  }
+}
+
+/**
+ * Format bytes to human-readable string
+ */
+function formatBytes(bytes: number): string {
+  if (bytes <= 0) return '0 B';  // Guard against zero and negative values
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  const value = bytes / Math.pow(k, i);
+  return `${value.toFixed(value >= 100 ? 0 : value >= 10 ? 1 : 2)} ${sizes[i]}`;
+}
+
+/**
+ * Send Slack notification for a long-running weekend connection
+ */
+async function sendWeekendConnectionNotification(
+  connection: VpnConnectionDetail,
+  durationHours: number,
+  notificationCount: number
+): Promise<void> {
+  // Use centralized environment styling
+  const envStyle = getEnvironmentStyle();
+
+  // Calculate estimated cost for this connection's duration
+  const estimatedCost = (durationHours * CONNECTION_COST_PER_HOUR).toFixed(2);
+
+  // Format duration
+  const hours = Math.floor(durationHours);
+  const minutes = Math.floor((durationHours - hours) * 60);
+  const durationStr = minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+
+  // Get current time in configured timezone
+  const currentTime = new Date().toLocaleString('zh-TW', { timeZone: BUSINESS_HOURS_TIMEZONE });
+
+  // Build notification title with environment
+  const notificationTitle = notificationCount === 1
+    ? `📅 Weekend VPN Connection Alert - ${envStyle.titleSuffix}`
+    : `📅 Weekend VPN Connection Alert #${notificationCount} - ${envStyle.titleSuffix}`;
+
+  await slack.sendSlackNotification({
+    text: notificationTitle,
+    attachments: [{
+      color: envStyle.color,
+      fields: [
+        {
+          title: `${envStyle.emoji} Environment`,
+          value: envStyle.name,
+          short: true
+        },
+        {
+          title: '👤 User',
+          value: connection.username,
+          short: true
+        },
+        {
+          title: '⏱️ Connection Duration',
+          value: durationStr,
+          short: true
+        },
+        {
+          title: '📊 Total Traffic',
+          value: `↓ ${formatBytes(connection.egressBytes)}  ↑ ${formatBytes(connection.ingressBytes)}`,
+          short: true
+        },
+        {
+          title: '💰 Estimated Connection Cost',
+          value: `$${estimatedCost} ($${CONNECTION_COST_PER_HOUR.toFixed(2)}/hour)`,
+          short: true
+        },
+        {
+          title: '🕐 Current Time',
+          value: `${currentTime} (${BUSINESS_HOURS_TIMEZONE})`,
+          short: true
+        },
+        {
+          title: '💡 Cost Awareness',
+          value: 'This connection has been active for 3+ hours on a weekend. Please disconnect if not actively using the VPN to save costs.',
+          short: false
+        }
+      ],
+      footer: 'VPN Weekend Cost Awareness System',
+      ts: Math.floor(Date.now() / 1000)
+    }]
+  });
+
+  console.log(`Sent weekend connection notification #${notificationCount} for ${connection.username} (${durationStr}, $${estimatedCost})`);
+}
+
+/**
+ * Check and send weekend notifications for long-running connections
+ *
+ * Logic:
+ * 1. Only runs on weekends (Saturday/Sunday)
+ * 2. First notification: After connection has been active 3+ hours
+ * 3. Repeat notifications: Every 1 hour after first notification
+ * 4. Cleanup: Remove entries for closed connections
+ */
+async function checkAndSendWeekendNotifications(
+  connections: VpnConnectionDetail[]
+): Promise<void> {
+  // Only run on weekends
+  if (!isWeekend()) {
+    return;
+  }
+
+  const now = new Date();
+  const nowIso = now.toISOString();
+
+  // Read current notification state
+  const notificationState = await readWeekendNotificationState();
+  let stateModified = false;
+
+  // Get current active connection IDs for cleanup
+  const activeConnectionIds = new Set(connections.map(c => c.connectionId));
+
+  // Cleanup: Remove entries for connections that no longer exist
+  for (const connectionId of Object.keys(notificationState.connections)) {
+    if (!activeConnectionIds.has(connectionId)) {
+      console.log(`Removing weekend notification tracking for closed connection: ${connectionId}`);
+      delete notificationState.connections[connectionId];
+      stateModified = true;
+    }
+  }
+
+  // Process each active connection
+  for (const connection of connections) {
+    const durationHours = getConnectionDurationHours(connection.establishedTime);
+    const existingEntry = notificationState.connections[connection.connectionId];
+
+    // Check if connection qualifies for notification
+    if (durationHours < WEEKEND_NOTIFICATION_FIRST_HOURS) {
+      // Connection not old enough yet - skip
+      continue;
+    }
+
+    let shouldNotify = false;
+    let notificationCount = 1;
+
+    if (!existingEntry) {
+      // First time seeing this long-running connection - send first notification
+      shouldNotify = true;
+      notificationState.connections[connection.connectionId] = {
+        username: connection.username,
+        firstNotificationTime: nowIso,
+        lastNotificationTime: nowIso,
+        notificationCount: 1
+      };
+      stateModified = true;
+
+      console.log(`Weekend notification: First alert for ${connection.username} (${durationHours.toFixed(1)}h)`);
+    } else {
+      // Check if enough time has passed since last notification
+      const lastNotification = new Date(existingEntry.lastNotificationTime);
+      const hoursSinceLastNotification = (now.getTime() - lastNotification.getTime()) / (1000 * 60 * 60);
+
+      if (hoursSinceLastNotification >= WEEKEND_NOTIFICATION_INTERVAL_HOURS) {
+        shouldNotify = true;
+        existingEntry.lastNotificationTime = nowIso;
+        existingEntry.notificationCount++;
+        notificationCount = existingEntry.notificationCount;
+        stateModified = true;
+
+        console.log(`Weekend notification: Repeat alert #${notificationCount} for ${connection.username} (${durationHours.toFixed(1)}h)`);
+      }
+    }
+
+    if (shouldNotify) {
+      try {
+        await sendWeekendConnectionNotification(connection, durationHours, notificationCount);
+        await publishMetric('WeekendConnectionNotifications', 1);
+      } catch (notifyError) {
+        console.error(`Failed to send weekend notification for ${connection.username}:`, notifyError);
+      }
+    }
+  }
+
+  // Save state if modified
+  if (stateModified) {
+    await writeWeekendNotificationState(notificationState);
   }
 }
