@@ -29,8 +29,15 @@ REGION="${AWS_REGION:-us-east-1}"
 WEBHOOK_ENV="${WEBHOOK_ENV:-staging}"
 WEBHOOK_PROFILE="${WEBHOOK_PROFILE:-$WEBHOOK_ENV}"
 
-# 要監控的環境： "環境名:AWS profile"
-ENVIRONMENTS=("staging:staging" "production:production")
+# 要監控的環境： "環境名:AWS profile"（假設本機 AWS profile 名與環境名相同）
+# 可用環境變數 VPN_CERT_ENVS 覆寫（空白分隔），例：VPN_CERT_ENVS="staging:staging"
+# 只裝單一 profile 的機器可藉此避免每週一收到另一環境的「查詢失敗」噪音。
+if [ -n "${VPN_CERT_ENVS:-}" ]; then
+    # shellcheck disable=SC2206
+    ENVIRONMENTS=($VPN_CERT_ENVS)
+else
+    ENVIRONMENTS=("staging:staging" "production:production")
+fi
 
 # --- 路徑 ---
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -178,5 +185,9 @@ if [ "$level" = "CRITICAL" ] || [ "$level" = "WARNING" ]; then
 fi
 
 log "等級=${level}，發送 Slack"
-send_slack "$msg"
-log "===== 結束 ====="
+if send_slack "$msg"; then
+    log "===== 結束 ====="
+else
+    log "===== 結束（Slack 發送失敗，alert 未送達）====="
+    exit 1
+fi
