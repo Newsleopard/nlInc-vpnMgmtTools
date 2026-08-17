@@ -28,6 +28,10 @@ LAUNCHD_LOG_DIR="$HOME/Library/Logs/newsleopard-vpn"
 uninstall() {
     launchctl bootout "$GUI/$LABEL" 2>/dev/null || launchctl unload "$PLIST" 2>/dev/null || true
     rm -f "$PLIST"
+    # 順手清掉驗證用的影子 job：正常情況下 trap 會清，但 SIGKILL／當機時不會，
+    # 殘留的影子會一直活到下次登入。
+    launchctl bootout "$GUI/${LABEL}.verify" 2>/dev/null || true
+    rm -f "$LAUNCHD_LOG_DIR/${LABEL}.verify.plist"
     echo "✅ 已移除排程與 plist：$PLIST"
 }
 
@@ -52,11 +56,17 @@ else
 fi
 
 missing_conf=""
-missing_certs=""
+client_cert_count=0
 for _entry in "${_install_envs[@]}"; do
     _e="${_entry%%:*}"
     [ -f "$PROJECT_ROOT/configs/$_e/vpn_endpoint.conf" ] || missing_conf="$missing_conf $_e"
-    [ -d "$PROJECT_ROOT/certs/$_e/users" ] || missing_certs="$missing_certs $_e"
+    # 數實際會被檢查到的憑證張數，不是「目錄在不在」——「目錄存在但裡面只有 ca.crt」
+    # 對監控來說跟目錄不存在完全一樣（都會判成失明），卻不會被目錄檢查抓到。
+    for _c in "$PROJECT_ROOT/certs/$_e/users"/*.crt; do
+        [ -e "$_c" ] || continue
+        [ "$(basename "$_c")" = "ca.crt" ] && continue
+        client_cert_count=$(( client_cert_count + 1 ))
+    done
 done
 
 if [ -n "$missing_conf" ]; then
@@ -67,10 +77,11 @@ if [ -n "$missing_conf" ]; then
     exit 1
 fi
 
-# certs/ 缺少只擋不住，但一定要講出來 —— 它的失效方向是「安靜地什麼都不檢查」。
-if [ -n "$missing_certs" ] && [ "${SKIP_CLIENT_CERTS:-0}" != "1" ]; then
-    echo "⚠️ 找不到 client 憑證目錄：${missing_certs}（certs/<env>/users）"
-    echo "   監控會照常安裝，但 client 憑證那一軸在這台機器上不會檢查到任何東西。"
+# 零張 client 憑證擋不住安裝，但一定要把後果講白 —— 監控會判成「失明」而每天叫。
+if [ "$client_cert_count" -eq 0 ] && [ "${SKIP_CLIENT_CERTS:-0}" != "1" ]; then
+    echo "⚠️ 這個 checkout 裡沒有任何 client 憑證（certs/<env>/users/*.crt，ca.crt 不算）"
+    echo "   監控會照常安裝，但 client 憑證那一軸看不到任何東西 → 判定為失明，"
+    echo "   從明天起【每天】會收到一則 🔴 FAILURE，直到補上憑證為止。"
     echo "   若這台機器本來就不該有 certs/，請改用 SKIP_CLIENT_CERTS=1 安裝，讓意圖留下紀錄。"
 fi
 mkdir -p "$HOME/Library/LaunchAgents" "$LOG_DIR" "$LAUNCHD_LOG_DIR"
@@ -87,12 +98,23 @@ rm -f "$LOG_DIR/cert_monitor.launchd.out" "$LOG_DIR/cert_monitor.launchd.err"
 # $1=plist 路徑 $2=label $3=no_slack(0|1) $4=stdout/stderr 檔名前綴
 write_plist() {
     local plist_path="$1" label="$2" no_slack="$3" out_prefix="$4"
-    local extra_env=""
-    [ "$no_slack" = "1" ] && extra_env+=$'        <key>NO_SLACK</key>\n        <string>1</string>\n'
-    # 這兩個是 check_cert_expiry.sh 的設定開關；只在本機有設時才寫進 plist，
-    # 否則排程跑起來會忽略操作者在 shell 裡驗證過的設定（launchd 不繼承 shell 環境）。
-    [ -n "${SKIP_CLIENT_CERTS:-}" ] && extra_env+=$'        <key>SKIP_CLIENT_CERTS</key>\n        <string>'"${SKIP_CLIENT_CERTS}"$'</string>\n'
-    [ -n "${VPN_CERT_ENVS:-}" ] && extra_env+=$'        <key>VPN_CERT_ENVS</key>\n        <string>'"${VPN_CERT_ENVS}"$'</string>\n'
+    local extra_env="" k v
+    if [ "$no_slack" = "1" ]; then
+        extra_env+=$'        <key>NO_SLACK</key>\n        <string>1</string>\n'
+    fi
+    # launchd 不繼承 shell 環境，所以 check_cert_expiry.sh 的每一個可覆寫參數都必須
+    # 明確寫進 plist，否則會出現最惡劣的那種落差：操作者用
+    # `WEBHOOK_ENV=production ./install_cert_monitor.sh --test` 看到訊息送進 production
+    # channel、認定設定生效，但排程隔天起全部送回預設值。要嘛全部帶，要嘛一個都別帶。
+    for k in WARN_DAYS CRIT_DAYS AWS_REGION WEBHOOK_ENV WEBHOOK_PROFILE \
+             SKIP_CLIENT_CERTS VPN_CERT_ENVS; do
+        eval "v=\${$k:-}"
+        [ -n "$v" ] || continue
+        # XML 逃脫：值裡有 & 或 < 會產生無效 plist（失效方向是大聲的 —— bootstrap
+        # 會失敗、exit 1 —— 但沒理由讓它發生）
+        v="${v//&/&amp;}"; v="${v//</&lt;}"; v="${v//>/&gt;}"
+        extra_env+="        <key>${k}</key>"$'\n'"        <string>${v}</string>"$'\n'
+    done
     cat > "$plist_path" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -146,6 +168,11 @@ if ! launchctl bootstrap "$GUI" "$VERIFY_PLIST" 2>&1; then
     echo "❌ 影子 job 載入失敗 —— launchd 連這份設定都收不下，正式 plist 不會被安裝。"
     exit 1
 fi
+# 先記下 log 目前的行數：底下的覆蓋率檢查只能看「這一輪新增的行」。
+# 掃整個歷史 log 的話，任何跑過一次的機器都會永遠通過這個檢查（no-op）。
+log_before=$(wc -l < "$LOG_DIR/cert_monitor.log" 2>/dev/null | tr -d ' ') || log_before=0
+[ -n "${log_before:-}" ] || log_before=0
+
 launchctl kickstart -p "$GUI/$VERIFY_LABEL" >/dev/null 2>&1 || true
 
 # 等到 launchd 記下 last exit code 才算跑完。
@@ -174,8 +201,12 @@ fi
 
 # 第二段驗證：exit 0 只證明「行程跑完了」，不證明它看得見任何東西。
 # NO_SLACK 之下即使全部查詢失敗也是 exit 0，所以再看它這一輪的實際產出。
-covered=$(grep -c '剩餘' "$LOG_DIR/cert_monitor.log" 2>/dev/null || echo 0)
-if [ "${covered:-0}" -eq 0 ]; then
+# ⚠️ `grep -c` 沒命中時會**同時**印 0 並 exit 1，所以寫成 `$(grep -c … || echo 0)`
+# 會得到 "0\n0"，`[ -eq ]` 直接語法錯誤 —— 也就是這個檢查在它唯一該觸發的那一格
+# 反而不會觸發。用 `|| true` 保留 grep 自己印的 0。
+covered=$(tail -n "+$(( log_before + 1 ))" "$LOG_DIR/cert_monitor.log" 2>/dev/null | grep -c '剩餘') || true
+[ -n "${covered:-}" ] || covered=0
+if [ "$covered" -eq 0 ]; then
     echo "⚠️ 注意：這一輪沒有任何憑證被實際讀到（log 沒有『剩餘 N 天』）。"
     echo "   job 起得來，但它可能什麼都看不到 —— 請檢查 $LOG_DIR/cert_monitor.log"
 fi
@@ -187,12 +218,22 @@ trap - EXIT
 
 # --- 驗證過了才安裝正式排程（永遠不帶 NO_SLACK）------------------------
 write_plist "$PLIST" "$LABEL" 0 "$LAUNCHD_LOG_DIR/cert_monitor.launchd"
+
+# ⛔ 斷言必須在 bootout/bootstrap **之前**：放在後面的話，真的觸發時那個含
+# NO_SLACK 的 job 已經上線，而 trap 也已經解掉，exit 1 不會清掉任何東西 ——
+# 剛好留下這整個 commit 想消滅的狀態。
+if grep -q 'NO_SLACK' "$PLIST"; then
+    echo "❌ 內部錯誤：正式 plist 竟然含 NO_SLACK，未安裝、已中止"
+    rm -f "$PLIST"
+    exit 1
+fi
+
 launchctl bootout "$GUI/$LABEL" 2>/dev/null || launchctl unload "$PLIST" 2>/dev/null || true
 launchctl bootstrap "$GUI" "$PLIST" 2>/dev/null || launchctl load -w "$PLIST" 2>/dev/null || {
-    echo "⚠️ launchctl 載入失敗（plist 已寫入 ${PLIST}），請手動檢查：launchctl bootstrap $GUI $PLIST"
+    echo "❌ launchctl 載入失敗 —— 舊的排程已經被移除，這台機器目前【完全沒有監控】。"
+    echo "   plist 已寫入 ${PLIST}，請手動執行：launchctl bootstrap $GUI $PLIST"
     exit 1
 }
-grep -q 'NO_SLACK' "$PLIST" && { echo "❌ 內部錯誤：正式 plist 竟然含 NO_SLACK，已中止"; exit 1; }
 
 echo "📝 已產生 plist：$PLIST"
 echo "✅ 已驗證 launchd 可以啟動此設定並執行完成（exit 0），排程已安裝（每天 10:00）"

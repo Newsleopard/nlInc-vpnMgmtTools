@@ -56,7 +56,8 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 LOG_DIR="$PROJECT_ROOT/logs"
 # 建不出 log 目錄就必須大聲死掉：沒有 set -e，log() 會安靜地什麼都不寫，
 # 腳本照樣 exit 0 —— 那正是這支監控壞掉一個多月沒人發現的形狀。
-# 78 = EX_CONFIG，是 launchd 唯一會記下來的訊號。
+# 用 78（EX_CONFIG）是為了對上本機歷史症狀、一眼認得出來 ——
+# 不是因為 launchd 只記得住 78，它任何 exit code 都會記在 last exit code。
 mkdir -p "$LOG_DIR" || { echo "無法建立 log 目錄：$LOG_DIR" >&2; exit 78; }
 LOG_FILE="$LOG_DIR/cert_monitor.log"
 
@@ -247,6 +248,7 @@ fi
 client_blind=0
 if [ "$SKIP_CLIENT_CERTS" != "1" ] && [ "$client_checked" -eq 0 ]; then
     client_blind=1
+    status_lines+="• ⚠️ client 憑證軸失明 —— 這台機器看不到任何 client 憑證"$'\n'
 fi
 
 weekday=$(date +%u)   # 1=Mon .. 7=Sun
@@ -256,14 +258,18 @@ dom=$(date +%d)       # 01..31
 level=""
 if [ "$fail_count" -ge "$total" ]; then
     level="FAILURE"                                              # server 全部查詢失敗 → 每天叫
-elif [ "$client_blind" = "1" ]; then
-    level="FAILURE"                                              # client 軸一張都沒看到 → 每天叫
 elif [ "$min_days" -le "$CRIT_DAYS" ]; then
     level="CRITICAL"                                            # 緊急 → 每天
 elif [ "$min_days" -le "$WARN_DAYS" ] && [ "$weekday" = "1" ]; then
     level="WARNING"                                             # 接近到期 → 每週一
 elif [ "$weekday" = "1" ] && { [ "$fail_count" -gt 0 ] || [ "$client_fail" -gt 0 ]; }; then
     level="WARNING"                                             # 部分查詢失敗（server 或 client）→ 每週一
+elif [ "$client_blind" = "1" ]; then
+    # ⛔ 這一條必須排在 CRITICAL/WARNING **之後**：client 軸失明是「覆蓋率」訊號，
+    # 不是「查詢結果」訊號。放在前面會把「server 憑證剩 3 天」的告警標題改寫成
+    # 「查詢失敗，請檢查 AWS 憑證/網路」—— 事實錯誤，而且會把 on-call 導向錯的
+    # runbook。失明本身已經無條件寫進 status_lines，不會因為排在後面而消失。
+    level="FAILURE"                                             # 沒有其他等級時才由它升起 → 每天叫
 elif [ "$dom" = "01" ]; then
     level="HEARTBEAT"                                           # 月初心跳
 fi
@@ -287,7 +293,10 @@ case "$level" in
 esac
 
 msg="${header}"$'\n'"${status_lines}"
-if [ "$level" = "CRITICAL" ] || [ "$level" = "WARNING" ]; then
+# 續期指示掛在「真的有憑證快到期」這個事實上，不是掛在 level 上。
+# 掛 level 的話，同一個「剩 3 天」在 FAILURE 標題下會拿不到 runbook —— 而那正是
+# on-call 最需要它的時候。
+if [ "$min_days" -le "$WARN_DAYS" ]; then
     msg+=$'\n'"server 憑證續期：用現有 CA 重簽 → 匯入*新* ACM ARN → modify-client-vpn-endpoint（同 ARN reimport 無效）。詳見 memory: vpn-server-cert-renewal。"
     msg+=$'\n'"client 憑證續期：重新產 CSR → admin-tools/sign_csr.sh 簽 → 換掉 .ovpn 的 <cert>/<key>，server 端不用動。詳見 memory: vpn-client-cert-renewal。"
 fi
