@@ -13,7 +13,7 @@ jest.mock('aws-sdk', () => ({
 }));
 
 // Mock shared utilities
-jest.mock('/opt/stateStore', () => ({
+jest.mock('/opt/nodejs/stateStore', () => ({
   validateParameterStore: jest.fn().mockResolvedValue(true),
   readState: jest.fn().mockResolvedValue({
     associated: true,
@@ -44,7 +44,7 @@ jest.mock('/opt/stateStore', () => ({
   writeParameter: jest.fn().mockResolvedValue(undefined)
 }));
 
-jest.mock('/opt/vpnManager', () => ({
+jest.mock('/opt/nodejs/vpnManager', () => ({
   validateEndpoint: jest.fn().mockResolvedValue(true),
   fetchStatus: jest.fn().mockResolvedValue({
     associated: true,
@@ -57,7 +57,7 @@ jest.mock('/opt/vpnManager', () => ({
   updateLastActivity: jest.fn().mockResolvedValue(undefined)
 }));
 
-jest.mock('/opt/slack', () => ({
+jest.mock('/opt/nodejs/slack', () => ({
   sendSlackAlert: jest.fn().mockResolvedValue(undefined),
   sendSlackNotification: jest.fn().mockResolvedValue(undefined)
 }));
@@ -102,7 +102,7 @@ describe('Epic 3.2: Automatic Cost-Saving Actions Integration Tests', () => {
 
   describe('Enhanced Cost Savings Calculation', () => {
     it('should calculate regional cost savings with multiple subnets', async () => {
-      const mockStateStore = require('/opt/stateStore');
+      const mockStateStore = require('/opt/nodejs/stateStore');
       mockStateStore.readConfig.mockResolvedValue({
         ENDPOINT_ID: 'cvpn-endpoint-test',
         SUBNET_ID: 'subnet-1,subnet-2,subnet-3' // 3 subnets
@@ -133,7 +133,7 @@ describe('Epic 3.2: Automatic Cost-Saving Actions Integration Tests', () => {
     });
 
     it('should track cumulative savings over time', async () => {
-      const mockStateStore = require('/opt/stateStore');
+      const mockStateStore = require('/opt/nodejs/stateStore');
       
       await handler(mockScheduledEvent, mockContext);
 
@@ -156,7 +156,7 @@ describe('Epic 3.2: Automatic Cost-Saving Actions Integration Tests', () => {
     });
 
     it('should track daily savings separately', async () => {
-      const mockStateStore = require('/opt/stateStore');
+      const mockStateStore = require('/opt/nodejs/stateStore');
       const today = new Date().toISOString().split('T')[0];
       
       await handler(mockScheduledEvent, mockContext);
@@ -185,8 +185,8 @@ describe('Epic 3.2: Automatic Cost-Saving Actions Integration Tests', () => {
 
   describe('Enhanced Safety Mechanisms', () => {
     it('should respect administrative override', async () => {
-      const mockStateStore = require('/opt/stateStore');
-      const mockSlack = require('/opt/slack');
+      const mockStateStore = require('/opt/nodejs/stateStore');
+      const mockSlack = require('/opt/nodejs/slack');
       
       // Mock admin override exists
       mockStateStore.readParameter.mockImplementation((key: string) => {
@@ -199,7 +199,7 @@ describe('Epic 3.2: Automatic Cost-Saving Actions Integration Tests', () => {
       await handler(mockScheduledEvent, mockContext);
 
       // Verify no disassociation occurred
-      const mockVpnManager = require('/opt/vpnManager');
+      const mockVpnManager = require('/opt/nodejs/vpnManager');
       expect(mockVpnManager.disassociateSubnets).not.toHaveBeenCalled();
 
       // Verify administrative override notification
@@ -227,7 +227,7 @@ describe('Epic 3.2: Automatic Cost-Saving Actions Integration Tests', () => {
       const mockDate = new Date('2024-06-20T14:00:00Z'); // Thursday 2 PM UTC
       jest.spyOn(global, 'Date').mockImplementation(() => mockDate as any);
 
-      const mockSlack = require('/opt/slack');
+      const mockSlack = require('/opt/nodejs/slack');
       
       await handler(mockScheduledEvent, mockContext);
 
@@ -256,8 +256,8 @@ describe('Epic 3.2: Automatic Cost-Saving Actions Integration Tests', () => {
     });
 
     it('should provide enhanced cooldown protection with context', async () => {
-      const mockStateStore = require('/opt/stateStore');
-      const mockSlack = require('/opt/slack');
+      const mockStateStore = require('/opt/nodejs/stateStore');
+      const mockSlack = require('/opt/nodejs/slack');
       
       // Mock cooldown is active (started 10 minutes ago)
       const cooldownStart = new Date(Date.now() - 10 * 60 * 1000);
@@ -289,8 +289,8 @@ describe('Epic 3.2: Automatic Cost-Saving Actions Integration Tests', () => {
     });
 
     it('should provide enhanced manual activity detection with notification', async () => {
-      const mockStateStore = require('/opt/stateStore');
-      const mockSlack = require('/opt/slack');
+      const mockStateStore = require('/opt/nodejs/stateStore');
+      const mockSlack = require('/opt/nodejs/slack');
       
       // Mock recent manual activity (5 minutes ago)
       const recentActivity = new Date(Date.now() - 5 * 60 * 1000);
@@ -324,7 +324,7 @@ describe('Epic 3.2: Automatic Cost-Saving Actions Integration Tests', () => {
 
   describe('Enhanced Slack Notifications', () => {
     it('should send comprehensive auto-disassociation notification', async () => {
-      const mockSlack = require('/opt/slack');
+      const mockSlack = require('/opt/nodejs/slack');
       
       await handler(mockScheduledEvent, mockContext);
 
@@ -337,7 +337,7 @@ describe('Epic 3.2: Automatic Cost-Saving Actions Integration Tests', () => {
 
     it('should send different notifications for production vs staging', async () => {
       process.env.ENVIRONMENT = 'production';
-      const mockSlack = require('/opt/slack');
+      const mockSlack = require('/opt/nodejs/slack');
       
       await handler(mockScheduledEvent, mockContext);
 
@@ -398,7 +398,7 @@ describe('Epic 3.2: Automatic Cost-Saving Actions Integration Tests', () => {
 
   describe('Error Handling', () => {
     it('should handle cost calculation errors gracefully', async () => {
-      const mockStateStore = require('/opt/stateStore');
+      const mockStateStore = require('/opt/nodejs/stateStore');
       mockStateStore.readConfig.mockRejectedValue(new Error('Config read failed'));
       
       // Should not throw error
@@ -409,14 +409,14 @@ describe('Epic 3.2: Automatic Cost-Saving Actions Integration Tests', () => {
     });
 
     it('should handle parameter store failures for cost tracking', async () => {
-      const mockStateStore = require('/opt/stateStore');
+      const mockStateStore = require('/opt/nodejs/stateStore');
       mockStateStore.writeParameter.mockRejectedValue(new Error('Write failed'));
       
       // Should not throw error
       await expect(handler(mockScheduledEvent, mockContext)).resolves.not.toThrow();
       
       // Verify operation continues despite storage failure
-      const mockVpnManager = require('/opt/vpnManager');
+      const mockVpnManager = require('/opt/nodejs/vpnManager');
       expect(mockVpnManager.disassociateSubnets).toHaveBeenCalled();
     });
   });
