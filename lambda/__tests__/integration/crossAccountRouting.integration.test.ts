@@ -36,12 +36,12 @@ jest.mock('aws-sdk', () => ({
 }));
 
 // Mock shared utilities
-jest.mock('/opt/stateStore', () => ({
+jest.mock('/opt/nodejs/stateStore', () => ({
   readSlackSigningSecret: jest.fn().mockResolvedValue('test-signing-secret'),
   readSlackWebhook: jest.fn().mockResolvedValue('https://hooks.slack.com/test-webhook')
 }));
 
-jest.mock('/opt/slack', () => ({
+jest.mock('/opt/nodejs/slack', () => ({
   verifySlackSignature: jest.fn().mockReturnValue(true),
   parseSlackCommand: jest.fn().mockImplementation((slackCommand) => ({
     action: 'open',
@@ -90,7 +90,7 @@ describe('Cross-Account Routing Integration Tests', () => {
 
   describe('Local Environment Routing', () => {
     it('should route staging commands to local vpn-control lambda', async () => {
-      const mockSlack = require('/opt/slack');
+      const mockSlack = require('/opt/nodejs/slack');
       mockSlack.parseSlackCommand.mockReturnValue({
         action: 'open',
         environment: 'staging',
@@ -135,7 +135,7 @@ describe('Cross-Account Routing Integration Tests', () => {
 
   describe('Cross-Account Routing', () => {
     it('should route production commands via API Gateway with proper metadata', async () => {
-      const mockSlack = require('/opt/slack');
+      const mockSlack = require('/opt/nodejs/slack');
       mockSlack.parseSlackCommand.mockReturnValue({
         action: 'open',
         environment: 'production',
@@ -233,7 +233,7 @@ describe('Cross-Account Routing Integration Tests', () => {
     });
 
     it('should implement exponential backoff retry logic', async () => {
-      const mockSlack = require('/opt/slack');
+      const mockSlack = require('/opt/nodejs/slack');
       mockSlack.parseSlackCommand.mockReturnValue({
         action: 'close',
         environment: 'production',
@@ -289,7 +289,7 @@ describe('Cross-Account Routing Integration Tests', () => {
     it('should handle configuration validation errors', async () => {
       delete process.env.PRODUCTION_API_ENDPOINT;
 
-      const mockSlack = require('/opt/slack');
+      const mockSlack = require('/opt/nodejs/slack');
       mockSlack.parseSlackCommand.mockReturnValue({
         action: 'open',
         environment: 'production',

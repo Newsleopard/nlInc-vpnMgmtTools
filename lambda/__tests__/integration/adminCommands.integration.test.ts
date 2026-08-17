@@ -14,7 +14,7 @@ jest.mock('aws-sdk', () => ({
 }));
 
 // Mock shared utilities
-jest.mock('/opt/stateStore', () => ({
+jest.mock('/opt/nodejs/stateStore', () => ({
   readParameter: jest.fn().mockImplementation((key: string) => {
     if (key.includes('cumulative_savings/staging')) {
       return Promise.resolve('150.75');
@@ -23,4 +23,495 @@ jest.mock('/opt/stateStore', () => ({
       return Promise.resolve('425.25');
     }
     if (key.includes('daily_savings')) {
-      const today = new Date().toISOString().split('T')[0];\n      if (key.includes(today)) {\n        return Promise.resolve('12.50');\n      }\n    }\n    return Promise.reject(new Error('Parameter not found'));\n  }),\n  writeParameter: jest.fn().mockResolvedValue(undefined)\n}));\n\njest.mock('/opt/vpnManager', () => ({\n  validateEndpoint: jest.fn().mockResolvedValue(true),\n  fetchStatus: jest.fn().mockResolvedValue({\n    associated: true,\n    activeConnections: 2,\n    lastActivity: new Date(),\n    endpointId: 'cvpn-endpoint-test',\n    subnetId: 'subnet-test'\n  }),\n  disassociateSubnets: jest.fn().mockResolvedValue(undefined)\n}));\n\njest.mock('/opt/slack', () => ({\n  sendSlackNotification: jest.fn().mockResolvedValue(undefined)\n}));\n\ndescribe('Epic 3.2: Administrative Commands Integration Tests', () => {\n  const mockContext: Context = {\n    callbackWaitsForEmptyEventLoop: false,\n    functionName: 'vpn-control',\n    functionVersion: '1',\n    invokedFunctionArn: 'arn:aws:lambda:test',\n    memoryLimitInMB: '128',\n    awsRequestId: 'test-request-id',\n    logGroupName: 'test-log-group',\n    logStreamName: 'test-log-stream',\n    getRemainingTimeInMillis: () => 30000,\n    done: jest.fn(),\n    fail: jest.fn(),\n    succeed: jest.fn()\n  };\n\n  beforeEach(() => {\n    jest.clearAllMocks();\n    process.env.ENVIRONMENT = 'staging';\n    process.env.COOLDOWN_MINUTES = '30';\n  });\n\n  describe('Administrative Override Commands', () => {\n    it('should enable administrative override', async () => {\n      const command: VpnCommandRequest = {\n        action: 'admin-override' as any,\n        environment: 'staging',\n        user: 'admin-user',\n        requestId: 'test-override'\n      };\n\n      const event: APIGatewayProxyEvent = {\n        httpMethod: 'POST',\n        path: '/vpn',\n        headers: { 'Content-Type': 'application/json' },\n        body: JSON.stringify(command),\n        isBase64Encoded: false,\n        multiValueHeaders: {},\n        pathParameters: null,\n        queryStringParameters: null,\n        stageVariables: null,\n        requestContext: {} as any,\n        resource: '',\n        multiValueQueryStringParameters: null\n      };\n\n      const result = await handler(event, mockContext);\n      expect(result.statusCode).toBe(200);\n\n      const response = JSON.parse(result.body);\n      expect(response.success).toBe(true);\n      expect(response.message).toContain('Administrative override enabled');\n\n      // Verify parameter was set with expiry\n      const mockStateStore = require('/opt/stateStore');\n      expect(mockStateStore.writeParameter).toHaveBeenCalledWith(\n        '/vpn/automation/admin_override/staging',\n        expect.stringContaining('enabled:expires:')\n      );\n\n      // Verify metric was published\n      expect(mockCloudWatchPutMetric).toHaveBeenCalledWith({\n        Namespace: 'VPN/Automation',\n        MetricData: expect.arrayContaining([\n          expect.objectContaining({\n            MetricName: 'AdminOverrideEnabled',\n            Value: 1\n          })\n        ])\n      });\n\n      // Verify Slack notification\n      const mockSlack = require('/opt/slack');\n      expect(mockSlack.sendSlackNotification).toHaveBeenCalledWith(\n        expect.stringContaining('Administrative Override Enabled'),\n        '#vpn-alerts'\n      );\n    });\n\n    it('should clear administrative override', async () => {\n      const command: VpnCommandRequest = {\n        action: 'admin-clear-override' as any,\n        environment: 'staging',\n        user: 'admin-user',\n        requestId: 'test-clear'\n      };\n\n      const event: APIGatewayProxyEvent = {\n        httpMethod: 'POST',\n        path: '/vpn',\n        headers: { 'Content-Type': 'application/json' },\n        body: JSON.stringify(command),\n        isBase64Encoded: false,\n        multiValueHeaders: {},\n        pathParameters: null,\n        queryStringParameters: null,\n        stageVariables: null,\n        requestContext: {} as any,\n        resource: '',\n        multiValueQueryStringParameters: null\n      };\n\n      const result = await handler(event, mockContext);\n      expect(result.statusCode).toBe(200);\n\n      const response = JSON.parse(result.body);\n      expect(response.success).toBe(true);\n      expect(response.message).toContain('override cleared');\n\n      // Verify parameter was cleared\n      const mockStateStore = require('/opt/stateStore');\n      expect(mockStateStore.writeParameter).toHaveBeenCalledWith(\n        '/vpn/automation/admin_override/staging',\n        ''\n      );\n\n      // Verify metric was published\n      expect(mockCloudWatchPutMetric).toHaveBeenCalledWith({\n        Namespace: 'VPN/Automation',\n        MetricData: expect.arrayContaining([\n          expect.objectContaining({\n            MetricName: 'AdminOverrideCleared',\n            Value: 1\n          })\n        ])\n      });\n    });\n\n    it('should check cooldown status', async () => {\n      const mockStateStore = require('/opt/stateStore');\n      \n      // Mock cooldown active (15 minutes ago)\n      const cooldownStart = new Date(Date.now() - 15 * 60 * 1000);\n      mockStateStore.readParameter.mockImplementation((key: string) => {\n        if (key.includes('cooldown')) {\n          return Promise.resolve(cooldownStart.toISOString());\n        }\n        return Promise.reject(new Error('Not found'));\n      });\n\n      const command: VpnCommandRequest = {\n        action: 'admin-cooldown' as any,\n        environment: 'staging',\n        user: 'admin-user',\n        requestId: 'test-cooldown'\n      };\n\n      const event: APIGatewayProxyEvent = {\n        httpMethod: 'POST',\n        path: '/vpn',\n        headers: { 'Content-Type': 'application/json' },\n        body: JSON.stringify(command),\n        isBase64Encoded: false,\n        multiValueHeaders: {},\n        pathParameters: null,\n        queryStringParameters: null,\n        stageVariables: null,\n        requestContext: {} as any,\n        resource: '',\n        multiValueQueryStringParameters: null\n      };\n\n      const result = await handler(event, mockContext);\n      expect(result.statusCode).toBe(200);\n\n      const response = JSON.parse(result.body);\n      expect(response.success).toBe(true);\n      expect(response.data.cooldownActive).toBe(true);\n      expect(response.data.remainingMinutes).toBe(15); // 30 - 15\n    });\n\n    it('should execute force close with cooldown bypass', async () => {\n      const command: VpnCommandRequest = {\n        action: 'admin-force-close' as any,\n        environment: 'staging',\n        user: 'admin-user',\n        requestId: 'test-force-close'\n      };\n\n      const event: APIGatewayProxyEvent = {\n        httpMethod: 'POST',\n        path: '/vpn',\n        headers: { 'Content-Type': 'application/json' },\n        body: JSON.stringify(command),\n        isBase64Encoded: false,\n        multiValueHeaders: {},\n        pathParameters: null,\n        queryStringParameters: null,\n        stageVariables: null,\n        requestContext: {} as any,\n        resource: '',\n        multiValueQueryStringParameters: null\n      };\n\n      const result = await handler(event, mockContext);\n      expect(result.statusCode).toBe(200);\n\n      const response = JSON.parse(result.body);\n      expect(response.success).toBe(true);\n      expect(response.message).toContain('force closed successfully');\n\n      // Verify VPN was disassociated\n      const mockVpnManager = require('/opt/vpnManager');\n      expect(mockVpnManager.disassociateSubnets).toHaveBeenCalled();\n\n      // Verify cooldown was cleared\n      const mockStateStore = require('/opt/stateStore');\n      expect(mockStateStore.writeParameter).toHaveBeenCalledWith(\n        '/vpn/automation/cooldown/staging',\n        ''\n      );\n\n      // Verify force close metric\n      expect(mockCloudWatchPutMetric).toHaveBeenCalledWith({\n        Namespace: 'VPN/Automation',\n        MetricData: expect.arrayContaining([\n          expect.objectContaining({\n            MetricName: 'AdminForceCloseOperations',\n            Value: 1\n          })\n        ])\n      });\n    });\n  });\n\n  describe('Cost Analysis Commands', () => {\n    it('should generate cost savings report', async () => {\n      const command: VpnCommandRequest = {\n        action: 'cost-savings' as any,\n        environment: 'staging',\n        user: 'user',\n        requestId: 'test-savings'\n      };\n\n      const event: APIGatewayProxyEvent = {\n        httpMethod: 'POST',\n        path: '/vpn',\n        headers: { 'Content-Type': 'application/json' },\n        body: JSON.stringify(command),\n        isBase64Encoded: false,\n        multiValueHeaders: {},\n        pathParameters: null,\n        queryStringParameters: null,\n        stageVariables: null,\n        requestContext: {} as any,\n        resource: '',\n        multiValueQueryStringParameters: null\n      };\n\n      const result = await handler(event, mockContext);\n      expect(result.statusCode).toBe(200);\n\n      const response = JSON.parse(result.body);\n      expect(response.success).toBe(true);\n      expect(response.data.environment).toBe('staging');\n      expect(response.data.cumulativeSavings).toBe('150.75');\n      expect(response.data.todaySavings).toBe('12.50');\n      expect(response.data.currentStatus).toBe('Running');\n      expect(response.data.potentialHourlySavings).toBe('0.10');\n    });\n\n    it('should generate daily cost analysis', async () => {\n      const command: VpnCommandRequest = {\n        action: 'cost-analysis' as any,\n        environment: 'daily' as any, // Using environment field for report type\n        user: 'user',\n        requestId: 'test-daily'\n      };\n\n      const event: APIGatewayProxyEvent = {\n        httpMethod: 'POST',\n        path: '/vpn',\n        headers: { 'Content-Type': 'application/json' },\n        body: JSON.stringify(command),\n        isBase64Encoded: false,\n        multiValueHeaders: {},\n        pathParameters: null,\n        queryStringParameters: null,\n        stageVariables: null,\n        requestContext: {} as any,\n        resource: '',\n        multiValueQueryStringParameters: null\n      };\n\n      const result = await handler(event, mockContext);\n      expect(result.statusCode).toBe(200);\n\n      const response = JSON.parse(result.body);\n      expect(response.success).toBe(true);\n      expect(response.data.reportType).toBe('daily');\n      expect(response.data.data).toHaveLength(7); // Last 7 days\n      expect(response.data.data[0].date).toMatch(/\\d{4}-\\d{2}-\\d{2}/);\n    });\n\n    it('should generate cumulative cost analysis', async () => {\n      const command: VpnCommandRequest = {\n        action: 'cost-analysis' as any,\n        environment: 'cumulative' as any,\n        user: 'user',\n        requestId: 'test-cumulative'\n      };\n\n      const event: APIGatewayProxyEvent = {\n        httpMethod: 'POST',\n        path: '/vpn',\n        headers: { 'Content-Type': 'application/json' },\n        body: JSON.stringify(command),\n        isBase64Encoded: false,\n        multiValueHeaders: {},\n        pathParameters: null,\n        queryStringParameters: null,\n        stageVariables: null,\n        requestContext: {} as any,\n        resource: '',\n        multiValueQueryStringParameters: null\n      };\n\n      const result = await handler(event, mockContext);\n      expect(result.statusCode).toBe(200);\n\n      const response = JSON.parse(result.body);\n      expect(response.success).toBe(true);\n      expect(response.data.reportType).toBe('cumulative');\n      expect(response.data.data.stagingTotal).toBe(150.75);\n      expect(response.data.data.productionTotal).toBe(425.25);\n      expect(response.data.data.grandTotal).toBe(576); // 150.75 + 425.25\n      expect(response.data.data.estimatedMonthlySavings).toBe(17280); // 576 * 30\n    });\n  });\n\n  describe('Command Validation', () => {\n    it('should reject invalid administrative actions', async () => {\n      const command: VpnCommandRequest = {\n        action: 'admin-invalid' as any,\n        environment: 'staging',\n        user: 'admin-user',\n        requestId: 'test-invalid'\n      };\n\n      const event: APIGatewayProxyEvent = {\n        httpMethod: 'POST',\n        path: '/vpn',\n        headers: { 'Content-Type': 'application/json' },\n        body: JSON.stringify(command),\n        isBase64Encoded: false,\n        multiValueHeaders: {},\n        pathParameters: null,\n        queryStringParameters: null,\n        stageVariables: null,\n        requestContext: {} as any,\n        resource: '',\n        multiValueQueryStringParameters: null\n      };\n\n      const result = await handler(event, mockContext);\n      expect(result.statusCode).toBe(400);\n\n      const response = JSON.parse(result.body);\n      expect(response.success).toBe(false);\n      expect(response.error).toContain('Invalid action');\n    });\n\n    it('should validate environment mismatch', async () => {\n      process.env.ENVIRONMENT = 'production';\n      \n      const command: VpnCommandRequest = {\n        action: 'admin-override' as any,\n        environment: 'staging',\n        user: 'admin-user',\n        requestId: 'test-mismatch'\n      };\n\n      const event: APIGatewayProxyEvent = {\n        httpMethod: 'POST',\n        path: '/vpn',\n        headers: { 'Content-Type': 'application/json' },\n        body: JSON.stringify(command),\n        isBase64Encoded: false,\n        multiValueHeaders: {},\n        pathParameters: null,\n        queryStringParameters: null,\n        stageVariables: null,\n        requestContext: {} as any,\n        resource: '',\n        multiValueQueryStringParameters: null\n      };\n\n      const result = await handler(event, mockContext);\n      expect(result.statusCode).toBe(400);\n\n      const response = JSON.parse(result.body);\n      expect(response.success).toBe(false);\n      expect(response.error).toContain('Environment mismatch');\n    });\n  });\n\n  describe('Error Handling', () => {\n    it('should handle parameter store errors gracefully', async () => {\n      const mockStateStore = require('/opt/stateStore');\n      mockStateStore.writeParameter.mockRejectedValue(new Error('Parameter store error'));\n\n      const command: VpnCommandRequest = {\n        action: 'admin-override' as any,\n        environment: 'staging',\n        user: 'admin-user',\n        requestId: 'test-error'\n      };\n\n      const event: APIGatewayProxyEvent = {\n        httpMethod: 'POST',\n        path: '/vpn',\n        headers: { 'Content-Type': 'application/json' },\n        body: JSON.stringify(command),\n        isBase64Encoded: false,\n        multiValueHeaders: {},\n        pathParameters: null,\n        queryStringParameters: null,\n        stageVariables: null,\n        requestContext: {} as any,\n        resource: '',\n        multiValueQueryStringParameters: null\n      };\n\n      const result = await handler(event, mockContext);\n      expect(result.statusCode).toBe(500);\n\n      const response = JSON.parse(result.body);\n      expect(response.success).toBe(false);\n      expect(response.error).toContain('Failed to enable admin override');\n    });\n\n    it('should handle VPN manager errors in force close', async () => {\n      const mockVpnManager = require('/opt/vpnManager');\n      mockVpnManager.disassociateSubnets.mockRejectedValue(new Error('VPN operation failed'));\n\n      const command: VpnCommandRequest = {\n        action: 'admin-force-close' as any,\n        environment: 'staging',\n        user: 'admin-user',\n        requestId: 'test-vpn-error'\n      };\n\n      const event: APIGatewayProxyEvent = {\n        httpMethod: 'POST',\n        path: '/vpn',\n        headers: { 'Content-Type': 'application/json' },\n        body: JSON.stringify(command),\n        isBase64Encoded: false,\n        multiValueHeaders: {},\n        pathParameters: null,\n        queryStringParameters: null,\n        stageVariables: null,\n        requestContext: {} as any,\n        resource: '',\n        multiValueQueryStringParameters: null\n      };\n\n      const result = await handler(event, mockContext);\n      expect(result.statusCode).toBe(500);\n\n      const response = JSON.parse(result.body);\n      expect(response.success).toBe(false);\n      expect(response.error).toContain('Failed to force close');\n    });\n  });\n});"
+      const today = new Date().toISOString().split('T')[0];
+      if (key.includes(today)) {
+        return Promise.resolve('12.50');
+      }
+    }
+    return Promise.reject(new Error('Parameter not found'));
+  }),
+  writeParameter: jest.fn().mockResolvedValue(undefined)
+}));
+
+jest.mock('/opt/nodejs/vpnManager', () => ({
+  validateEndpoint: jest.fn().mockResolvedValue(true),
+  fetchStatus: jest.fn().mockResolvedValue({
+    associated: true,
+    activeConnections: 2,
+    lastActivity: new Date(),
+    endpointId: 'cvpn-endpoint-test',
+    subnetId: 'subnet-test'
+  }),
+  disassociateSubnets: jest.fn().mockResolvedValue(undefined)
+}));
+
+jest.mock('/opt/nodejs/slack', () => ({
+  sendSlackNotification: jest.fn().mockResolvedValue(undefined)
+}));
+
+describe('Epic 3.2: Administrative Commands Integration Tests', () => {
+  const mockContext: Context = {
+    callbackWaitsForEmptyEventLoop: false,
+    functionName: 'vpn-control',
+    functionVersion: '1',
+    invokedFunctionArn: 'arn:aws:lambda:test',
+    memoryLimitInMB: '128',
+    awsRequestId: 'test-request-id',
+    logGroupName: 'test-log-group',
+    logStreamName: 'test-log-stream',
+    getRemainingTimeInMillis: () => 30000,
+    done: jest.fn(),
+    fail: jest.fn(),
+    succeed: jest.fn()
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    process.env.ENVIRONMENT = 'staging';
+    process.env.COOLDOWN_MINUTES = '30';
+  });
+
+  describe('Administrative Override Commands', () => {
+    it('should enable administrative override', async () => {
+      const command: VpnCommandRequest = {
+        action: 'admin-override' as any,
+        environment: 'staging',
+        user: 'admin-user',
+        requestId: 'test-override'
+      };
+
+      const event: APIGatewayProxyEvent = {
+        httpMethod: 'POST',
+        path: '/vpn',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(command),
+        isBase64Encoded: false,
+        multiValueHeaders: {},
+        pathParameters: null,
+        queryStringParameters: null,
+        stageVariables: null,
+        requestContext: {} as any,
+        resource: '',
+        multiValueQueryStringParameters: null
+      };
+
+      const result = await handler(event, mockContext);
+      expect(result.statusCode).toBe(200);
+
+      const response = JSON.parse(result.body);
+      expect(response.success).toBe(true);
+      expect(response.message).toContain('Administrative override enabled');
+
+      // Verify parameter was set with expiry
+      const mockStateStore = require('/opt/nodejs/stateStore');
+      expect(mockStateStore.writeParameter).toHaveBeenCalledWith(
+        '/vpn/automation/admin_override/staging',
+        expect.stringContaining('enabled:expires:')
+      );
+
+      // Verify metric was published
+      expect(mockCloudWatchPutMetric).toHaveBeenCalledWith({
+        Namespace: 'VPN/Automation',
+        MetricData: expect.arrayContaining([
+          expect.objectContaining({
+            MetricName: 'AdminOverrideEnabled',
+            Value: 1
+          })
+        ])
+      });
+
+      // Verify Slack notification
+      const mockSlack = require('/opt/nodejs/slack');
+      expect(mockSlack.sendSlackNotification).toHaveBeenCalledWith(
+        expect.stringContaining('Administrative Override Enabled'),
+        '#vpn-alerts'
+      );
+    });
+
+    it('should clear administrative override', async () => {
+      const command: VpnCommandRequest = {
+        action: 'admin-clear-override' as any,
+        environment: 'staging',
+        user: 'admin-user',
+        requestId: 'test-clear'
+      };
+
+      const event: APIGatewayProxyEvent = {
+        httpMethod: 'POST',
+        path: '/vpn',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(command),
+        isBase64Encoded: false,
+        multiValueHeaders: {},
+        pathParameters: null,
+        queryStringParameters: null,
+        stageVariables: null,
+        requestContext: {} as any,
+        resource: '',
+        multiValueQueryStringParameters: null
+      };
+
+      const result = await handler(event, mockContext);
+      expect(result.statusCode).toBe(200);
+
+      const response = JSON.parse(result.body);
+      expect(response.success).toBe(true);
+      expect(response.message).toContain('override cleared');
+
+      // Verify parameter was cleared
+      const mockStateStore = require('/opt/nodejs/stateStore');
+      expect(mockStateStore.writeParameter).toHaveBeenCalledWith(
+        '/vpn/automation/admin_override/staging',
+        ''
+      );
+
+      // Verify metric was published
+      expect(mockCloudWatchPutMetric).toHaveBeenCalledWith({
+        Namespace: 'VPN/Automation',
+        MetricData: expect.arrayContaining([
+          expect.objectContaining({
+            MetricName: 'AdminOverrideCleared',
+            Value: 1
+          })
+        ])
+      });
+    });
+
+    it('should check cooldown status', async () => {
+      const mockStateStore = require('/opt/nodejs/stateStore');
+      
+      // Mock cooldown active (15 minutes ago)
+      const cooldownStart = new Date(Date.now() - 15 * 60 * 1000);
+      mockStateStore.readParameter.mockImplementation((key: string) => {
+        if (key.includes('cooldown')) {
+          return Promise.resolve(cooldownStart.toISOString());
+        }
+        return Promise.reject(new Error('Not found'));
+      });
+
+      const command: VpnCommandRequest = {
+        action: 'admin-cooldown' as any,
+        environment: 'staging',
+        user: 'admin-user',
+        requestId: 'test-cooldown'
+      };
+
+      const event: APIGatewayProxyEvent = {
+        httpMethod: 'POST',
+        path: '/vpn',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(command),
+        isBase64Encoded: false,
+        multiValueHeaders: {},
+        pathParameters: null,
+        queryStringParameters: null,
+        stageVariables: null,
+        requestContext: {} as any,
+        resource: '',
+        multiValueQueryStringParameters: null
+      };
+
+      const result = await handler(event, mockContext);
+      expect(result.statusCode).toBe(200);
+
+      const response = JSON.parse(result.body);
+      expect(response.success).toBe(true);
+      expect(response.data.cooldownActive).toBe(true);
+      expect(response.data.remainingMinutes).toBe(15); // 30 - 15
+    });
+
+    it('should execute force close with cooldown bypass', async () => {
+      const command: VpnCommandRequest = {
+        action: 'admin-force-close' as any,
+        environment: 'staging',
+        user: 'admin-user',
+        requestId: 'test-force-close'
+      };
+
+      const event: APIGatewayProxyEvent = {
+        httpMethod: 'POST',
+        path: '/vpn',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(command),
+        isBase64Encoded: false,
+        multiValueHeaders: {},
+        pathParameters: null,
+        queryStringParameters: null,
+        stageVariables: null,
+        requestContext: {} as any,
+        resource: '',
+        multiValueQueryStringParameters: null
+      };
+
+      const result = await handler(event, mockContext);
+      expect(result.statusCode).toBe(200);
+
+      const response = JSON.parse(result.body);
+      expect(response.success).toBe(true);
+      expect(response.message).toContain('force closed successfully');
+
+      // Verify VPN was disassociated
+      const mockVpnManager = require('/opt/nodejs/vpnManager');
+      expect(mockVpnManager.disassociateSubnets).toHaveBeenCalled();
+
+      // Verify cooldown was cleared
+      const mockStateStore = require('/opt/nodejs/stateStore');
+      expect(mockStateStore.writeParameter).toHaveBeenCalledWith(
+        '/vpn/automation/cooldown/staging',
+        ''
+      );
+
+      // Verify force close metric
+      expect(mockCloudWatchPutMetric).toHaveBeenCalledWith({
+        Namespace: 'VPN/Automation',
+        MetricData: expect.arrayContaining([
+          expect.objectContaining({
+            MetricName: 'AdminForceCloseOperations',
+            Value: 1
+          })
+        ])
+      });
+    });
+  });
+
+  describe('Cost Analysis Commands', () => {
+    it('should generate cost savings report', async () => {
+      const command: VpnCommandRequest = {
+        action: 'cost-savings' as any,
+        environment: 'staging',
+        user: 'user',
+        requestId: 'test-savings'
+      };
+
+      const event: APIGatewayProxyEvent = {
+        httpMethod: 'POST',
+        path: '/vpn',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(command),
+        isBase64Encoded: false,
+        multiValueHeaders: {},
+        pathParameters: null,
+        queryStringParameters: null,
+        stageVariables: null,
+        requestContext: {} as any,
+        resource: '',
+        multiValueQueryStringParameters: null
+      };
+
+      const result = await handler(event, mockContext);
+      expect(result.statusCode).toBe(200);
+
+      const response = JSON.parse(result.body);
+      expect(response.success).toBe(true);
+      expect(response.data.environment).toBe('staging');
+      expect(response.data.cumulativeSavings).toBe('150.75');
+      expect(response.data.todaySavings).toBe('12.50');
+      expect(response.data.currentStatus).toBe('Running');
+      expect(response.data.potentialHourlySavings).toBe('0.10');
+    });
+
+    it('should generate daily cost analysis', async () => {
+      const command: VpnCommandRequest = {
+        action: 'cost-analysis' as any,
+        environment: 'daily' as any, // Using environment field for report type
+        user: 'user',
+        requestId: 'test-daily'
+      };
+
+      const event: APIGatewayProxyEvent = {
+        httpMethod: 'POST',
+        path: '/vpn',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(command),
+        isBase64Encoded: false,
+        multiValueHeaders: {},
+        pathParameters: null,
+        queryStringParameters: null,
+        stageVariables: null,
+        requestContext: {} as any,
+        resource: '',
+        multiValueQueryStringParameters: null
+      };
+
+      const result = await handler(event, mockContext);
+      expect(result.statusCode).toBe(200);
+
+      const response = JSON.parse(result.body);
+      expect(response.success).toBe(true);
+      expect(response.data.reportType).toBe('daily');
+      expect(response.data.data).toHaveLength(7); // Last 7 days
+      expect(response.data.data[0].date).toMatch(/\d{4}-\d{2}-\d{2}/);
+    });
+
+    it('should generate cumulative cost analysis', async () => {
+      const command: VpnCommandRequest = {
+        action: 'cost-analysis' as any,
+        environment: 'cumulative' as any,
+        user: 'user',
+        requestId: 'test-cumulative'
+      };
+
+      const event: APIGatewayProxyEvent = {
+        httpMethod: 'POST',
+        path: '/vpn',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(command),
+        isBase64Encoded: false,
+        multiValueHeaders: {},
+        pathParameters: null,
+        queryStringParameters: null,
+        stageVariables: null,
+        requestContext: {} as any,
+        resource: '',
+        multiValueQueryStringParameters: null
+      };
+
+      const result = await handler(event, mockContext);
+      expect(result.statusCode).toBe(200);
+
+      const response = JSON.parse(result.body);
+      expect(response.success).toBe(true);
+      expect(response.data.reportType).toBe('cumulative');
+      expect(response.data.data.stagingTotal).toBe(150.75);
+      expect(response.data.data.productionTotal).toBe(425.25);
+      expect(response.data.data.grandTotal).toBe(576); // 150.75 + 425.25
+      expect(response.data.data.estimatedMonthlySavings).toBe(17280); // 576 * 30
+    });
+  });
+
+  describe('Command Validation', () => {
+    it('should reject invalid administrative actions', async () => {
+      const command: VpnCommandRequest = {
+        action: 'admin-invalid' as any,
+        environment: 'staging',
+        user: 'admin-user',
+        requestId: 'test-invalid'
+      };
+
+      const event: APIGatewayProxyEvent = {
+        httpMethod: 'POST',
+        path: '/vpn',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(command),
+        isBase64Encoded: false,
+        multiValueHeaders: {},
+        pathParameters: null,
+        queryStringParameters: null,
+        stageVariables: null,
+        requestContext: {} as any,
+        resource: '',
+        multiValueQueryStringParameters: null
+      };
+
+      const result = await handler(event, mockContext);
+      expect(result.statusCode).toBe(400);
+
+      const response = JSON.parse(result.body);
+      expect(response.success).toBe(false);
+      expect(response.error).toContain('Invalid action');
+    });
+
+    it('should validate environment mismatch', async () => {
+      process.env.ENVIRONMENT = 'production';
+      
+      const command: VpnCommandRequest = {
+        action: 'admin-override' as any,
+        environment: 'staging',
+        user: 'admin-user',
+        requestId: 'test-mismatch'
+      };
+
+      const event: APIGatewayProxyEvent = {
+        httpMethod: 'POST',
+        path: '/vpn',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(command),
+        isBase64Encoded: false,
+        multiValueHeaders: {},
+        pathParameters: null,
+        queryStringParameters: null,
+        stageVariables: null,
+        requestContext: {} as any,
+        resource: '',
+        multiValueQueryStringParameters: null
+      };
+
+      const result = await handler(event, mockContext);
+      expect(result.statusCode).toBe(400);
+
+      const response = JSON.parse(result.body);
+      expect(response.success).toBe(false);
+      expect(response.error).toContain('Environment mismatch');
+    });
+  });
+
+  describe('Error Handling', () => {
+    it('should handle parameter store errors gracefully', async () => {
+      const mockStateStore = require('/opt/nodejs/stateStore');
+      mockStateStore.writeParameter.mockRejectedValue(new Error('Parameter store error'));
+
+      const command: VpnCommandRequest = {
+        action: 'admin-override' as any,
+        environment: 'staging',
+        user: 'admin-user',
+        requestId: 'test-error'
+      };
+
+      const event: APIGatewayProxyEvent = {
+        httpMethod: 'POST',
+        path: '/vpn',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(command),
+        isBase64Encoded: false,
+        multiValueHeaders: {},
+        pathParameters: null,
+        queryStringParameters: null,
+        stageVariables: null,
+        requestContext: {} as any,
+        resource: '',
+        multiValueQueryStringParameters: null
+      };
+
+      const result = await handler(event, mockContext);
+      expect(result.statusCode).toBe(500);
+
+      const response = JSON.parse(result.body);
+      expect(response.success).toBe(false);
+      expect(response.error).toContain('Failed to enable admin override');
+    });
+
+    it('should handle VPN manager errors in force close', async () => {
+      const mockVpnManager = require('/opt/nodejs/vpnManager');
+      mockVpnManager.disassociateSubnets.mockRejectedValue(new Error('VPN operation failed'));
+
+      const command: VpnCommandRequest = {
+        action: 'admin-force-close' as any,
+        environment: 'staging',
+        user: 'admin-user',
+        requestId: 'test-vpn-error'
+      };
+
+      const event: APIGatewayProxyEvent = {
+        httpMethod: 'POST',
+        path: '/vpn',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(command),
+        isBase64Encoded: false,
+        multiValueHeaders: {},
+        pathParameters: null,
+        queryStringParameters: null,
+        stageVariables: null,
+        requestContext: {} as any,
+        resource: '',
+        multiValueQueryStringParameters: null
+      };
+
+      const result = await handler(event, mockContext);
+      expect(result.statusCode).toBe(500);
+
+      const response = JSON.parse(result.body);
+      expect(response.success).toBe(false);
+      expect(response.error).toContain('Failed to force close');
+    });
+  });
+});

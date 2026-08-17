@@ -23,9 +23,47 @@ describe('VPN Monitor Integration Tests', () => {
     succeed: jest.fn()
   };
 
+  /**
+   * 只凍結「現在幾點」，保留真正的 Date 類別 —— Date.parse / Date.UTC /
+   * new Date(str) 全部照常可用。
+   *
+   * 原本的寫法是 `global.Date = jest.fn(() => mockDate)` 再補回 `.now`：
+   * 那會把整個建構子換掉，於是窗口內任何 Date.parse 都炸成
+   * "Date.parse is not a function"（修復前全 suite 共 13 次）。
+   *
+   * doNotFake 列出除 Date 以外的所有可假造 API。⛔ 不要把 timer 類拿掉 ——
+   * 這裡只需要凍結時間，若連 setTimeout/nextTick 一起假造，
+   * `await handler(...)` 可能永遠不會回來。
+   *
+   * ⚠️ 抽成函式是因為它原本一字不差重複兩次：改一處忘了另一處，
+   * 就會出現兩個測試用不同時鐘語意，而 diff 上完全看不出來。
+   */
+  const freezeClockAt = (iso: string): void => {
+    jest.useFakeTimers({
+      doNotFake: [
+        'hrtime', 'nextTick', 'performance', 'queueMicrotask',
+        'requestAnimationFrame', 'cancelAnimationFrame',
+        'requestIdleCallback', 'cancelIdleCallback',
+        'setImmediate', 'clearImmediate',
+        'setInterval', 'clearInterval',
+        'setTimeout', 'clearTimeout',
+      ],
+    });
+    jest.setSystemTime(new Date(iso));
+  };
+
+  // 🔴 無條件還原假時鐘。原本的寫法把還原放在測試主體的最後一行，
+  // 所以只要中間任何一個 expect 失敗、或 handler throw，還原就不會執行，
+  // 被改掉的全域 Date 會外洩到同一個檔案後續的每一個測試 ——
+  // 那正是「同一份程式碼、兩次執行失敗題數不一樣」的來源。
+  // afterEach 不受 throw 影響，這是唯一可靠的還原點。
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   beforeEach(() => {
     resetAllMocks();
-    
+
     process.env.ENVIRONMENT = 'staging';
     process.env.IDLE_MINUTES = '54';
     
@@ -658,10 +696,7 @@ describe('VPN Monitor Integration Tests', () => {
       });
 
       // Mock current time outside business hours (e.g., 22:00 UTC = 10 PM)
-      const originalDate = Date;
-      const mockDate = new Date('2025-06-20T22:00:00.000Z');
-      global.Date = jest.fn(() => mockDate) as any;
-      global.Date.now = jest.fn(() => mockDate.getTime());
+      freezeClockAt('2025-06-20T22:00:00.000Z');
 
       global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 200 });
 
@@ -675,8 +710,8 @@ describe('VPN Monitor Integration Tests', () => {
         })
       );
 
-      // Restore original Date
-      global.Date = originalDate;
+      // 還原由檔案頂端的 afterEach 無條件負責 —— 不放在這裡，
+      // 因為上面任何一個 expect 失敗都會跳過這一行。
     });
 
     it('should include cost savings in Slack notification', async () => {
@@ -728,10 +763,7 @@ describe('VPN Monitor Integration Tests', () => {
       });
 
       // Mock current time outside business hours
-      const originalDate = Date;
-      const mockDate = new Date('2025-06-20T22:00:00.000Z');
-      global.Date = jest.fn(() => mockDate) as any;
-      global.Date.now = jest.fn(() => mockDate.getTime());
+      freezeClockAt('2025-06-20T22:00:00.000Z');
 
       global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 200 });
 
@@ -745,8 +777,8 @@ describe('VPN Monitor Integration Tests', () => {
         })
       );
 
-      // Restore original Date
-      global.Date = originalDate;
+      // 還原由檔案頂端的 afterEach 無條件負責 —— 不放在這裡，
+      // 因為上面任何一個 expect 失敗都會跳過這一行。
     });
   });
 });

@@ -53,6 +53,9 @@ const scheduleItemStateArb: fc.Arbitrary<ScheduleItemState> = fc.record({
  * Generate a valid ScheduleState
  */
 const scheduleStateArb: fc.Arbitrary<ScheduleState> = fc.record({
+  // version 是 ScheduleState 的必要欄位（shared/scheduleManager.ts:33，optimistic
+  // locking 用）。這個 arbitrary 原本漏了它，所以整個 suite 連編譯都過不了。
+  version: fc.nat({ max: 1000 }),
   autoOpen: scheduleItemStateArb,
   autoClose: scheduleItemStateArb
 });

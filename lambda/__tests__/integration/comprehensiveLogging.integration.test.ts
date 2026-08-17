@@ -29,7 +29,7 @@ jest.mock('aws-sdk', () => ({
 }));
 
 // Mock shared utilities
-jest.mock('/opt/stateStore', () => ({
+jest.mock('/opt/nodejs/stateStore', () => ({
   validateParameterStore: jest.fn().mockResolvedValue(true),
   readSlackSigningSecret: jest.fn().mockResolvedValue('test-secret'),
   readState: jest.fn().mockResolvedValue({
@@ -44,7 +44,7 @@ jest.mock('/opt/stateStore', () => ({
   writeParameter: jest.fn().mockResolvedValue(undefined)
 }));
 
-jest.mock('/opt/vpnManager', () => ({
+jest.mock('/opt/nodejs/vpnManager', () => ({
   validateEndpoint: jest.fn().mockResolvedValue(true),
   fetchStatus: jest.fn().mockResolvedValue({
     associated: true,
@@ -58,7 +58,7 @@ jest.mock('/opt/vpnManager', () => ({
   updateLastActivity: jest.fn().mockResolvedValue(undefined)
 }));
 
-jest.mock('/opt/slack', () => ({
+jest.mock('/opt/nodejs/slack', () => ({
   verifySlackSignature: jest.fn().mockReturnValue(true),
   parseSlackCommand: jest.fn().mockReturnValue({
     action: 'open',
