@@ -29,6 +29,14 @@ module.exports = {
         //      型別檢查就會全部消失，而且沒有任何訊號。
         // 單檔形式兩個缺口一起關掉，語意也更誠實：排除的就是 build 用
         // strict:false 編的那三個檔案，一個不多。
+        //
+        // TODO(刪除條件，明確可驗證)：當這三個檔案在 root tsconfig 的 strict:true 下
+        // `npx tsc --noEmit -p tsconfig.json` 為零錯誤時（2026-08-17 量到 27 個，
+        // 全是 TS18046 catch-變數為 unknown 與 TS2345 string|null），
+        // 把整個 `diagnostics` 區塊刪掉。⚠️ 這是刻意留的技術債：`exclude` 會讓這三個
+        // 檔案的**所有** diagnostics 靜音，不只是 strict 才有的那些 —— 日後在裡面寫出
+        // 一個連 strict:false 都抓得到的錯（參數個數、property 打錯字），`npm test`
+        // 不會紅，而這個 repo 沒有 CI，npm test 幾乎是唯一的閘。
         exclude: [
           '**/vpn-control/index.ts',
           '**/slack-handler/index.ts',
