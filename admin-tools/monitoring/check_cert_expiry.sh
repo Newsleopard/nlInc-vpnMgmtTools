@@ -98,9 +98,12 @@ get_days_left() {
     norm="${notafter/%Z/+0000}"
     # 把 offset 的冒號去掉（BSD date %z 要 +0800 而非 +08:00）
     clean=$(printf '%s' "$norm" | sed -E 's/([+-][0-9]{2}):([0-9]{2})$/\1\2/')
-    exp_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%S%z" "$clean" +%s 2>/dev/null)
+    # 這兩個格式全是數字、不含 %b，今天不受 locale 影響；仍然固定 LC_ALL=C，
+    # 這樣「所有日期解析都在 C locale」是一條可以一眼掃到的不變量，
+    # 而不是每次改格式都要重新推導一次會不會踩到 LC_TIME。
+    exp_epoch=$(LC_ALL=C date -j -f "%Y-%m-%dT%H:%M:%S%z" "$clean" +%s 2>/dev/null)
     # fallback：若無 offset 可解析，退回前 19 字以本地時區解析
-    [ -n "$exp_epoch" ] || exp_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%S" "${notafter:0:19}" +%s 2>/dev/null)
+    [ -n "$exp_epoch" ] || exp_epoch=$(LC_ALL=C date -j -f "%Y-%m-%dT%H:%M:%S" "${notafter:0:19}" +%s 2>/dev/null)
     [ -n "$exp_epoch" ] || { log "[$env] 日期解析失敗: $notafter"; return 1; }
 
     now_epoch=$(date +%s)
@@ -120,7 +123,12 @@ client_cert_days_left() {
 
     # 個位數日期會補成兩個空白（"Jun  5"），先壓成單一空白才餵得進 BSD date
     norm=$(printf '%s' "$enddate" | tr -s ' ')
-    exp_epoch=$(date -j -f "%b %d %H:%M:%S %Y %Z" "$norm" +%s 2>/dev/null)
+    # 🔴 LC_ALL=C 是必要的，不是保險：openssl 的 -enddate 永遠輸出英文月份縮寫
+    # （Nov / Jun），但 BSD date 的 %b 吃 LC_TIME。在 zh_TW.UTF-8 / ja_JP.UTF-8 下
+    # 實測 rc=1「date: illegal time format」→ 每一張 client 憑證都被記成讀取失敗，
+    # 整條 client 軸失明。launchd 的環境剛好沒有 LANG 所以排程跑得動，但任何人從
+    # Terminal 手動驗證都會踩到 —— 那正是「看起來正常、其實什麼都沒檢查」的形狀。
+    exp_epoch=$(LC_ALL=C date -j -f "%b %d %H:%M:%S %Y %Z" "$norm" +%s 2>/dev/null)
     [ -n "$exp_epoch" ] || { log "[client] 日期解析失敗：${crt}（${enddate}）"; return 1; }
 
     now_epoch=$(date +%s)
@@ -256,10 +264,15 @@ dom=$(date +%d)       # 01..31
 
 # --- 決定提醒等級（fail-loud：全失敗最高優先，永不靜默吞掉失敗）---
 level=""
-if [ "$fail_count" -ge "$total" ]; then
+# ⛔ 「已知有東西快到期」必須排在「查詢失敗」之前。兩者都是每天叫，所以順序不影響
+# 叫不叫，只影響**標題**——而標題是 on-call 讀到的第一行。反過來排的話，
+# 「server ACM 查不到 ＋ client 憑證只剩 3 天」會被標成「🔴 查詢失敗，無法確認到期狀態，
+# 請檢查 AWS 憑證/網路」，那是事實錯誤（我們明明就確認了剩 3 天），還會把人導向錯的
+# runbook。查詢失敗本身不會消失：它在 status_lines 裡逐環境列出。
+if [ "$min_days" -le "$CRIT_DAYS" ]; then
+    level="CRITICAL"                                            # 已知緊急到期 → 每天
+elif [ "$fail_count" -ge "$total" ]; then
     level="FAILURE"                                              # server 全部查詢失敗 → 每天叫
-elif [ "$min_days" -le "$CRIT_DAYS" ]; then
-    level="CRITICAL"                                            # 緊急 → 每天
 elif [ "$min_days" -le "$WARN_DAYS" ] && [ "$weekday" = "1" ]; then
     level="WARNING"                                             # 接近到期 → 每週一
 elif [ "$weekday" = "1" ] && { [ "$fail_count" -gt 0 ] || [ "$client_fail" -gt 0 ]; }; then
