@@ -3,6 +3,9 @@ module.exports = {
   testEnvironment: 'node',
   roots: ['<rootDir>'],
   testMatch: ['**/__tests__/**/*.test.ts'],
+  // 🔴 在任何測試模組被 require 之前把 AWS 環境中和掉。理由與實際事故見該檔案開頭。
+  // ⛔ 不可改成 setupFilesAfterEnv —— 那會晚於測試檔 top-level 建立的 SDK client。
+  setupFiles: ['<rootDir>/__tests__/setup/aws-sandbox.ts'],
   transform: {
     // ts-jest 29 起，設定放在 transform 這裡；globals['ts-jest'] 是 deprecated 路徑。
     '^.+\\.tsx?$': ['ts-jest', {
@@ -16,11 +19,20 @@ module.exports = {
         // 這裡讓測試的型別檢查與 build 對齊；⛔ 不是放寬 shared/ 與測試本身，
         // 那兩者仍然 strict（shared/tsconfig.json 也是 strict:true）。
         // 要把 handler 提升到 strict 是另一件事，不在測試修復的範圍內。
-        // glob 是對「完整檔案路徑」比對的，所以一定要帶 **/ 前綴。
+        //
+        // glob 是對「完整絕對路徑」比對的，所以一定要帶 **/ 前綴 ——
+        // 但也**只**列出三個 tsconfig 的 include 實際涵蓋的那一個檔案，
+        // ⛔ 不是整個目錄。目錄型 glob（'**/vpn-control/**'）有兩個 fail-open 缺口：
+        //   ① 日後若有人把測試放進 vpn-control/__tests__/，那些測試會靜默失去型別檢查；
+        //   ② 只要 repo 被 clone 到任何一層剛好叫 vpn-monitor / vpn-control /
+        //      slack-handler 的目錄底下，整棵樹（含 shared/ 與 __tests__/）的
+        //      型別檢查就會全部消失，而且沒有任何訊號。
+        // 單檔形式兩個缺口一起關掉，語意也更誠實：排除的就是 build 用
+        // strict:false 編的那三個檔案，一個不多。
         exclude: [
-          '**/vpn-control/**',
-          '**/slack-handler/**',
-          '**/vpn-monitor/**',
+          '**/vpn-control/index.ts',
+          '**/slack-handler/index.ts',
+          '**/vpn-monitor/index.ts',
         ],
       },
     }],
