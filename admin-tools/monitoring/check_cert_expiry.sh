@@ -54,7 +54,10 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 LOG_DIR="$PROJECT_ROOT/logs"
-mkdir -p "$LOG_DIR"
+# 建不出 log 目錄就必須大聲死掉：沒有 set -e，log() 會安靜地什麼都不寫，
+# 腳本照樣 exit 0 —— 那正是這支監控壞掉一個多月沒人發現的形狀。
+# 78 = EX_CONFIG，是 launchd 唯一會記下來的訊號。
+mkdir -p "$LOG_DIR" || { echo "無法建立 log 目錄：$LOG_DIR" >&2; exit 78; }
 LOG_FILE="$LOG_DIR/cert_monitor.log"
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >>"$LOG_FILE"; }
@@ -85,7 +88,9 @@ get_days_left() {
     local notafter
     notafter=$(aws acm describe-certificate --profile "$profile" --region "$REGION" \
         --certificate-arn "$arn" --query 'Certificate.NotAfter' --output text 2>>"$LOG_FILE")
-    [ -n "$notafter" ] && [ "$notafter" != "None" ] || { log "[$env] 無法取得 ACM NotAfter（profile=$profile）"; return 1; }
+    # ${} 必須加大括號：後面緊接全形「）」時，UTF-8 locale 下 bash 會把它的第一個
+    # byte 併進變數名，set -u 直接讓整個 subshell 爆掉，診斷訊息就永遠印不出來。
+    [ -n "$notafter" ] && [ "$notafter" != "None" ] || { log "[$env] 無法取得 ACM NotAfter（profile=${profile}）"; return 1; }
 
     # ACM CLI 回傳如 2028-09-24T18:52:45+08:00 或 ...Z；保留時區 offset 再解析
     local norm clean exp_epoch now_epoch days
@@ -115,7 +120,7 @@ client_cert_days_left() {
     # 個位數日期會補成兩個空白（"Jun  5"），先壓成單一空白才餵得進 BSD date
     norm=$(printf '%s' "$enddate" | tr -s ' ')
     exp_epoch=$(date -j -f "%b %d %H:%M:%S %Y %Z" "$norm" +%s 2>/dev/null)
-    [ -n "$exp_epoch" ] || { log "[client] 日期解析失敗：$crt（$enddate）"; return 1; }
+    [ -n "$exp_epoch" ] || { log "[client] 日期解析失敗：${crt}（${enddate}）"; return 1; }
 
     now_epoch=$(date +%s)
     # 向負無窮取整：未過期天數正確，已過期顯示負數（與 get_days_left 一致）
@@ -193,9 +198,17 @@ else
     for entry in "${ENVIRONMENTS[@]}"; do
         env="${entry%%:*}"
         users_dir="$PROJECT_ROOT/certs/$env/users"
-        [ -d "$users_dir" ] || { log "[$env] 無 client 憑證目錄，略過：$users_dir"; continue; }
+        [ -d "$users_dir" ] || { log "[$env] 無 client 憑證目錄：${users_dir}"; continue; }
+        # nullglob：目錄裡沒有 .crt 時直接不進迴圈，不必用 [ -e ] 去猜 glob 有沒有展開。
+        # ⛔ 這裡以前是 `[ -e "$crt" ] || break` —— 一個斷掉的 symlink 會讓整個目錄
+        # 剩下的憑證全部不被檢查，而且沒有任何 log。過期憑證就是這樣被漏掉的形狀。
+        shopt -s nullglob
         for crt in "$users_dir"/*.crt; do
-            [ -e "$crt" ] || break                                   # glob 未展開＝目錄內無 .crt
+            if [ ! -e "$crt" ]; then                                 # 斷掉的 symlink / 剛被刪除
+                log "[$env] 憑證檔讀不到（斷掉的 symlink？）：${crt}"
+                client_fail=$(( client_fail + 1 ))
+                continue
+            fi
             [ "$(basename "$crt")" = "ca.crt" ] && continue          # CA 不是 client 憑證
             user="$(basename "$crt" .crt)"
             if ! cresult=$(client_cert_days_left "$crt"); then
@@ -216,8 +229,24 @@ else
             fi
             [ "$cdays" -lt "$min_days" ] && min_days="$cdays"
         done
+        shopt -u nullglob
     done
     log "client 憑證檢查完成：${client_checked} 張，讀取失敗 ${client_fail} 張"
+fi
+
+# 覆蓋數一定要進訊息本體：否則「檢查了 4 張都健康」與「一張都沒看到」
+# 送出的內容一模一樣，心跳訊息就證明不了任何事。
+if [ "$SKIP_CLIENT_CERTS" = "1" ]; then
+    status_lines+="• client 憑證：已略過（SKIP_CLIENT_CERTS=1）"$'\n'
+else
+    status_lines+="• client 憑證：已檢查 ${client_checked} 張（讀取失敗 ${client_fail} 張）"$'\n'
+fi
+
+# client 軸完全看不到東西 ＝ 失明，與「ACM 全部查不到」同級，每天叫。
+# 沒有這一條的話，certs/ 不存在只會留一行 log，而對外表現得跟健康完全一樣。
+client_blind=0
+if [ "$SKIP_CLIENT_CERTS" != "1" ] && [ "$client_checked" -eq 0 ]; then
+    client_blind=1
 fi
 
 weekday=$(date +%u)   # 1=Mon .. 7=Sun
@@ -226,7 +255,9 @@ dom=$(date +%d)       # 01..31
 # --- 決定提醒等級（fail-loud：全失敗最高優先，永不靜默吞掉失敗）---
 level=""
 if [ "$fail_count" -ge "$total" ]; then
-    level="FAILURE"                                              # 全部查詢失敗 → 每天叫
+    level="FAILURE"                                              # server 全部查詢失敗 → 每天叫
+elif [ "$client_blind" = "1" ]; then
+    level="FAILURE"                                              # client 軸一張都沒看到 → 每天叫
 elif [ "$min_days" -le "$CRIT_DAYS" ]; then
     level="CRITICAL"                                            # 緊急 → 每天
 elif [ "$min_days" -le "$WARN_DAYS" ] && [ "$weekday" = "1" ]; then
