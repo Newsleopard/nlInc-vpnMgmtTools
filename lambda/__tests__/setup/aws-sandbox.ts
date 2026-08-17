@@ -108,3 +108,51 @@ http.request = guard(http.request, 'http.request');
 http.get = guard(http.get, 'http.get');
 https.request = guard(https.request, 'https.request');
 https.get = guard(https.get, 'https.get');
+
+// ---------------------------------------------------------------------------
+// 第 2b 層：fetch —— 它**不會**經過上面那四個 function
+// ---------------------------------------------------------------------------
+//
+// 🔴 @ct-codex-agent 在 PR #22 round 2 抓到的：Node 18+ 的 `globalThis.fetch` 走
+// undici，完全不碰 node:http / node:https。本地探針實測：patch 過的四個 function
+// 在一次 fetch() 期間被呼叫 **0** 次。
+//
+// 而這個 repo 真的有 fetch 出站 —— slack-handler/index.ts:674 與 :786 都是
+// `await fetch(productionAPIEndpoint, …)`，shared/slack.ts 也用 fetch 送 Slack
+// webhook。全 18 個測試檔中只有 3 個 mock 了 fetch，其餘一個都沒有。
+// 所以在補上這一段之前，上面那句「封包都出不了這台機器」是**假的**：
+// 一個沒 mock 到的 fetch 可以打到真的 Slack / production API。
+//
+// ⚠️ 這裡回 rejected promise 而不是同步 throw —— fetch 的契約是回 Promise，
+// 同步 throw 會讓 `fetch(...).catch(...)` 這種寫法直接炸在呼叫端而不是進 catch。
+// 訊息一樣認得出來是誰擋的。
+// ⚠️ 測試若自己 `global.fetch = jest.fn()`，會蓋掉這個包裝 —— 那是正確的，
+// 它就是在 mock；圍籬只負責「沒人 mock 時不要打出去」。
+
+/** 從 fetch 的 input（string | URL | Request）取出 host；取不到回 null。 */
+function fetchHost(input: unknown): string | null {
+  if (typeof input === 'string') {
+    try { return new URL(input).hostname; } catch { return null; }
+  }
+  if (input instanceof URL) return input.hostname;
+  if (input && typeof input === 'object' && 'url' in input) {
+    const u = (input as { url?: unknown }).url;
+    if (typeof u === 'string') { try { return new URL(u).hostname; } catch { return null; } }
+  }
+  return null;
+}
+
+const realFetch = globalThis.fetch;
+if (typeof realFetch === 'function') {
+  globalThis.fetch = function patchedFetch(this: unknown, ...args: any[]) {
+    const host = fetchHost(args[0]);
+    if (host !== null && !LOOPBACK.test(host)) {
+      return Promise.reject(new Error(
+        `[aws-sandbox] 測試被阻止連線到 ${host}（經由 fetch）。\n` +
+        `測試絕對不可以打到真實服務（Slack webhook / production API 都走 fetch）。` +
+        `請在該 suite 裡 mock fetch，例如 global.fetch = jest.fn()。`
+      ));
+    }
+    return (realFetch as (...a: unknown[]) => unknown).apply(this, args) as Promise<Response>;
+  } as typeof fetch;
+}
