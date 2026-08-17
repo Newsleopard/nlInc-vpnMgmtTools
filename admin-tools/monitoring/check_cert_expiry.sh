@@ -282,7 +282,10 @@ elif [ "$client_blind" = "1" ]; then
     # 不是「查詢結果」訊號。放在前面會把「server 憑證剩 3 天」的告警標題改寫成
     # 「查詢失敗，請檢查 AWS 憑證/網路」—— 事實錯誤，而且會把 on-call 導向錯的
     # runbook。失明本身已經無條件寫進 status_lines，不會因為排在後面而消失。
-    level="FAILURE"                                             # 沒有其他等級時才由它升起 → 每天叫
+    # 用獨立的等級名而不是複用 FAILURE：兩者都每天叫，但成因完全不同 ——
+    # FAILURE 是「ACM 查不到」（去查 AWS profile / 網路），失明是「本機 certs/ 沒東西」。
+    # 共用 header 會叫 on-call 先去繞 AWS 一圈才發現是本機目錄的事。
+    level="CLIENT_BLIND"                                        # 沒有其他等級時才由它升起 → 每天叫
 elif [ "$dom" = "01" ]; then
     level="HEARTBEAT"                                           # 月初心跳
 fi
@@ -300,6 +303,7 @@ fi
 
 case "$level" in
     FAILURE)   header="🔴 *VPN 憑證監控查詢失敗*（無法確認到期狀態，請檢查 AWS 憑證/網路）" ;;
+    CLIENT_BLIND) header="🔴 *VPN client 憑證監控失明*（這台機器看不到任何 client 憑證，請確認 certs/<env>/users/ 存在且有非 ca.crt 的憑證；若這台本來就不該有，改用 SKIP_CLIENT_CERTS=1）" ;;
     CRITICAL)  header="🔴 *VPN 憑證即將到期（緊急）*" ;;
     WARNING)   header="🟠 *VPN 憑證到期提醒*" ;;
     HEARTBEAT) header="✅ *VPN 憑證監控月報*" ;;
