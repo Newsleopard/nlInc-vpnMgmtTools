@@ -1,16 +1,25 @@
 #!/usr/bin/env bash
 # ====================================================================
-# VPN Server Certificate Expiry Monitor
+# VPN Certificate Expiry Monitor（server + client）
 # --------------------------------------------------------------------
-# 檢查 staging / production Client VPN 的 server 憑證到期日，接近到期時
-# 透過既有的 Slack webhook（存在 SSM /vpn/{env}/slack/webhook）發提醒。
+# 檢查 staging / production Client VPN 的憑證到期日，接近到期時透過既有的
+# Slack webhook（存在 SSM /vpn/{env}/slack/webhook）發提醒。監控兩類憑證：
+#   - server 憑證：ACM，ARN 取自 configs/{env}/vpn_endpoint.conf
+#   - client 憑證：本機 certs/{env}/users/*.crt（排除 ca.crt）
+#
+# 為什麼 client 憑證也要監控：它過期時 AWS VPN Client 只顯示「TLS handshake
+# error」，跟 server 憑證過期的畫面一模一樣，從 GUI 分不出根因。2026-06-27
+# 就是這樣無預警斷線的 —— 當時本監控只看 ACM，完全沒有告警。
 #
 # 設計為由 launchd 每天執行；平常靜默，只在下列情況發訊息：
-#   - 任一環境查詢失敗（全部失敗）→ 每天提醒（FAILURE，監控自身失明也要叫）
-#   - 任一環境 <= CRIT_DAYS         → 每天提醒（CRITICAL）
-#   - 任一環境 <= WARN_DAYS         → 每週一提醒（WARNING）
-#   - 有部分環境查詢失敗            → 每週一提醒（WARNING）
+#   - 所有 server 查詢都失敗        → 每天提醒（FAILURE，監控自身失明也要叫）
+#   - 任一憑證 <= CRIT_DAYS         → 每天提醒（CRITICAL）
+#   - 任一憑證 <= WARN_DAYS         → 每週一提醒（WARNING）
+#   - 有部分查詢失敗                → 每週一提醒（WARNING）
 #   - 每月 1 號                     → 心跳訊息（證明監控仍運作）
+#
+# 已過期的 client 憑證會持續觸發 CRITICAL，直到它被續期或（人員已離職時）
+# 從 certs/{env}/users/ 移除 —— 這是刻意的，過期憑證留在那裡本身就是問題。
 #
 # Webhook 在執行時才從 SSM 解密讀取，不寫死於檔案。
 # 無任何密鑰或硬編碼基礎設施 ID，可安全進版控。
@@ -28,6 +37,8 @@ REGION="${AWS_REGION:-us-east-1}"
 # 用哪個環境的 webhook 當通知管道（預設 staging，集中到同一個 channel）
 WEBHOOK_ENV="${WEBHOOK_ENV:-staging}"
 WEBHOOK_PROFILE="${WEBHOOK_PROFILE:-$WEBHOOK_ENV}"
+# SKIP_CLIENT_CERTS=1 可關閉 client 憑證檢查（例如手上沒有 certs/ 的機器）
+SKIP_CLIENT_CERTS="${SKIP_CLIENT_CERTS:-0}"
 
 # 要監控的環境： "環境名:AWS profile"（假設本機 AWS profile 名與環境名相同）
 # 可用環境變數 VPN_CERT_ENVS 覆寫（空白分隔），例：VPN_CERT_ENVS="staging:staging"
@@ -93,9 +104,36 @@ get_days_left() {
     echo "${days}|${notafter:0:19}"
 }
 
+# --- 讀取單一 client 憑證檔的剩餘天數，回傳 "days|enddate"，失敗回傳非 0 ---
+client_cert_days_left() {
+    local crt="$1"
+    local enddate norm exp_epoch now_epoch days
+    # openssl 輸出形如 "notAfter=Nov 19 02:21:12 2028 GMT"
+    enddate=$(openssl x509 -in "$crt" -noout -enddate 2>>"$LOG_FILE" | cut -d= -f2-)
+    [ -n "$enddate" ] || { log "[client] 讀不到 notAfter：$crt"; return 1; }
+
+    # 個位數日期會補成兩個空白（"Jun  5"），先壓成單一空白才餵得進 BSD date
+    norm=$(printf '%s' "$enddate" | tr -s ' ')
+    exp_epoch=$(date -j -f "%b %d %H:%M:%S %Y %Z" "$norm" +%s 2>/dev/null)
+    [ -n "$exp_epoch" ] || { log "[client] 日期解析失敗：$crt（$enddate）"; return 1; }
+
+    now_epoch=$(date +%s)
+    # 向負無窮取整：未過期天數正確，已過期顯示負數（與 get_days_left 一致）
+    days=$(( (exp_epoch - now_epoch) / 86400 ))
+    [ $(( (exp_epoch - now_epoch) % 86400 )) -lt 0 ] && days=$(( days - 1 ))
+    echo "${days}|${norm}"
+}
+
 # --- 發送 Slack（從 SSM 讀 webhook）---
+# NO_SLACK=1：算出等級、照常寫 log，但不真的送出。安裝後的自我驗證用這個模式，
+# 因為它要驗的是「job 起不起得來」，不是「該不該叫人」——2026-08-17 就是少了它，
+# 從 worktree（沒有 configs/）跑驗證，誤發了一則 FAILURE 到團隊 channel。
 send_slack() {
     local text="$1" webhook
+    if [ "${NO_SLACK:-0}" = "1" ]; then
+        log "NO_SLACK=1，略過送出（訊息內容見上）"
+        return 0
+    fi
     webhook=$(aws ssm get-parameter --profile "$WEBHOOK_PROFILE" --region "$REGION" \
         --name "/vpn/$WEBHOOK_ENV/slack/webhook" --with-decryption \
         --query 'Parameter.Value' --output text 2>>"$LOG_FILE")
@@ -144,6 +182,44 @@ for entry in "${ENVIRONMENTS[@]}"; do
     [ "$days" -lt "$min_days" ] && min_days="$days"
 done
 
+# --- client 憑證：本機 certs/{env}/users/*.crt（排除 CA）---
+# 刻意獨立成第二個迴圈：上面的迴圈在 server 查詢失敗時會 continue，
+# 混在一起會讓「ACM 查不到」連帶把 client 憑證檢查也一起跳過。
+client_fail=0
+client_checked=0
+if [ "$SKIP_CLIENT_CERTS" = "1" ]; then
+    log "已略過 client 憑證檢查（SKIP_CLIENT_CERTS=1）"
+else
+    for entry in "${ENVIRONMENTS[@]}"; do
+        env="${entry%%:*}"
+        users_dir="$PROJECT_ROOT/certs/$env/users"
+        [ -d "$users_dir" ] || { log "[$env] 無 client 憑證目錄，略過：$users_dir"; continue; }
+        for crt in "$users_dir"/*.crt; do
+            [ -e "$crt" ] || break                                   # glob 未展開＝目錄內無 .crt
+            [ "$(basename "$crt")" = "ca.crt" ] && continue          # CA 不是 client 憑證
+            user="$(basename "$crt" .crt)"
+            if ! cresult=$(client_cert_days_left "$crt"); then
+                client_fail=$(( client_fail + 1 ))
+                status_lines+="• ${env}/${user} (client)：⚠️ 讀取失敗（見 log）"$'\n'
+                continue
+            fi
+            client_checked=$(( client_checked + 1 ))
+            cdays="${cresult%%|*}"; cend="${cresult##*|}"
+            log "[$env] client 憑證 ${user}：剩餘 ${cdays} 天（到期 ${cend}）"
+            cicon="✅"
+            [ "$cdays" -le "$WARN_DAYS" ] && cicon="🟠"
+            [ "$cdays" -le "$CRIT_DAYS" ] && cicon="🔴"
+            if [ "$cdays" -le 0 ]; then
+                status_lines+="• ${env}/${user} (client)：🔴 已過期 $(( -cdays )) 天（到期 ${cend}）"$'\n'
+            else
+                status_lines+="• ${env}/${user} (client)：${cicon} 剩 ${cdays} 天（到期 ${cend}）"$'\n'
+            fi
+            [ "$cdays" -lt "$min_days" ] && min_days="$cdays"
+        done
+    done
+    log "client 憑證檢查完成：${client_checked} 張，讀取失敗 ${client_fail} 張"
+fi
+
 weekday=$(date +%u)   # 1=Mon .. 7=Sun
 dom=$(date +%d)       # 01..31
 
@@ -155,8 +231,8 @@ elif [ "$min_days" -le "$CRIT_DAYS" ]; then
     level="CRITICAL"                                            # 緊急 → 每天
 elif [ "$min_days" -le "$WARN_DAYS" ] && [ "$weekday" = "1" ]; then
     level="WARNING"                                             # 接近到期 → 每週一
-elif [ "$fail_count" -gt 0 ] && [ "$weekday" = "1" ]; then
-    level="WARNING"                                             # 部分環境查詢失敗 → 每週一
+elif [ "$weekday" = "1" ] && { [ "$fail_count" -gt 0 ] || [ "$client_fail" -gt 0 ]; }; then
+    level="WARNING"                                             # 部分查詢失敗（server 或 client）→ 每週一
 elif [ "$dom" = "01" ]; then
     level="HEARTBEAT"                                           # 月初心跳
 fi
@@ -174,14 +250,15 @@ fi
 
 case "$level" in
     FAILURE)   header="🔴 *VPN 憑證監控查詢失敗*（無法確認到期狀態，請檢查 AWS 憑證/網路）" ;;
-    CRITICAL)  header="🔴 *VPN Server 憑證即將到期（緊急）*" ;;
-    WARNING)   header="🟠 *VPN Server 憑證到期提醒*" ;;
+    CRITICAL)  header="🔴 *VPN 憑證即將到期（緊急）*" ;;
+    WARNING)   header="🟠 *VPN 憑證到期提醒*" ;;
     HEARTBEAT) header="✅ *VPN 憑證監控月報*" ;;
 esac
 
 msg="${header}"$'\n'"${status_lines}"
 if [ "$level" = "CRITICAL" ] || [ "$level" = "WARNING" ]; then
-    msg+=$'\n'"續期方式：用現有 CA 重簽 → 匯入*新* ACM ARN → modify-client-vpn-endpoint（同 ARN reimport 無效）。詳見 memory: vpn-server-cert-renewal。"
+    msg+=$'\n'"server 憑證續期：用現有 CA 重簽 → 匯入*新* ACM ARN → modify-client-vpn-endpoint（同 ARN reimport 無效）。詳見 memory: vpn-server-cert-renewal。"
+    msg+=$'\n'"client 憑證續期：重新產 CSR → admin-tools/sign_csr.sh 簽 → 換掉 .ovpn 的 <cert>/<key>，server 端不用動。詳見 memory: vpn-client-cert-renewal。"
 fi
 
 log "等級=${level}，發送 Slack"
